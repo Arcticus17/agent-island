@@ -13,7 +13,7 @@ const tauriWin = inTauri ? getCurrentWindow() : null;
 
 const WINDOW_W = 420;
 const COLLAPSED_H = 36;
-const EXPANDED_H = 520;
+const EXPANDED_H = 570;
 const POS_KEY = "agent-island-x";
 
 let agents = [];

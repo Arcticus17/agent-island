@@ -152,6 +152,12 @@ function renderList() {
     });
     listEl.appendChild(row);
   }
+  if (!all.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "暂无会话";
+    listEl.appendChild(empty);
+  }
 }
 
 function renderChat() {
@@ -162,9 +168,12 @@ function renderChat() {
     const div = document.createElement("div");
     div.className = "msg " + m.role + (m.done === false ? " pending" : "");
     const label = m.role === "user" ? "你" : (m.agentName || selected.agent.name);
-    let body = m.text || "";
-    if (!body) body = m.done === false ? "(运行中...)" : "[完成（无输出）]";
-    div.innerHTML = `<span class="msg-label">${escapeHtml(label)}</span>${escapeHtml(body)}`;
+    if (!m.text && m.done === false) {
+      div.innerHTML = `<span class="msg-label">${escapeHtml(label)}</span><span class="typing"><i></i><i></i><i></i></span>`;
+    } else {
+      const body = m.text || "[完成（无输出）]";
+      div.innerHTML = `<span class="msg-label">${escapeHtml(label)}</span>${escapeHtml(body)}`;
+    }
     chatLog.appendChild(div);
   }
   if (follow) chatLog.scrollTop = chatLog.scrollHeight;
