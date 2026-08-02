@@ -5,6 +5,7 @@ const detailEl = document.getElementById("detail");
 const detailHeader = document.getElementById("detail-header");
 const chatLog = document.getElementById("chat-log");
 const updatedEl = document.getElementById("updated");
+const summaryEl = document.getElementById("summary");
 const btnTerm = document.getElementById("btn-term");
 const btnRestart = document.getElementById("btn-restart");
 const btnStop = document.getElementById("btn-stop");
@@ -179,6 +180,19 @@ function renderChat() {
   if (follow) chatLog.scrollTop = chatLog.scrollHeight;
 }
 
+function renderSummary() {
+  const counts = {};
+  for (const r of rows()) {
+    counts[r.status] = (counts[r.status] || 0) + 1;
+  }
+  const order = ["working", "waiting", "error", "done", "idle", "stopped"];
+  summaryEl.innerHTML =
+    order
+      .filter((s) => counts[s])
+      .map((s) => `<span class="summary-pill ${s}">${STATUS_TEXT[s] || s} ${counts[s]}</span>`)
+      .join("") || '<span class="summary-pill">无会话</span>';
+}
+
 function renderDetail() {
   if (!selected) {
     detailEl.classList.add("hidden");
@@ -351,6 +365,7 @@ async function load() {
   }
 
   renderList();
+  renderSummary();
   renderDetail();
   updatedEl.textContent = new Date().toLocaleTimeString();
 }

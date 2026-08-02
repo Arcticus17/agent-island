@@ -59,6 +59,41 @@ header h1 {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+#header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.summary-pill {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.summary-pill.working {
+  color: var(--green);
+  border-color: rgba(48, 209, 88, 0.35);
+  background: rgba(48, 209, 88, 0.1);
+}
+.summary-pill.error {
+  color: var(--red);
+  border-color: rgba(255, 69, 58, 0.35);
+  background: rgba(255, 69, 58, 0.1);
+}
+.summary-pill.waiting {
+  color: var(--yellow);
+  border-color: rgba(255, 214, 10, 0.35);
+  background: rgba(255, 214, 10, 0.1);
+}
+.summary-pill.done {
+  color: var(--green);
+  border-color: rgba(48, 209, 88, 0.3);
+  background: rgba(48, 209, 88, 0.08);
+}
 
 main {
   flex: 1;

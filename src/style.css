@@ -221,6 +221,13 @@ body { display: flex; justify-content: center; }
   transition: background 0.15s;
 }
 .info-row:hover { background: var(--surface); }
+.status-flash {
+  animation: status-flash 0.6s ease;
+}
+@keyframes status-flash {
+  0% { background: var(--surface-hover); }
+  100% { background: transparent; }
+}
 .info-row .label { color: var(--text-secondary); font-size: 12px; }
 .info-row span:last-child { font-size: 12px; font-weight: 500; }
 #exp-cwd {

@@ -297,6 +297,11 @@ function refresh() {
 
   const prev = prevStatus[a.name];
   prevStatus[a.name] = a.status;
+  if (prev !== a.status) {
+    expStatus.classList.remove("status-flash");
+    void expStatus.offsetWidth;
+    expStatus.classList.add("status-flash");
+  }
   island.classList.toggle("alert-error", a.status === "error");
   island.classList.toggle("working-glow", a.status === "working");
   statusDot.classList.toggle("pulse", a.status === "working");
