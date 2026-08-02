@@ -143,6 +143,10 @@ function renderList() {
       currentSend = null;
       selected = { id: r.id, agent: r.agent, session: r.session, row: r };
       follow = true;
+      chatLog.classList.remove("chat-switching");
+      void chatLog.offsetWidth;
+      chatLog.classList.add("chat-switching");
+      setTimeout(() => chatLog.classList.remove("chat-switching"), 260);
       renderList();
       renderDetail();
     });

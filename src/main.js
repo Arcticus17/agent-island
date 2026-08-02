@@ -24,9 +24,11 @@ let collapseTimer = null;
 let scale = 1;
 const prevStatus = {};
 let flashTimer = null;
+let animateSwitchTimer = null;
 let confirmStopTimer = null;
 let confirmingStop = false;
 let confirmAgent = null;
+let lastAgentName = "";
 
 // DOM
 const $ = (id) => document.getElementById(id);
@@ -217,6 +219,8 @@ function refresh() {
     expOutput.textContent = "暂无日志";
     expStats.textContent = "-";
     island.classList.remove("alert-error", "flash-error");
+    island.classList.remove("working-glow");
+    statusDot.classList.remove("pulse");
     expPage.textContent = "";
     btnPrev.disabled = true;
     btnNext.disabled = true;
@@ -294,6 +298,15 @@ function refresh() {
   const prev = prevStatus[a.name];
   prevStatus[a.name] = a.status;
   island.classList.toggle("alert-error", a.status === "error");
+  island.classList.toggle("working-glow", a.status === "working");
+  statusDot.classList.toggle("pulse", a.status === "working");
+  const shownName = agentNameEl.textContent;
+  if (shownName !== lastAgentName) {
+    lastAgentName = shownName;
+    agentNameEl.classList.remove("fade-swap");
+    void agentNameEl.offsetWidth;
+    agentNameEl.classList.add("fade-swap");
+  }
   if (a.status === "error" && prev !== "error") {
     island.classList.add("flash-error");
     clearTimeout(flashTimer);
@@ -315,10 +328,19 @@ function fmtAgo(secs) {
 }
 
 // Nav
+function animateSwitch() {
+  island.classList.remove("switching");
+  void island.offsetWidth;
+  island.classList.add("switching");
+  clearTimeout(animateSwitchTimer);
+  animateSwitchTimer = setTimeout(() => island.classList.remove("switching"), 260);
+}
+
 function nextAgent() {
   if (agents.length > 1) {
     cur = (cur + 1) % agents.length;
     sessionIdx = 0;
+    animateSwitch();
     refresh();
   }
 }
@@ -326,6 +348,7 @@ function prevAgent() {
   if (agents.length > 1) {
     cur = (cur - 1 + agents.length) % agents.length;
     sessionIdx = 0;
+    animateSwitch();
     refresh();
   }
 }
@@ -333,6 +356,7 @@ function nextSession() {
   const a = agents[cur];
   if (a?.session_list?.length > 1 && sessionIdx < a.session_list.length - 1) {
     sessionIdx += 1;
+    animateSwitch();
     refresh();
   }
 }
@@ -340,6 +364,7 @@ function prevSession() {
   const a = agents[cur];
   if (a?.session_list?.length > 1 && sessionIdx > 0) {
     sessionIdx -= 1;
+    animateSwitch();
     refresh();
   }
 }
