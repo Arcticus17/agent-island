@@ -53,6 +53,7 @@ let confirmSessionId = null;
 let chatHistory = loadChat();
 let currentSend = null;
 let sendPollTimer = null;
+const lastRowStatus = {};
 
 function loadChat() {
   try {
@@ -120,7 +121,13 @@ function renderList() {
   listEl.innerHTML = "";
   for (const r of all) {
     const row = document.createElement("div");
-    row.className = "session-row" + (selected?.id === r.id ? " selected" : "");
+    const prevStatus = lastRowStatus[r.id];
+    lastRowStatus[r.id] = r.status;
+    const updated = prevStatus && prevStatus !== r.status;
+    row.className =
+      "session-row" +
+      (selected?.id === r.id ? " selected" : "") +
+      (updated ? " row-updated" : "");
     const lastLine = r.output.split("\n").filter(Boolean).slice(-1)[0] || "暂无输出";
     row.innerHTML = `
       <img class="icon" src="${ICONS[r.agent.name] || ""}" alt="" />

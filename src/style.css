@@ -64,6 +64,7 @@ body { display: flex; justify-content: center; }
   transition: height 0.35s cubic-bezier(0.22, 0.61, 0.36, 1),
               border-radius 0.35s cubic-bezier(0.22, 0.61, 0.36, 1),
               box-shadow 0.35s ease;
+  animation: island-enter 0.45s cubic-bezier(0.22, 0.61, 0.36, 1) both;
 }
 #island::before {
   content: "";
@@ -72,6 +73,10 @@ body { display: flex; justify-content: center; }
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
   pointer-events: none;
+}
+@keyframes island-enter {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 #island.expanded {
   height: 570px;

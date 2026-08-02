@@ -129,6 +129,13 @@ main {
   border-color: rgba(94, 156, 255, 0.35);
   box-shadow: inset 3px 0 0 var(--accent);
 }
+.session-row.row-updated {
+  animation: row-update 0.7s ease;
+}
+@keyframes row-update {
+  0% { background: rgba(94, 156, 255, 0.16); }
+  100% { background: transparent; }
+}
 
 .session-row .icon {
   width: 28px; height: 28px;
