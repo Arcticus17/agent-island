@@ -206,6 +206,7 @@ main {
 }
 
 #detail {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -216,6 +217,27 @@ main {
   animation: detail-in 0.25s ease;
 }
 #detail.hidden { display: none; }
+#scroll-bottom {
+  position: absolute;
+  right: 20px;
+  bottom: 56px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--panel-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  transition: opacity 0.2s ease, transform 0.2s ease, background 0.15s;
+}
+#scroll-bottom:hover { background: var(--panel-hover); }
+#scroll-bottom.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+}
 @keyframes detail-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }

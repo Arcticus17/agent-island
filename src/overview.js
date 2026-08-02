@@ -6,6 +6,7 @@ const detailHeader = document.getElementById("detail-header");
 const chatLog = document.getElementById("chat-log");
 const updatedEl = document.getElementById("updated");
 const summaryEl = document.getElementById("summary");
+const scrollBottomBtn = document.getElementById("scroll-bottom");
 const btnTerm = document.getElementById("btn-term");
 const btnRestart = document.getElementById("btn-restart");
 const btnStop = document.getElementById("btn-stop");
@@ -249,7 +250,10 @@ function renderChat() {
     }
     chatLog.appendChild(div);
   }
-  if (follow) chatLog.scrollTop = chatLog.scrollHeight;
+  if (follow) {
+    chatLog.scrollTop = chatLog.scrollHeight;
+    scrollBottomBtn.classList.add("hidden");
+  }
 }
 
 function renderSummary() {
@@ -415,6 +419,12 @@ promptInput.addEventListener("input", () => {
 chatLog.addEventListener("scroll", () => {
   const nearBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 24;
   follow = nearBottom;
+  scrollBottomBtn.classList.toggle("hidden", nearBottom);
+});
+scrollBottomBtn.addEventListener("click", () => {
+  follow = true;
+  chatLog.scrollTo({ top: chatLog.scrollHeight, behavior: "smooth" });
+  scrollBottomBtn.classList.add("hidden");
 });
 
 async function load() {
