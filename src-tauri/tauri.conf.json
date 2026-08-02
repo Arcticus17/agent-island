@@ -1,0 +1,45 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicholasio/tauri-docs/refs/heads/v2/src/content/docs/_schema/config.schema.json",
+  "productName": "Agent Island",
+  "version": "0.1.0",
+  "identifier": "com.agent-island.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Agent Island",
+        "width": 420,
+        "height": 36,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "center": true,
+        "visible": true
+      },
+      {
+        "label": "overview",
+        "title": "Agent 会话总览",
+        "url": "overview.html",
+        "width": 480,
+        "height": 640,
+        "decorations": true,
+        "resizable": true,
+        "alwaysOnTop": false,
+        "center": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}

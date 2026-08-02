@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Island</title>
+  <link rel="stylesheet" href="/src/style.css?v=11" />
+</head>
+<body>
+  <div id="island">
+    <div id="compact">
+      <img id="compact-icon" class="agent-icon" alt="" style="display:none" />
+      <span id="status-dot" class="dot gray"></span>
+      <span id="agent-name">加载中...</span>
+      <span id="nav-arrow" style="display:none">▶</span>
+      <span id="page-indicator" style="display:none"></span>
+    </div>
+    <div id="expanded">
+      <div id="expanded-header">
+        <img id="expanded-icon" class="agent-icon" alt="" />
+        <span id="expanded-name"></span>
+      </div>
+      <div class="divider"></div>
+      <div id="expanded-body">
+        <div class="info-row"><span class="label">状态</span><span id="exp-status"></span></div>
+        <div class="info-row"><span class="label">PID</span><span id="exp-pid"></span></div>
+        <div class="info-row"><span class="label">CPU</span><span id="exp-cpu"></span></div>
+        <div class="info-row"><span class="label">内存</span><span id="exp-mem"></span></div>
+        <div class="info-row"><span class="label">运行时长</span><span id="exp-uptime"></span></div>
+        <div class="info-row"><span class="label">目录</span><span id="exp-cwd"></span></div>
+        <div class="info-row"><span class="label">进程</span><span id="exp-sessions"></span></div>
+        <div class="info-row"><span class="label">会话</span><span id="exp-session-name"></span></div>
+        <div class="info-row"><span class="label">最后活动</span><span id="exp-last-active"></span></div>
+        <div class="info-row"><span class="label">提示</span><span id="exp-alert"></span></div>
+        <div class="info-row"><span class="label">当前文件</span><span id="exp-file"></span></div>
+        <div class="info-row"><span class="label">统计</span><span id="exp-stats"></span></div>
+        <pre id="exp-output"></pre>
+      </div>
+      <div class="divider"></div>
+      <div id="expanded-footer">
+        <div class="nav-group">
+          <button id="btn-prev" disabled>◀</button>
+          <span id="exp-page"></span>
+          <button id="btn-next" disabled>▶</button>
+        </div>
+        <div class="action-group">
+          <button id="btn-overview">总览</button>
+          <button id="btn-dir" disabled>打开目录</button>
+          <button id="btn-term" disabled>打开终端</button>
+          <button id="btn-stop" disabled>停止</button>
+          <button id="btn-restart" disabled>重启</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/src/main.js?v=11"></script>
+</body>
+</html>

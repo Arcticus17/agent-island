@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicholasio/tauri-docs/refs/heads/v2/src/content/docs/_schema/capabilities.schema.json",
+  "identifier": "default",
+  "description": "Default capability set",
+  "windows": ["main", "overview"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-position",
+    "core:window:allow-set-size"
+  ]
+}

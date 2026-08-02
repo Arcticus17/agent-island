@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent 会话总览</title>
+  <link rel="stylesheet" href="/src/overview.css" />
+</head>
+<body>
+  <header>
+    <h1>会话总览</h1>
+    <span id="updated"></span>
+  </header>
+  <main>
+    <div id="session-list"></div>
+    <section id="detail" class="hidden">
+      <div id="detail-header"></div>
+      <div id="detail-actions">
+        <button id="btn-term">打开终端</button>
+        <button id="btn-restart">恢复</button>
+        <button id="btn-stop">停止</button>
+      </div>
+      <div id="send-bar">
+        <input id="prompt-input" type="text" placeholder="给这个会话发消息..." />
+        <button id="btn-send" disabled>发送</button>
+      </div>
+      <pre id="detail-output"></pre>
+    </section>
+  </main>
+  <script type="module" src="/src/overview.js"></script>
+</body>
+</html>
