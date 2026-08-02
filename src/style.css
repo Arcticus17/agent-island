@@ -311,3 +311,9 @@ body { display: flex; justify-content: center; }
   background: rgba(127, 127, 127, 0.35);
   border-radius: 3px;
 }
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

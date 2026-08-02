@@ -148,6 +148,13 @@ main {
   background: var(--gray);
   box-shadow: 0 0 6px rgba(99, 99, 102, 0.5), 0 0 0 3px rgba(99, 99, 102, 0.1);
 }
+.session-row .dot.pulse {
+  animation: dot-pulse 1.8s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.35); }
+}
 
 #detail {
   flex: 1;
@@ -354,4 +361,10 @@ main {
 ::-webkit-scrollbar-thumb {
   background: rgba(127, 127, 127, 0.35);
   border-radius: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
 }

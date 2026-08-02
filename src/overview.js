@@ -128,7 +128,7 @@ function renderList() {
         <div class="row-meta">${escapeHtml(r.file || r.cwd || "无目录")}</div>
         <div class="row-output">${escapeHtml(lastLine)}</div>
       </div>
-      <span class="dot ${STATUS_DOT[r.status] || "gray"}"></span>
+      <span class="dot ${STATUS_DOT[r.status] || "gray"}${r.status === "working" ? " pulse" : ""}"></span>
     `;
     row.addEventListener("click", () => {
       if (sendPollTimer) {
