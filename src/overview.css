@@ -157,6 +157,18 @@ main {
   text-align: center;
   color: var(--muted);
   font-size: 12px;
+  animation: empty-in 0.4s ease;
+}
+.empty-state::before {
+  content: "◌";
+  display: block;
+  font-size: 22px;
+  margin-bottom: 6px;
+  opacity: 0.5;
+}
+@keyframes empty-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .row-main { flex: 1; min-width: 0; }
 .row-title {
