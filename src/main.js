@@ -490,3 +490,7 @@ async function poll() {
 positionIsland();
 poll();
 setInterval(poll, 3000);
+
+if (!inTauri && new URLSearchParams(window.location.search).has("expanded")) {
+  setExpanded(true);
+}
