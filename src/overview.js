@@ -116,55 +116,86 @@ function rows() {
   return out;
 }
 
+const rowEls = {};
+
+function selectRow(r) {
+  if (sendPollTimer) {
+    clearInterval(sendPollTimer);
+    sendPollTimer = null;
+  }
+  if (currentSend) {
+    currentSend.agentMsg.done = true;
+    currentSend.agentMsg.text += "\n[已切换会话，停止跟踪]";
+    saveChat();
+  }
+  currentSend = null;
+  selected = { id: r.id, agent: r.agent, session: r.session, row: r };
+  follow = true;
+  chatLog.classList.remove("chat-switching");
+  void chatLog.offsetWidth;
+  chatLog.classList.add("chat-switching");
+  setTimeout(() => chatLog.classList.remove("chat-switching"), 260);
+  renderList();
+  renderDetail();
+}
+
 function renderList() {
   const all = rows();
-  listEl.innerHTML = "";
+  const seen = new Set();
   for (const r of all) {
-    const row = document.createElement("div");
+    seen.add(r.id);
     const prevStatus = lastRowStatus[r.id];
     lastRowStatus[r.id] = r.status;
     const updated = prevStatus && prevStatus !== r.status;
-    row.className =
-      "session-row" +
-      (selected?.id === r.id ? " selected" : "") +
-      (updated ? " row-updated" : "");
+    let row = rowEls[r.id];
     const lastLine = r.output.split("\n").filter(Boolean).slice(-1)[0] || "暂无输出";
-    row.innerHTML = `
-      <img class="icon" src="${ICONS[r.agent.name] || ""}" alt="" />
-      <div class="row-main">
-        <div class="row-title">${escapeHtml(r.agent.name)} · ${escapeHtml(r.name)}</div>
-        <div class="row-meta">${escapeHtml(r.file || r.cwd || "无目录")}</div>
-        <div class="row-output">${escapeHtml(lastLine)}</div>
-      </div>
-      <span class="dot ${STATUS_DOT[r.status] || "gray"}${r.status === "working" ? " pulse" : ""}"></span>
-    `;
-    row.addEventListener("click", () => {
-      if (sendPollTimer) {
-        clearInterval(sendPollTimer);
-        sendPollTimer = null;
-      }
-      if (currentSend) {
-        currentSend.agentMsg.done = true;
-        currentSend.agentMsg.text += "\n[已切换会话，停止跟踪]";
-        saveChat();
-      }
-      currentSend = null;
-      selected = { id: r.id, agent: r.agent, session: r.session, row: r };
-      follow = true;
-      chatLog.classList.remove("chat-switching");
-      void chatLog.offsetWidth;
-      chatLog.classList.add("chat-switching");
-      setTimeout(() => chatLog.classList.remove("chat-switching"), 260);
-      renderList();
-      renderDetail();
-    });
-    listEl.appendChild(row);
+    if (!row) {
+      row = document.createElement("div");
+      row.className = "session-row row-in";
+      row.dataset.id = r.id;
+      row.innerHTML = `
+        <img class="icon" alt="" />
+        <div class="row-main">
+          <div class="row-title"></div>
+          <div class="row-meta"></div>
+          <div class="row-output"></div>
+        </div>
+        <span class="dot"></span>
+      `;
+      row.addEventListener("click", () => {
+        const current = rows().find((x) => x.id === row.dataset.id) || r;
+        selectRow(current);
+      });
+      listEl.appendChild(row);
+      rowEls[r.id] = row;
+    } else {
+      row.classList.remove("selected", "row-updated");
+      if (updated) row.classList.add("row-updated");
+    }
+    row.querySelector(".icon").src = ICONS[r.agent.name] || "";
+    row.querySelector(".row-title").textContent = `${r.agent.name} · ${r.name}`;
+    row.querySelector(".row-meta").textContent = r.file || r.cwd || "无目录";
+    row.querySelector(".row-output").textContent = lastLine;
+    row.querySelector(".dot").className =
+      "dot " + (STATUS_DOT[r.status] || "gray") + (r.status === "working" ? " pulse" : "");
+    if (selected?.id === r.id) row.classList.add("selected");
   }
+  for (const id of Object.keys(rowEls)) {
+    if (!seen.has(id)) {
+      rowEls[id].remove();
+      delete rowEls[id];
+    }
+  }
+  const empty = listEl.querySelector(".empty-state");
   if (!all.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = "暂无会话";
-    listEl.appendChild(empty);
+    if (!empty) {
+      const div = document.createElement("div");
+      div.className = "empty-state";
+      div.textContent = "暂无会话";
+      listEl.appendChild(div);
+    }
+  } else if (empty) {
+    empty.remove();
   }
 }
 
