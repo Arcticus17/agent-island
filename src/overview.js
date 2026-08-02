@@ -44,6 +44,40 @@ const STATUS_DOT = {
 const SEND_AGENTS = new Set(["Claude Code", "Codex CLI", "OpenCode", "Hermes"]);
 const CHAT_KEY = "agent-island-chat";
 
+const DEMO_AGENTS = [
+  {
+    name: "Claude Code", status: "working", pid: 12345, cpu: 2.3, memory: 156, uptime: 1423,
+    cwd: "D:\\demo\\project-a", sessions: 2, last_active_secs: 0, log_status: "working",
+    alert: "正在执行", can_restart: true,
+    stats: { total_seconds: 3600, error_count: 2, done_count: 5 },
+    session_count: 2,
+    session_list: [
+      { id: "s1", name: "project-a", cwd: "D:\\demo\\project-a", log_path: "demo", recent_output: ["完成了 provider 预设列表", "新增 datalist 建议"], current_file: "D:\\demo\\project-a\\src\\main.ts", log_status: "working", alert: "正在执行" },
+      { id: "s2", name: "project-c", cwd: "D:\\demo\\project-c", log_path: "demo", recent_output: ["修复了登录超时问题"], current_file: "D:\\demo\\project-c\\src\\auth.ts", log_status: "done", alert: "已完成" },
+    ],
+  },
+  {
+    name: "Codex CLI", status: "done", pid: 12346, cpu: 0.8, memory: 89, uptime: 3420,
+    cwd: "D:\\demo\\project-b", sessions: 1, last_active_secs: 18, log_status: "done",
+    alert: "已完成", can_restart: true,
+    stats: { total_seconds: 7200, error_count: 1, done_count: 8 },
+    session_count: 2,
+    session_list: [
+      { id: "c1", name: "project-b", cwd: "D:\\demo\\project-b", log_path: "demo", recent_output: ["执行: Get-Content README.md", "执行: rg -n TODO"], current_file: "D:\\demo\\project-b\\README.md", log_status: "done", alert: "已完成" },
+      { id: "c2", name: "n-blog", cwd: "D:\\测试\\n-blog", log_path: "demo", recent_output: ["执行: npm run build"], current_file: "D:\\测试\\n-blog\\package.json", log_status: "idle", alert: null },
+    ],
+  },
+  {
+    name: "Hermes", status: "stopped", pid: null, cpu: null, memory: null, uptime: 0,
+    cwd: null, sessions: 0, last_active_secs: null, log_status: null, alert: null,
+    can_restart: false, stats: { total_seconds: 0, error_count: 0, done_count: 0 },
+    session_count: 1,
+    session_list: [
+      { id: "h1", name: "灵动岛讨论", cwd: null, log_path: null, recent_output: ["你知道 MAC 笔记本的灵动岛吗"], current_file: null, log_status: null, alert: null },
+    ],
+  },
+];
+
 let agents = [];
 let selected = null;
 let follow = true;
@@ -386,7 +420,9 @@ chatLog.addEventListener("scroll", () => {
 async function load() {
   try {
     agents = await invoke("get_agents");
-  } catch (_) {}
+  } catch (_) {
+    agents = DEMO_AGENTS;
+  }
 
   const all = rows();
   if (selected) {
