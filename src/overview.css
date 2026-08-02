@@ -182,18 +182,41 @@ main {
 #send-bar button:hover:not(:disabled) { background: rgba(127, 127, 127, 0.18); }
 #send-bar button:disabled { opacity: 0.35; cursor: default; }
 
-#detail-output {
+#chat-log {
   flex: 1;
   min-height: 0;
-  background: var(--panel);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-size: 12px;
-  line-height: 1.55;
   overflow-y: auto;
   overscroll-behavior: contain;
   scroll-behavior: smooth;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 2px;
 }
+.msg {
+  max-width: 85%;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.msg.user {
+  align-self: flex-end;
+  background: rgba(48, 209, 88, 0.16);
+  color: var(--text);
+}
+.msg.agent {
+  align-self: flex-start;
+  background: var(--panel);
+  color: var(--text);
+}
+.msg .msg-label {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.msg.user .msg-label { text-align: right; }
+.msg.pending { opacity: 0.7; }

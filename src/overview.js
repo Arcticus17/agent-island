@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 const listEl = document.getElementById("session-list");
 const detailEl = document.getElementById("detail");
 const detailHeader = document.getElementById("detail-header");
-const detailOutput = document.getElementById("detail-output");
+const chatLog = document.getElementById("chat-log");
 const updatedEl = document.getElementById("updated");
 const btnTerm = document.getElementById("btn-term");
 const btnRestart = document.getElementById("btn-restart");
@@ -41,6 +41,7 @@ const STATUS_DOT = {
 };
 
 const SEND_AGENTS = new Set(["Claude Code", "Codex CLI", "OpenCode", "Hermes"]);
+const CHAT_KEY = "agent-island-chat";
 
 let agents = [];
 let selected = null;
@@ -48,8 +49,23 @@ let follow = true;
 let confirmingStop = false;
 let confirmStopTimer = null;
 let confirmSessionId = null;
-let sendState = null;
+let chatHistory = loadChat();
+let currentSend = null;
 let sendPollTimer = null;
+
+function loadChat() {
+  try {
+    return JSON.parse(localStorage.getItem(CHAT_KEY)) || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveChat() {
+  try {
+    localStorage.setItem(CHAT_KEY, JSON.stringify(chatHistory));
+  } catch (_) {}
+}
 
 function escapeHtml(s) {
   return String(s ?? "")
@@ -119,7 +135,12 @@ function renderList() {
         clearInterval(sendPollTimer);
         sendPollTimer = null;
       }
-      sendState = null;
+      if (currentSend) {
+        currentSend.agentMsg.done = true;
+        currentSend.agentMsg.text += "\n[已切换会话，停止跟踪]";
+        saveChat();
+      }
+      currentSend = null;
       selected = { id: r.id, agent: r.agent, session: r.session, row: r };
       follow = true;
       renderList();
@@ -127,6 +148,22 @@ function renderList() {
     });
     listEl.appendChild(row);
   }
+}
+
+function renderChat() {
+  if (!selected) return;
+  chatLog.innerHTML = "";
+  const msgs = chatHistory[selected.id] || [];
+  for (const m of msgs) {
+    const div = document.createElement("div");
+    div.className = "msg " + m.role + (m.done === false ? " pending" : "");
+    const label = m.role === "user" ? "你" : (m.agentName || selected.agent.name);
+    let body = m.text || "";
+    if (!body) body = m.done === false ? "(运行中...)" : "[完成（无输出）]";
+    div.innerHTML = `<span class="msg-label">${escapeHtml(label)}</span>${escapeHtml(body)}`;
+    chatLog.appendChild(div);
+  }
+  if (follow) chatLog.scrollTop = chatLog.scrollHeight;
 }
 
 function renderDetail() {
@@ -155,20 +192,12 @@ function renderDetail() {
       <div class="detail-cwd">${escapeHtml(r.cwd || "无目录")}</div>
     </div>
   `;
-  let text = r.output || "";
-  if (sendState) {
-    text += `\n\n> 发送: ${sendState.prompt}\n`;
-    if (sendState.error) {
-      text += `[发送失败: ${sendState.error}]`;
-    } else if (sendState.starting) {
-      text += "(正在启动...)";
-    } else {
-      text += sendState.lines.length ? sendState.lines.join("\n") : "(等待输出...)";
-      text += sendState.done ? "\n[完成]" : "\n[运行中...]";
-    }
+  if (!chatHistory[selected.id]) {
+    chatHistory[selected.id] = r.output
+      ? [{ role: "agent", agentName: r.agent.name, text: r.output, done: true }]
+      : [];
   }
-  detailOutput.textContent = text;
-  if (follow) detailOutput.scrollTop = detailOutput.scrollHeight;
+  renderChat();
 }
 
 async function runSessionAction(action, payload) {
@@ -218,10 +247,15 @@ btnStop.addEventListener("click", () => {
 async function sendPrompt() {
   if (!selected || !promptInput.value.trim()) return;
   const prompt = promptInput.value.trim();
-  sendState = { prompt, taskId: "", lines: [], done: false, starting: true };
+  const history = chatHistory[selected.id] || (chatHistory[selected.id] = []);
+  history.push({ role: "user", text: prompt, done: true });
+  const agentMsg = { role: "agent", agentName: selected.agent.name, text: "", done: false };
+  history.push(agentMsg);
+  currentSend = { key: selected.id, agentMsg, taskId: "" };
   promptInput.value = "";
   btnSend.disabled = true;
-  renderDetail();
+  saveChat();
+  renderChat();
   let taskId = "";
   try {
     taskId = await invoke("send_to_session", {
@@ -230,31 +264,43 @@ async function sendPrompt() {
       prompt,
     });
   } catch (err) {
-    sendState = { prompt, taskId: "", lines: [], done: true, error: String(err) };
-    renderDetail();
+    agentMsg.text = `[发送失败: ${err}]`;
+    agentMsg.done = true;
+    currentSend = null;
+    saveChat();
+    renderChat();
     return;
   }
-  if (!taskId) return;
-  sendState = { prompt, taskId, lines: [], done: false };
-  renderDetail();
+  if (!taskId) {
+    agentMsg.text = "[发送失败: 未返回任务ID]";
+    agentMsg.done = true;
+    currentSend = null;
+    saveChat();
+    renderChat();
+    return;
+  }
+  currentSend.taskId = taskId;
   if (sendPollTimer) clearInterval(sendPollTimer);
   sendPollTimer = setInterval(pollSend, 800);
 }
 
 async function pollSend() {
-  if (!sendState) return;
+  if (!currentSend) return;
   try {
-    const out = await invoke("get_send_output", { taskId: sendState.taskId });
-    sendState.lines = out.lines;
-    sendState.done = out.done;
-    renderDetail();
+    const out = await invoke("get_send_output", { taskId: currentSend.taskId });
+    currentSend.agentMsg.text = out.lines.join("\n");
+    currentSend.agentMsg.done = out.done;
+    saveChat();
+    renderChat();
     if (out.done) {
       clearInterval(sendPollTimer);
       sendPollTimer = null;
+      currentSend = null;
     }
   } catch (_) {
     clearInterval(sendPollTimer);
     sendPollTimer = null;
+    currentSend = null;
   }
 }
 
@@ -267,8 +313,8 @@ promptInput.addEventListener("input", () => {
     !selected || !SEND_AGENTS.has(selected.agent.name) || !promptInput.value.trim();
 });
 
-detailOutput.addEventListener("scroll", () => {
-  const nearBottom = detailOutput.scrollHeight - detailOutput.scrollTop - detailOutput.clientHeight < 24;
+chatLog.addEventListener("scroll", () => {
+  const nearBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 24;
   follow = nearBottom;
 });
 
