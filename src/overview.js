@@ -12,6 +12,12 @@ const btnRestart = document.getElementById("btn-restart");
 const btnStop = document.getElementById("btn-stop");
 const promptInput = document.getElementById("prompt-input");
 const btnSend = document.getElementById("btn-send");
+const statsView = document.getElementById("stats-view");
+const statsTable = document.getElementById("stats-table");
+const btnStats = document.getElementById("btn-stats");
+const btnRemote = document.getElementById("btn-remote");
+const remoteUrlEl = document.getElementById("remote-url");
+const btnStatsDays = document.getElementById("btn-stats-days");
 
 const ICONS = {
   "Claude Code": "/icons/claude.svg",
@@ -89,6 +95,8 @@ let chatHistory = loadChat();
 let currentSend = null;
 let sendPollTimer = null;
 const lastRowStatus = {};
+let statsMode = "sessions";
+let statsDays = 7;
 
 function loadChat() {
   try {
@@ -303,6 +311,102 @@ function renderDetail() {
   renderChat();
 }
 
+function fmtUptime(s) {
+  s = Math.floor(s || 0);
+  if (s < 60) return `${s}秒`;
+  if (s < 3600) return `${Math.floor(s / 60)}分钟`;
+  return `${Math.floor(s / 3600)}小时${Math.floor((s % 3600) / 60)}分`;
+}
+
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function demoStatsReport(days) {
+  const names = ["Claude Code", "Codex CLI", "OpenCode", "Hermes"];
+  const out = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    out.push({
+      date,
+      agents: names.map((name) => ({
+        name,
+        total_seconds: Math.floor(Math.random() * 3600),
+        error_count: Math.floor(Math.random() * 3),
+        done_count: Math.floor(Math.random() * 6),
+      })),
+    });
+  }
+  return { days: out };
+}
+
+async function loadStats() {
+  let report;
+  try {
+    report = await invoke("get_stats_report", { days: statsDays });
+  } catch (_) {
+    report = demoStatsReport(statsDays);
+  }
+  statsTable.innerHTML = "";
+  if (!report?.days?.length) {
+    statsTable.innerHTML = '<div class="stat-empty">暂无统计数据</div>';
+    return;
+  }
+  for (const day of report.days) {
+    const wrap = document.createElement("div");
+    wrap.className = "stat-day";
+    const title = document.createElement("div");
+    title.className = "stat-day-title";
+    title.textContent = day.date + (day.date === todayStr() ? "（今天）" : "");
+    wrap.appendChild(title);
+    const head = document.createElement("div");
+    head.className = "stat-row head";
+    head.innerHTML = "<span>Agent</span><span>累计用时</span><span>报错</span><span>完成</span>";
+    wrap.appendChild(head);
+    if (!day.agents?.length) {
+      const empty = document.createElement("div");
+      empty.className = "stat-empty";
+      empty.textContent = "当天暂无数据";
+      wrap.appendChild(empty);
+    } else {
+      for (const a of day.agents) {
+        const row = document.createElement("div");
+        row.className = "stat-row";
+        row.innerHTML = [
+          escapeHtml(a.name),
+          fmtUptime(a.total_seconds || 0),
+          String(a.error_count ?? 0),
+          String(a.done_count ?? 0),
+        ].map((c) => `<span>${c}</span>`).join("");
+        wrap.appendChild(row);
+      }
+    }
+    statsTable.appendChild(wrap);
+  }
+}
+
+function toggleStats() {
+  statsMode = statsMode === "stats" ? "sessions" : "stats";
+  const stats = statsMode === "stats";
+  statsView.classList.toggle("hidden", !stats);
+  listEl.classList.toggle("hidden", stats);
+  detailEl.classList.toggle("hidden", stats || !selected);
+  btnStats.classList.toggle("active", stats);
+  if (stats) loadStats();
+}
+
+async function showRemote() {
+  let url = "http://localhost:8765";
+  try {
+    url = await invoke("get_remote_url");
+  } catch (_) {}
+  remoteUrlEl.textContent = url;
+  remoteUrlEl.classList.remove("hidden");
+}
+
 async function runSessionAction(action, payload) {
   try {
     await invoke(action, payload);
@@ -415,6 +519,13 @@ promptInput.addEventListener("input", () => {
   btnSend.disabled =
     !selected || !SEND_AGENTS.has(selected.agent.name) || !promptInput.value.trim();
 });
+btnStats.addEventListener("click", toggleStats);
+btnRemote.addEventListener("click", showRemote);
+btnStatsDays.addEventListener("click", () => {
+  statsDays = statsDays === 7 ? 1 : 7;
+  btnStatsDays.textContent = statsDays === 7 ? "最近 7 天" : "今天";
+  loadStats();
+});
 
 chatLog.addEventListener("scroll", () => {
   const nearBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 24;
@@ -451,6 +562,7 @@ async function load() {
   renderList();
   renderSummary();
   renderDetail();
+  if (statsMode === "stats") loadStats();
   updatedEl.textContent = new Date().toLocaleTimeString();
 }
 

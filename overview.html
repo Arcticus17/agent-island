@@ -12,9 +12,18 @@
     <div id="header-right">
       <span id="summary"></span>
       <span id="updated"></span>
+      <button id="btn-stats" title="统计报表">统计</button>
+      <button id="btn-remote" title="远程查看地址">远程</button>
+      <span id="remote-url" class="hidden"></span>
     </div>
   </header>
   <main>
+    <section id="stats-view" class="hidden">
+      <div id="stats-controls">
+        <button id="btn-stats-days" title="切换统计周期">最近 7 天</button>
+      </div>
+      <div id="stats-table"></div>
+    </section>
     <div id="session-list"></div>
     <section id="detail" class="hidden">
       <div id="detail-header"></div>

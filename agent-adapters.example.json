@@ -1,0 +1,52 @@
+[
+  {
+    "_comment": "复制到 ~/.agent-island/agents.json 后按需修改；新增 Agent 时复制一个对象并改 name/keyword 即可，无需改代码。",
+    "name": "My Agent",
+    "keyword": "myagent",
+    "log_kind": "",
+    "resume_args": ["{exe}", "--resume", "{session}"],
+    "send_args": ["{exe}", "-p", "{prompt}", "--session", "{session}"]
+  },
+  {
+    "name": "Claude Code",
+    "keyword": "claude",
+    "log_kind": "claude",
+    "resume_args": ["{exe}", "--resume", "{session}", "继续"],
+    "send_args": ["{exe}", "-p", "{prompt}", "--resume", "{session}"]
+  },
+  {
+    "name": "Codex CLI",
+    "keyword": "codex",
+    "log_kind": "codex",
+    "resume_args": ["{exe}", "exec", "resume", "{session}"],
+    "send_args": ["{exe}", "exec", "resume", "{session}", "{prompt}"]
+  },
+  {
+    "name": "OpenCode",
+    "keyword": "opencode",
+    "log_kind": "opencode",
+    "resume_args": ["{exe}", "run", "-s", "{session}"],
+    "send_args": ["{exe}", "run", "-s", "{session}", "{prompt}"]
+  },
+  {
+    "name": "Hermes",
+    "keyword": "hermes",
+    "log_kind": "hermes",
+    "resume_args": ["{exe}", "--resume", "{session}"],
+    "send_args": ["{exe}", "--resume", "{session}", "-z", "{prompt}"]
+  },
+  {
+    "name": "Copilot",
+    "keyword": "copilot",
+    "log_kind": "copilot",
+    "resume_args": [],
+    "send_args": []
+  },
+  {
+    "name": "Cursor",
+    "keyword": "cursor",
+    "log_kind": "",
+    "resume_args": [],
+    "send_args": []
+  }
+]
