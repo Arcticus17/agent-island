@@ -1483,6 +1483,34 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
     apply_autostart(enabled)
 }
 
+const RECORDING_KEYWORDS: &[&str] = &[
+    "obs64",
+    "obs32",
+    "obs",
+    "zoom",
+    "teams",
+    "discord",
+    "wechat",
+    "weixin",
+    "wemeet",
+    "wemeetapp",
+    "tencentmeeting",
+    "gamebarpresencewriter",
+    "bandicam",
+    "sharex",
+    "fraps",
+];
+
+#[tauri::command]
+fn privacy_active(state: tauri::State<AppState>) -> bool {
+    let mut sys = state.sys.lock().unwrap();
+    sys.refresh_processes(ProcessesToUpdate::All, false);
+    sys.processes().values().any(|p| {
+        let name = p.name().to_string_lossy().to_lowercase();
+        RECORDING_KEYWORDS.iter().any(|k| name.contains(k))
+    })
+}
+
 fn toggle_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
@@ -1533,6 +1561,7 @@ pub fn run() {
             get_send_output,
             get_autostart,
             set_autostart,
+            privacy_active,
             open_overview
         ])
         .on_window_event(|window, event| {

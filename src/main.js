@@ -30,6 +30,14 @@ let confirmStopTimer = null;
 let confirmingStop = false;
 let confirmAgent = null;
 let lastAgentName = "";
+let focusMode = localStorage.getItem("agent-island-focus") || "off";
+let pinnedAgents = [];
+try { pinnedAgents = JSON.parse(localStorage.getItem("agent-island-pinned") || "[]") || []; } catch (_) {}
+let privacyManual = localStorage.getItem("agent-island-privacy") === "1";
+let privacyAuto = false;
+let lastWheelAt = 0;
+let eventCollapseTimer = null;
+const notifyCooldown = {};
 
 // DOM
 const $ = (id) => document.getElementById(id);
@@ -59,6 +67,10 @@ const btnTerm = $("btn-term");
 const btnStop = $("btn-stop");
 const btnRestart = $("btn-restart");
 const btnOverview = $("btn-overview");
+const notifyStackEl = $("notify-stack");
+const btnPrivacy = $("btn-privacy");
+const btnFocus = $("btn-focus");
+const privacyBadge = $("privacy-badge");
 
 const ICON_PATHS = {
   "Claude Code": "/icons/claude.svg",
@@ -160,6 +172,15 @@ function setExpanded(next) {
 
 island.addEventListener("mouseenter", () => setExpanded(true));
 island.addEventListener("mouseleave", () => setExpanded(false));
+island.addEventListener("wheel", (e) => {
+  if (e.target.closest("#exp-output")) return;
+  e.preventDefault();
+  const now = Date.now();
+  if (now - lastWheelAt < 300) return;
+  lastWheelAt = now;
+  if (e.deltaY > 0) nextAgent();
+  else prevAgent();
+}, { passive: false });
 
 // Theme
 function setTheme() {
@@ -188,7 +209,7 @@ function refresh() {
     compactIcon.style.display = "none";
     compactIcon.removeAttribute("src");
   } else {
-    navArrow.style.display = agents.length > 1 ? "inline-block" : "none";
+    navArrow.style.display = agentIndexes().length > 1 ? "inline-block" : "none";
     updateDot(a.status);
     agentNameEl.textContent = a.name;
     if (agents.length > 1) {
@@ -291,7 +312,19 @@ function refresh() {
 
   const prev = prevStatus[a.name];
   prevStatus[a.name] = a.status;
-  if (prev !== a.status && !switching) {
+  if (prev !== undefined && prev !== a.status && !switching && focusMode !== "quiet") {
+    const kind = eventKind(prev, a.status);
+    if (kind) {
+      pushNotify(a, kind, sess);
+      if (kind === "error" || kind === "waiting") {
+        const idx = agents.findIndex((x) => x.name === a.name);
+        if (idx >= 0 && idx !== cur) {
+          setTimeout(() => { cur = idx; sessionIdx = 0; refresh(); }, 60);
+        }
+      }
+    }
+  }
+  if (prev !== a.status && !switching && focusMode !== "quiet") {
     expStatus.classList.remove("status-flash");
     void expStatus.offsetWidth;
     expStatus.classList.add("status-flash");
@@ -306,7 +339,7 @@ function refresh() {
     void agentNameEl.offsetWidth;
     agentNameEl.classList.add("fade-swap");
   }
-  if (a.status === "error" && prev !== "error") {
+  if (a.status === "error" && prev !== "error" && focusMode !== "quiet") {
     island.classList.add("flash-error");
     clearTimeout(flashTimer);
     flashTimer = setTimeout(() => island.classList.remove("flash-error"), 2400);
@@ -326,6 +359,127 @@ function fmtAgo(secs) {
   return `${Math.floor(secs / 3600)}小时前`;
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function eventKind(prev, status) {
+  if (status === "error") return "error";
+  if (status === "waiting") return "waiting";
+  const activeBefore = ["working", "high_load", "waiting", "idle", "running"].includes(prev);
+  if (status === "done" && activeBefore) return "done";
+  return null;
+}
+
+function canNotify(agent, kind) {
+  const key = `${agent.name}:${kind}`;
+  const now = Date.now();
+  if (notifyCooldown[key] && now - notifyCooldown[key] < 20000) return false;
+  notifyCooldown[key] = now;
+  return true;
+}
+
+const NOTIFY_LABEL = { error: "报错", done: "已完成", waiting: "等待确认" };
+
+function pushNotify(agent, kind, sess) {
+  if (focusMode === "quiet") return;
+  if (focusMode === "errors" && kind !== "error") return;
+  if (!canNotify(agent, kind)) return;
+  const label = NOTIFY_LABEL[kind] || kind;
+  const card = document.createElement("div");
+  card.className = `notify-card ${kind}`;
+  const detail = sess?.name ? ` · ${escapeHtml(sess.name)}` : "";
+  card.innerHTML = `
+    <span class="notify-dot"></span>
+    <span class="notify-text"><strong>${escapeHtml(agent.name)}</strong>${detail} ${label}</span>
+    <button class="notify-close" title="关闭">×</button>
+  `;
+  card.querySelector(".notify-close").addEventListener("click", () => dismissNotify(card));
+  notifyStackEl.prepend(card);
+  while (notifyStackEl.children.length > 3) notifyStackEl.lastElementChild.remove();
+  card.dataset.timer = setTimeout(() => dismissNotify(card), 6500);
+  if (!expanded) {
+    setExpanded(true);
+    clearTimeout(eventCollapseTimer);
+    eventCollapseTimer = setTimeout(() => {
+      if (!island.matches(":hover")) setExpanded(false);
+    }, 8000);
+  }
+}
+
+function dismissNotify(card) {
+  if (!card.isConnected) return;
+  clearTimeout(Number(card.dataset.timer));
+  card.style.opacity = "0";
+  card.style.transform = "translateY(-4px)";
+  setTimeout(() => card.remove(), 160);
+}
+
+function applyPrivacy() {
+  const on = privacyManual || privacyAuto;
+  document.body.classList.toggle("privacy-mask", on);
+  btnPrivacy.classList.toggle("active", on);
+  privacyBadge.classList.toggle("hidden", !on);
+}
+
+function togglePrivacy() {
+  privacyManual = !privacyManual;
+  localStorage.setItem("agent-island-privacy", privacyManual ? "1" : "0");
+  applyPrivacy();
+}
+
+const FOCUS_MODES = ["off", "errors", "quiet", "pinned"];
+const FOCUS_LABEL = { off: "专注:关", errors: "专注:报错", quiet: "专注:静音", pinned: "专注:固定" };
+
+function updateFocusButton() {
+  btnFocus.textContent = FOCUS_LABEL[focusMode] || "专注";
+  btnFocus.classList.toggle("active", focusMode !== "off");
+}
+
+function cycleFocus() {
+  let i = FOCUS_MODES.indexOf(focusMode);
+  for (let step = 1; step <= FOCUS_MODES.length; step++) {
+    const next = FOCUS_MODES[(i + step) % FOCUS_MODES.length];
+    if (next === "pinned" && !pinnedAgents.length) continue;
+    focusMode = next;
+    break;
+  }
+  localStorage.setItem("agent-island-focus", focusMode);
+  updateFocusButton();
+  poll();
+}
+
+function togglePin(index) {
+  const a = agents[index];
+  if (!a) return;
+  const i = pinnedAgents.indexOf(a.name);
+  if (i >= 0) pinnedAgents.splice(i, 1);
+  else pinnedAgents.push(a.name);
+  localStorage.setItem("agent-island-pinned", JSON.stringify(pinnedAgents));
+}
+
+function agentIndexes() {
+  if (focusMode === "errors") {
+    return agents.map((a, i) => [a, i]).filter(([a]) => a.status === "error").map(([, i]) => i);
+  }
+  if (focusMode === "pinned" && pinnedAgents.length) {
+    return agents.map((a, i) => [a, i]).filter(([a]) => pinnedAgents.includes(a.name)).map(([, i]) => i);
+  }
+  return agents.map((_, i) => i);
+}
+
+function jumpToAgentByKey(key) {
+  const idxs = agentIndexes();
+  const target = idxs[Number(key) - 1];
+  if (target === undefined || target === cur) return;
+  cur = target;
+  sessionIdx = 0;
+  animateSwitch();
+  refresh();
+}
+
 // Nav
 function animateSwitch() {
   switching = true;
@@ -334,20 +488,26 @@ function animateSwitch() {
 }
 
 function nextAgent() {
-  if (agents.length > 1) {
-    cur = (cur + 1) % agents.length;
-    sessionIdx = 0;
-    animateSwitch();
-    refresh();
-  }
+  const idxs = agentIndexes();
+  if (idxs.length < 2) return;
+  const pos = idxs.indexOf(cur);
+  const next = idxs[(pos + 1) % idxs.length];
+  if (next === undefined || next === cur) return;
+  cur = next;
+  sessionIdx = 0;
+  animateSwitch();
+  refresh();
 }
 function prevAgent() {
-  if (agents.length > 1) {
-    cur = (cur - 1 + agents.length) % agents.length;
-    sessionIdx = 0;
-    animateSwitch();
-    refresh();
-  }
+  const idxs = agentIndexes();
+  if (idxs.length < 2) return;
+  const pos = idxs.indexOf(cur);
+  const next = idxs[(pos - 1 + idxs.length) % idxs.length];
+  if (next === undefined || next === cur) return;
+  cur = next;
+  sessionIdx = 0;
+  animateSwitch();
+  refresh();
 }
 function nextSession() {
   const a = agents[cur];
@@ -420,6 +580,22 @@ async function openOverview() {
 }
 
 btnOverview.addEventListener("click", (e) => { e.stopPropagation(); openOverview(); });
+btnPrivacy.addEventListener("click", (e) => { e.stopPropagation(); togglePrivacy(); });
+btnFocus.addEventListener("click", (e) => { e.stopPropagation(); cycleFocus(); });
+window.addEventListener("keydown", (e) => {
+  if (e.target.closest("input,textarea,select")) return;
+  if (e.key === "Escape") { setExpanded(false); return; }
+  if (e.key === " " || e.code === "Space") { e.preventDefault(); setExpanded(!expanded); return; }
+  if (e.altKey && e.key >= "1" && e.key <= "9") { e.preventDefault(); togglePin(Number(e.key) - 1); return; }
+  if (e.key >= "1" && e.key <= "9") { jumpToAgentByKey(e.key); return; }
+  if (e.key === "ArrowRight") { nextAgent(); return; }
+  if (e.key === "ArrowLeft") { prevAgent(); return; }
+  if (e.key === "ArrowDown") { nextSession(); return; }
+  if (e.key === "ArrowUp") { prevSession(); return; }
+  if (e.key === "p" || e.key === "P") { togglePrivacy(); return; }
+  if (e.key === "f" || e.key === "F") { cycleFocus(); return; }
+  if (e.key === "o" || e.key === "O") { openOverview(); }
+});
 
 // Poll
 const demoAgents = [
@@ -453,6 +629,16 @@ const demoAgents = [
   },
 ];
 
+let demoStep = 0;
+function simulateDemoEvents() {
+  const claude = demoAgents[0];
+  if (!claude) return;
+  const cycle = ["working", "done", "error", "working"];
+  demoStep = (demoStep + 1) % cycle.length;
+  claude.status = cycle[demoStep];
+  claude.alert = claude.status === "error" ? "报错" : claude.status === "done" ? "已完成" : "正在执行";
+}
+
 async function poll() {
   const prevName = agents[cur]?.name;
   const prevSessionId = agents[cur]?.session_list?.[sessionIdx]?.id;
@@ -476,9 +662,26 @@ async function poll() {
     cur = active === -1 ? 0 : active;
     sessionIdx = 0;
   }
-  refresh();
+  if (!inTauri && new URLSearchParams(window.location.search).has("demo")) {
+    simulateDemoEvents();
+  }
+  if (focusMode === "errors") {
+    const err = agents.findIndex((x) => x.status === "error");
+    if (err >= 0) { cur = err; sessionIdx = 0; }
+  }
+  if (focusMode === "pinned" && pinnedAgents.length) {
+    const pi = agents.findIndex((x) => pinnedAgents.includes(x.name));
+    if (pi >= 0) { cur = pi; sessionIdx = 0; }
+  }
+  if (inTauri) {
+    try { privacyAuto = await invoke("privacy_active"); } catch (_) {}
+    applyPrivacy();
+  }
+refresh();
 }
 
+updateFocusButton();
+applyPrivacy();
 positionIsland();
 poll();
 setInterval(poll, 3000);

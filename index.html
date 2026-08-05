@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent Island</title>
-  <link rel="stylesheet" href="/src/style.css?v=12" />
+  <link rel="stylesheet" href="/src/style.css?v=13" />
 </head>
 <body>
   <div id="island">
@@ -19,7 +19,13 @@
       <div id="expanded-header">
         <img id="expanded-icon" class="agent-icon" alt="" />
         <span id="expanded-name"></span>
+        <span id="privacy-badge" class="hidden">隐私遮罩</span>
+        <div class="header-actions">
+          <button id="btn-privacy" title="隐私遮罩">隐私</button>
+          <button id="btn-focus" title="专注模式">专注:关</button>
+        </div>
       </div>
+      <div id="notify-stack"></div>
       <div class="divider"></div>
       <div id="expanded-body">
         <div class="section-label">运行状态</div>
@@ -55,6 +61,6 @@
       </div>
     </div>
   </div>
-  <script type="module" src="/src/main.js?v=12"></script>
+  <script type="module" src="/src/main.js?v=13"></script>
 </body>
 </html>
