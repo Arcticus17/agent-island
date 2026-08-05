@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent Island</title>
-  <link rel="stylesheet" href="/src/style.css?v=11" />
+  <link rel="stylesheet" href="/src/style.css?v=12" />
 </head>
 <body>
   <div id="island">
@@ -27,18 +27,13 @@
           <div class="info-row"><span class="label">状态</span><span id="exp-status"></span></div>
           <div class="info-row"><span class="label">CPU</span><span id="exp-cpu"></span></div>
           <div class="info-row"><span class="label">内存</span><span id="exp-mem"></span></div>
-          <div class="info-row"><span class="label">PID</span><span id="exp-pid"></span></div>
-          <div class="info-row"><span class="label">运行时长</span><span id="exp-uptime"></span></div>
+          <div class="info-row"><span class="label">PID / 进程</span><span id="exp-pid"></span></div>
+          <div class="info-row"><span class="label">本次运行</span><span id="exp-uptime"></span></div>
           <div class="info-row"><span class="label">最后活动</span><span id="exp-last-active"></span></div>
           <div class="info-row wide"><span class="label">统计</span><span id="exp-stats"></span></div>
         </div>
         <div class="section-label">会话信息</div>
         <div class="info-row wide"><span class="label">目录</span><span id="exp-cwd"></span></div>
-        <div class="section-grid">
-          <div class="info-row"><span class="label">进程</span><span id="exp-sessions"></span></div>
-          <div class="info-row"><span class="label">会话</span><span id="exp-session-name"></span></div>
-          <div class="info-row wide"><span class="label">提示</span><span id="exp-alert"></span></div>
-        </div>
         <div class="section-label">最近输出</div>
         <div class="info-row wide"><span class="label">当前文件</span><span id="exp-file"></span></div>
         <pre id="exp-output"></pre>
@@ -60,6 +55,6 @@
       </div>
     </div>
   </div>
-  <script type="module" src="/src/main.js?v=11"></script>
+  <script type="module" src="/src/main.js?v=12"></script>
 </body>
 </html>

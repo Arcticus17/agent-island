@@ -25,6 +25,7 @@ let scale = 1;
 const prevStatus = {};
 let flashTimer = null;
 let animateSwitchTimer = null;
+let switching = false;
 let confirmStopTimer = null;
 let confirmingStop = false;
 let confirmAgent = null;
@@ -46,10 +47,7 @@ const expCpu = $("exp-cpu");
 const expMem = $("exp-mem");
 const expUptime = $("exp-uptime");
 const expCwd = $("exp-cwd");
-const expSessions = $("exp-sessions");
-const expSessionName = $("exp-session-name");
 const expLastActive = $("exp-last-active");
-const expAlert = $("exp-alert");
 const expFile = $("exp-file");
 const expOutput = $("exp-output");
 const expStats = $("exp-stats");
@@ -211,10 +209,7 @@ function refresh() {
     expMem.textContent = "-";
     expUptime.textContent = "-";
     expCwd.textContent = "-";
-    expSessions.textContent = "-";
-    expSessionName.textContent = "-";
     expLastActive.textContent = "-";
-    expAlert.textContent = "-";
     expFile.textContent = "-";
     expOutput.textContent = "暂无日志";
     expStats.textContent = "-";
@@ -253,17 +248,16 @@ function refresh() {
   }
   expName.textContent = multiSession && sess ? `${a.name} · ${sess.name}` : a.name;
   expStatus.textContent = { working: "🟢 工作中", idle: "🟡 等待中", high_load: "🟠 高负载", stopped: "🔴 已停止", error: "🔴 报错", waiting: "🟡 等待确认", done: "🟢 已完成" }[a.status] || "⚪";
-  expPid.textContent = a.pid ?? "-";
+  const pidText = a.pid != null ? String(a.pid) : "";
+  const procText = a.sessions ? `${a.sessions} 进程` : "";
+  expPid.textContent = [pidText, procText].filter(Boolean).join(" · ") || "-";
   expCpu.textContent = a.cpu != null ? `${a.cpu.toFixed(1)}%` : "-";
   expMem.textContent = a.memory != null ? `${a.memory.toFixed(0)} MB` : "-";
   expUptime.textContent = fmtUptime(a.uptime || 0);
   const useCwd = sess?.cwd || a.cwd;
   expCwd.textContent = useCwd || "-";
   expCwd.title = useCwd || "";
-  expSessions.textContent = a.sessions ? `${a.sessions} 个进程` : "-";
-  expSessionName.textContent = sess?.name || "-";
   expLastActive.textContent = a.status === "stopped" ? "-" : fmtAgo(a.last_active_secs ?? 0);
-  expAlert.textContent = sess?.alert || a.alert || "-";
   expFile.textContent = sess?.current_file || a.current_file || "-";
   expFile.title = sess?.current_file || a.current_file || "";
   const recentLines = sess?.recent_output?.length ? sess.recent_output : a.recent_output;
@@ -297,7 +291,7 @@ function refresh() {
 
   const prev = prevStatus[a.name];
   prevStatus[a.name] = a.status;
-  if (prev !== a.status) {
+  if (prev !== a.status && !switching) {
     expStatus.classList.remove("status-flash");
     void expStatus.offsetWidth;
     expStatus.classList.add("status-flash");
@@ -334,11 +328,9 @@ function fmtAgo(secs) {
 
 // Nav
 function animateSwitch() {
-  island.classList.remove("switching");
-  void island.offsetWidth;
-  island.classList.add("switching");
+  switching = true;
   clearTimeout(animateSwitchTimer);
-  animateSwitchTimer = setTimeout(() => island.classList.remove("switching"), 260);
+  animateSwitchTimer = setTimeout(() => { switching = false; }, 120);
 }
 
 function nextAgent() {

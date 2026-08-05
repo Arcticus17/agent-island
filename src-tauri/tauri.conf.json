@@ -9,6 +9,15 @@
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": ["icons/icon.ico"],
+    "publisher": "Arcticus17",
+    "category": "DeveloperTool",
+    "shortDescription": "Agent Island",
+    "longDescription": "一个常驻桌面的灵动岛小工具，用来一眼看到正在运行的 AI 编程 Agent。"
+  },
   "app": {
     "windows": [
       {

@@ -101,18 +101,18 @@ body { display: flex; justify-content: center; }
   0%, 100% { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06); }
   50% { box-shadow: 0 12px 44px rgba(48, 209, 88, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06); }
 }
-#island.switching {
-  animation: island-switch 0.24s ease;
-}
-@keyframes island-switch {
-  from { opacity: 0.45; transform: translateY(3px); }
-  to { opacity: 1; transform: translateY(0); }
-}
 .fade-swap {
   animation: fade-swap 0.25s ease;
 }
 @keyframes fade-swap {
   from { opacity: 0; }
+  to { opacity: 1; }
+}
+#agent-name.fade-swap {
+  animation: agent-name-swap 0.2s ease;
+}
+@keyframes agent-name-swap {
+  from { opacity: 0.45; }
   to { opacity: 1; }
 }
 
@@ -265,13 +265,6 @@ body { display: flex; justify-content: center; }
   text-align: right;
 }
 #exp-file {
-  max-width: 230px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: right;
-}
-#exp-session-name {
   max-width: 230px;
   overflow: hidden;
   text-overflow: ellipsis;
