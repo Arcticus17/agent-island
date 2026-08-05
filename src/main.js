@@ -35,6 +35,9 @@ let pinnedAgents = [];
 try { pinnedAgents = JSON.parse(localStorage.getItem("agent-island-pinned") || "[]") || []; } catch (_) {}
 let privacyManual = localStorage.getItem("agent-island-privacy") === "1";
 let privacyAuto = false;
+let quietAuto = localStorage.getItem("agent-island-quiet-auto") === "1";
+let quietStart = localStorage.getItem("agent-island-quiet-start") || "22:00";
+let quietEnd = localStorage.getItem("agent-island-quiet-end") || "08:00";
 let lastWheelAt = 0;
 let eventCollapseTimer = null;
 const notifyCooldown = {};
@@ -312,7 +315,7 @@ function refresh() {
 
   const prev = prevStatus[a.name];
   prevStatus[a.name] = a.status;
-  if (prev !== undefined && prev !== a.status && !switching && focusMode !== "quiet") {
+  if (prev !== undefined && prev !== a.status && !switching && !quietActive()) {
     const kind = eventKind(prev, a.status);
     if (kind) {
       pushNotify(a, kind, sess);
@@ -324,7 +327,7 @@ function refresh() {
       }
     }
   }
-  if (prev !== a.status && !switching && focusMode !== "quiet") {
+  if (prev !== a.status && !switching && !quietActive()) {
     expStatus.classList.remove("status-flash");
     void expStatus.offsetWidth;
     expStatus.classList.add("status-flash");
@@ -339,7 +342,7 @@ function refresh() {
     void agentNameEl.offsetWidth;
     agentNameEl.classList.add("fade-swap");
   }
-  if (a.status === "error" && prev !== "error" && focusMode !== "quiet") {
+  if (a.status === "error" && prev !== "error" && !quietActive()) {
     island.classList.add("flash-error");
     clearTimeout(flashTimer);
     flashTimer = setTimeout(() => island.classList.remove("flash-error"), 2400);
@@ -384,7 +387,7 @@ function canNotify(agent, kind) {
 const NOTIFY_LABEL = { error: "报错", done: "已完成", waiting: "等待确认" };
 
 function pushNotify(agent, kind, sess) {
-  if (focusMode === "quiet") return;
+  if (quietActive()) return;
   if (focusMode === "errors" && kind !== "error") return;
   if (!canNotify(agent, kind)) return;
   const label = NOTIFY_LABEL[kind] || kind;
@@ -430,12 +433,30 @@ function togglePrivacy() {
   applyPrivacy();
 }
 
+function minuteOfDay(s) {
+  const [h, m] = String(s).split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+function inQuietHours() {
+  const now = new Date();
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const s = minuteOfDay(quietStart);
+  const e = minuteOfDay(quietEnd);
+  return s <= e ? cur >= s && cur < e : cur >= s || cur < e;
+}
+
+function quietActive() {
+  return focusMode === "quiet" || (quietAuto && inQuietHours());
+}
+
 const FOCUS_MODES = ["off", "errors", "quiet", "pinned"];
 const FOCUS_LABEL = { off: "专注:关", errors: "专注:报错", quiet: "专注:静音", pinned: "专注:固定" };
 
 function updateFocusButton() {
   btnFocus.textContent = FOCUS_LABEL[focusMode] || "专注";
-  btnFocus.classList.toggle("active", focusMode !== "off");
+  btnFocus.classList.toggle("active", focusMode !== "off" || quietActive());
+  btnFocus.title = quietActive() ? "勿扰中，按 Q 关闭" : "专注模式";
 }
 
 function cycleFocus() {
@@ -594,6 +615,12 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "ArrowUp") { prevSession(); return; }
   if (e.key === "p" || e.key === "P") { togglePrivacy(); return; }
   if (e.key === "f" || e.key === "F") { cycleFocus(); return; }
+  if (e.key === "q" || e.key === "Q") {
+    quietAuto = !quietAuto;
+    localStorage.setItem("agent-island-quiet-auto", quietAuto ? "1" : "0");
+    updateFocusButton();
+    return;
+  }
   if (e.key === "o" || e.key === "O") { openOverview(); }
 });
 
