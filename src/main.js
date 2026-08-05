@@ -38,6 +38,13 @@ let privacyAuto = false;
 let quietAuto = localStorage.getItem("agent-island-quiet-auto") === "1";
 let quietStart = localStorage.getItem("agent-island-quiet-start") || "22:00";
 let quietEnd = localStorage.getItem("agent-island-quiet-end") || "08:00";
+const FIELD_KEYS = ["status", "cpu", "mem", "pid", "uptime", "last-active", "stats", "cwd", "file", "output"];
+let visibleFields = new Set();
+try { visibleFields = new Set(JSON.parse(localStorage.getItem("agent-island-fields") || "[]")); } catch (_) {}
+if (!visibleFields.size) visibleFields = new Set(FIELD_KEYS);
+let lastOutputKey = "";
+let lastOutputLines = [];
+let liveBadgeTimer = null;
 let lastWheelAt = 0;
 let eventCollapseTimer = null;
 const notifyCooldown = {};
@@ -74,6 +81,12 @@ const notifyStackEl = $("notify-stack");
 const btnPrivacy = $("btn-privacy");
 const btnFocus = $("btn-focus");
 const privacyBadge = $("privacy-badge");
+const iconStackEl = $("icon-stack");
+const stackCountEl = $("stack-count");
+const agentStripEl = $("agent-strip");
+const btnFields = $("btn-fields");
+const fieldsPop = $("fields-pop");
+const liveBadge = $("live-badge");
 
 const ICON_PATHS = {
   "Claude Code": "/icons/claude.svg",
@@ -125,6 +138,7 @@ let winStartX = 0;
 island.addEventListener("mousedown", (e) => {
   if (e.target.closest("button")) return;
   if (e.target.closest("#exp-output")) return;
+  if (e.target.closest(".path-link")) return;
   if (!tauriWin) return;
   dragging = true;
   startX = e.screenX;
@@ -235,7 +249,10 @@ function refresh() {
     expCwd.textContent = "-";
     expLastActive.textContent = "-";
     expFile.textContent = "-";
-    expOutput.textContent = "暂无日志";
+    expOutput.innerHTML = "";
+    lastOutputKey = "";
+    lastOutputLines = [];
+    liveBadge.classList.add("hidden");
     expStats.textContent = "-";
     island.classList.remove("alert-error", "flash-error");
     island.classList.remove("working-glow");
@@ -247,6 +264,8 @@ function refresh() {
     btnTerm.disabled = true;
     btnStop.disabled = true;
     btnRestart.disabled = true;
+    updateIconStack();
+    updateAgentStrip();
     if (confirmingStop) {
       confirmingStop = false;
       clearTimeout(confirmStopTimer);
@@ -285,9 +304,7 @@ function refresh() {
   expFile.textContent = sess?.current_file || a.current_file || "-";
   expFile.title = sess?.current_file || a.current_file || "";
   const recentLines = sess?.recent_output?.length ? sess.recent_output : a.recent_output;
-  expOutput.textContent = recentLines?.length ? recentLines.join("\n") : "暂无日志";
-  const logNearBottom = expOutput.scrollHeight - expOutput.scrollTop - expOutput.clientHeight < 24;
-  if (logNearBottom) expOutput.scrollTop = expOutput.scrollHeight;
+  renderOutput(recentLines, `${a.name}|${sess?.id || ""}`);
   expStats.textContent = a.stats
     ? `${fmtUptime(a.stats.total_seconds)} · 报错${a.stats.error_count} · 完成${a.stats.done_count}`
     : "-";
@@ -335,6 +352,8 @@ function refresh() {
   island.classList.toggle("alert-error", a.status === "error");
   island.classList.toggle("working-glow", a.status === "working");
   statusDot.classList.toggle("pulse", a.status === "working");
+  updateIconStack();
+  updateAgentStrip();
   const shownName = agentNameEl.textContent;
   if (shownName !== lastAgentName) {
     lastAgentName = shownName;
@@ -366,6 +385,128 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+}
+
+function dotClass(s) {
+  return ({ working: "green", idle: "yellow", high_load: "yellow", running: "green", stopped: "red", error: "red", waiting: "yellow", done: "green" }[s] || "gray");
+}
+
+function updateIconStack() {
+  iconStackEl.querySelectorAll("img.stack-icon").forEach((el) => el.remove());
+  stackCountEl.classList.add("hidden");
+  const stack = agents.filter((x) => x.status !== "stopped");
+  if (!stack.length) stack.push(...agents.slice(0, 1));
+  const curAgent = agents[cur];
+  if (curAgent && ICON_PATHS[curAgent.name]) {
+    compactIcon.src = ICON_PATHS[curAgent.name];
+    compactIcon.alt = curAgent.name;
+    compactIcon.style.display = "inline-block";
+  } else {
+    compactIcon.style.display = "none";
+    compactIcon.removeAttribute("src");
+  }
+  const others = stack.filter((x) => x.name !== curAgent?.name).slice(0, 2);
+  for (const agent of others) {
+    const src = ICON_PATHS[agent.name];
+    if (!src) continue;
+    const img = document.createElement("img");
+    img.className = "agent-icon stack-icon";
+    img.src = src;
+    img.alt = agent.name;
+    img.title = agent.name;
+    iconStackEl.insertBefore(img, stackCountEl);
+  }
+  const remaining = stack.length - 3;
+  if (remaining > 0) {
+    stackCountEl.textContent = "+" + remaining;
+    stackCountEl.classList.remove("hidden");
+  }
+}
+
+function updateAgentStrip() {
+  const idxs = agentIndexes();
+  const list = idxs.map((i) => agents[i]).filter(Boolean);
+  agentStripEl.innerHTML = "";
+  for (const agent of list) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "agent-chip" + (agent.name === agents[cur]?.name ? " active" : "");
+    chip.title = agent.name;
+    const src = ICON_PATHS[agent.name] || "";
+    chip.innerHTML = (src
+      ? `<img class="agent-chip-icon" alt="" src="${src}">`
+      : `<span class="agent-chip-letter">${escapeHtml((agent.name || "?")[0])}</span>`
+    ) + `<span class="agent-chip-name">${escapeHtml(agent.name)}</span><span class="agent-chip-dot ${dotClass(agent.status)}"></span>`;
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const idx = agents.findIndex((x) => x.name === agent.name);
+      if (idx >= 0 && idx !== cur) {
+        cur = idx;
+        sessionIdx = 0;
+        animateSwitch();
+        refresh();
+      }
+    });
+    agentStripEl.appendChild(chip);
+  }
+}
+
+function renderOutput(lines, key) {
+  const next = lines && lines.length ? lines : ["暂无日志"];
+  if (key !== lastOutputKey) {
+    expOutput.innerHTML = "";
+    lastOutputLines = [];
+    lastOutputKey = key;
+    liveBadge.classList.add("hidden");
+  }
+  if (next.length < lastOutputLines.length) {
+    expOutput.innerHTML = "";
+    lastOutputLines = [];
+  }
+  const added = next.slice(lastOutputLines.length);
+  if (!added.length && next.length === lastOutputLines.length) return;
+  const frag = document.createDocumentFragment();
+  for (const line of added) {
+    const div = document.createElement("div");
+    div.className = "log-line";
+    div.textContent = line;
+    frag.appendChild(div);
+  }
+  expOutput.appendChild(frag);
+  while (expOutput.children.length > 200) expOutput.firstChild.remove();
+  lastOutputLines = next;
+  expOutput.scrollTop = expOutput.scrollHeight;
+  if (added.length) {
+    liveBadge.classList.remove("hidden");
+    clearTimeout(liveBadgeTimer);
+    liveBadgeTimer = setTimeout(() => liveBadge.classList.add("hidden"), 2500);
+  }
+}
+
+const FIELD_SECTIONS = {
+  run: ["status", "cpu", "mem", "pid", "uptime", "last-active", "stats"],
+  session: ["cwd"],
+  output: ["file", "output"],
+};
+
+function syncFieldsPop() {
+  document.querySelectorAll("[data-field-check]").forEach((cb) => {
+    cb.checked = visibleFields.has(cb.dataset.fieldCheck);
+  });
+}
+
+function applyFields() {
+  localStorage.setItem("agent-island-fields", JSON.stringify([...visibleFields]));
+  document.querySelectorAll("[data-field]").forEach((el) => {
+    el.classList.toggle("hidden", !visibleFields.has(el.dataset.field));
+  });
+  for (const [section, keys] of Object.entries(FIELD_SECTIONS)) {
+    const label = document.querySelector(`[data-section="${section}"]`);
+    if (!label) continue;
+    const anyVisible = keys.some((k) => visibleFields.has(k));
+    label.classList.toggle("hidden", !anyVisible);
+  }
+  syncFieldsPop();
 }
 
 function eventKind(prev, status) {
@@ -552,8 +693,18 @@ btnNext.addEventListener("click", (e) => { e.stopPropagation(); nextSession(); }
 
 async function openDir() {
   const a = agents[cur];
-  if (!a || !a.cwd) return;
-  try { await invoke("open_project_dir", { name: a.name }); } catch (_) {}
+  if (!a) return;
+  const path = a.session_list?.[sessionIdx]?.cwd || a.cwd;
+  if (!path || a.status === "stopped") return;
+  try { await invoke("open_path", { path }); } catch (_) {}
+}
+
+async function openFile() {
+  const a = agents[cur];
+  if (!a) return;
+  const path = a.session_list?.[sessionIdx]?.current_file || a.current_file;
+  if (!path) return;
+  try { await invoke("open_path", { path }); } catch (_) {}
 }
 
 async function openTerm() {
@@ -564,6 +715,8 @@ async function openTerm() {
 
 btnDir.addEventListener("click", (e) => { e.stopPropagation(); openDir(); });
 btnTerm.addEventListener("click", (e) => { e.stopPropagation(); openTerm(); });
+expCwd.addEventListener("click", (e) => { e.stopPropagation(); openDir(); });
+expFile.addEventListener("click", (e) => { e.stopPropagation(); openFile(); });
 
 async function stopCurrent() {
   const a = agents[cur];
@@ -603,6 +756,22 @@ async function openOverview() {
 btnOverview.addEventListener("click", (e) => { e.stopPropagation(); openOverview(); });
 btnPrivacy.addEventListener("click", (e) => { e.stopPropagation(); togglePrivacy(); });
 btnFocus.addEventListener("click", (e) => { e.stopPropagation(); cycleFocus(); });
+btnFields.addEventListener("click", (e) => {
+  e.stopPropagation();
+  fieldsPop.classList.toggle("hidden");
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#fields-pop") && !e.target.closest("#btn-fields")) {
+    fieldsPop.classList.add("hidden");
+  }
+});
+fieldsPop.addEventListener("change", (e) => {
+  const key = e.target.dataset.fieldCheck;
+  if (!key) return;
+  if (e.target.checked) visibleFields.add(key);
+  else visibleFields.delete(key);
+  applyFields();
+});
 window.addEventListener("keydown", (e) => {
   if (e.target.closest("input,textarea,select")) return;
   if (e.key === "Escape") { setExpanded(false); return; }
@@ -621,6 +790,7 @@ window.addEventListener("keydown", (e) => {
     updateFocusButton();
     return;
   }
+  if (e.key === "v" || e.key === "V") { btnFields.click(); return; }
   if (e.key === "o" || e.key === "O") { openOverview(); }
 });
 
@@ -709,6 +879,7 @@ refresh();
 
 updateFocusButton();
 applyPrivacy();
+applyFields();
 positionIsland();
 poll();
 setInterval(poll, 3000);

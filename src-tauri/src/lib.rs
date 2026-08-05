@@ -908,6 +908,27 @@ fn open_project_dir(name: String, state: tauri::State<AppState>) -> Result<(), S
 }
 
 #[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let path = path.trim().to_string();
+    if path.is_empty() {
+        return Err("empty path".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("failed to open path: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        return Err("not supported on this platform".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn open_terminal(name: String, state: tauri::State<AppState>) -> Result<(), String> {
     let mut sys = state.sys.lock().map_err(|_| "state lock error".to_string())?;
     let dir = find_agent_cwd(&mut sys, &name)?;
@@ -1551,6 +1572,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_agents,
             open_project_dir,
+            open_path,
             open_terminal,
             stop_agent,
             restart_agent,

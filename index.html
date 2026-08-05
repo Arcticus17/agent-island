@@ -4,12 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent Island</title>
-  <link rel="stylesheet" href="/src/style.css?v=13" />
+  <link rel="stylesheet" href="/src/style.css?v=14" />
 </head>
 <body>
   <div id="island">
     <div id="compact">
-      <img id="compact-icon" class="agent-icon" alt="" style="display:none" />
+      <div id="icon-stack">
+        <img id="compact-icon" class="agent-icon" alt="" style="display:none" />
+        <span id="stack-count" class="hidden"></span>
+      </div>
       <span id="status-dot" class="dot gray"></span>
       <span id="agent-name">加载中...</span>
       <span id="nav-arrow" title="下一个 Agent" style="display:none">▶</span>
@@ -23,26 +26,40 @@
         <div class="header-actions">
           <button id="btn-privacy" title="隐私遮罩">隐私</button>
           <button id="btn-focus" title="专注模式">专注:关</button>
+          <button id="btn-fields" title="显示字段">字段</button>
         </div>
       </div>
+      <div id="fields-pop" class="hidden">
+        <label><input type="checkbox" data-field-check="status"> 状态</label>
+        <label><input type="checkbox" data-field-check="cpu"> CPU</label>
+        <label><input type="checkbox" data-field-check="mem"> 内存</label>
+        <label><input type="checkbox" data-field-check="pid"> PID / 进程</label>
+        <label><input type="checkbox" data-field-check="uptime"> 本次运行</label>
+        <label><input type="checkbox" data-field-check="last-active"> 最后活动</label>
+        <label><input type="checkbox" data-field-check="stats"> 统计</label>
+        <label><input type="checkbox" data-field-check="cwd"> 目录</label>
+        <label><input type="checkbox" data-field-check="file"> 当前文件</label>
+        <label><input type="checkbox" data-field-check="output"> 最近输出</label>
+      </div>
+      <div id="agent-strip"></div>
       <div id="notify-stack"></div>
       <div class="divider"></div>
       <div id="expanded-body">
-        <div class="section-label">运行状态</div>
+        <div class="section-label" data-section="run">运行状态</div>
         <div class="section-grid">
-          <div class="info-row"><span class="label">状态</span><span id="exp-status"></span></div>
-          <div class="info-row"><span class="label">CPU</span><span id="exp-cpu"></span></div>
-          <div class="info-row"><span class="label">内存</span><span id="exp-mem"></span></div>
-          <div class="info-row"><span class="label">PID / 进程</span><span id="exp-pid"></span></div>
-          <div class="info-row"><span class="label">本次运行</span><span id="exp-uptime"></span></div>
-          <div class="info-row"><span class="label">最后活动</span><span id="exp-last-active"></span></div>
-          <div class="info-row wide"><span class="label">统计</span><span id="exp-stats"></span></div>
+          <div class="info-row" data-field="status"><span class="label">状态</span><span id="exp-status"></span></div>
+          <div class="info-row" data-field="cpu"><span class="label">CPU</span><span id="exp-cpu"></span></div>
+          <div class="info-row" data-field="mem"><span class="label">内存</span><span id="exp-mem"></span></div>
+          <div class="info-row" data-field="pid"><span class="label">PID / 进程</span><span id="exp-pid"></span></div>
+          <div class="info-row" data-field="uptime"><span class="label">本次运行</span><span id="exp-uptime"></span></div>
+          <div class="info-row" data-field="last-active"><span class="label">最后活动</span><span id="exp-last-active"></span></div>
+          <div class="info-row wide" data-field="stats"><span class="label">统计</span><span id="exp-stats"></span></div>
         </div>
-        <div class="section-label">会话信息</div>
-        <div class="info-row wide"><span class="label">目录</span><span id="exp-cwd"></span></div>
-        <div class="section-label">最近输出</div>
-        <div class="info-row wide"><span class="label">当前文件</span><span id="exp-file"></span></div>
-        <pre id="exp-output"></pre>
+        <div class="section-label" data-section="session">会话信息</div>
+        <div class="info-row wide" data-field="cwd"><span class="label">目录</span><span id="exp-cwd" class="path-link"></span></div>
+        <div class="section-label" data-section="output">最近输出 <span id="live-badge" class="live-badge hidden">● 实时</span></div>
+        <div class="info-row wide" data-field="file"><span class="label">当前文件</span><span id="exp-file" class="path-link"></span></div>
+        <div id="exp-output" class="log-panel" data-field="output"></div>
       </div>
       <div class="divider"></div>
       <div id="expanded-footer">
@@ -61,6 +78,6 @@
       </div>
     </div>
   </div>
-  <script type="module" src="/src/main.js?v=13"></script>
+  <script type="module" src="/src/main.js?v=14"></script>
 </body>
 </html>
