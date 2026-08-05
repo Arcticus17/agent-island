@@ -44,6 +44,8 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 16px 18px 12px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -62,8 +64,14 @@ header h1 {
 #header-right {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
   min-width: 0;
+}
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 #header-right button {
   background: var(--panel);
@@ -183,6 +191,11 @@ main {
   color: var(--muted);
   font-size: 11px;
   opacity: 0.8;
+}
+.stat-row.total {
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel-hover);
 }
 .stat-empty {
   padding: 20px;

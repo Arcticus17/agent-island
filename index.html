@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent Island</title>
-  <link rel="stylesheet" href="/src/style.css?v=14" />
+  <link rel="stylesheet" href="/src/style.css?v=15" />
 </head>
 <body>
   <div id="island">
@@ -15,7 +15,7 @@
       </div>
       <span id="status-dot" class="dot gray"></span>
       <span id="agent-name">加载中...</span>
-      <span id="nav-arrow" title="下一个 Agent" style="display:none">▶</span>
+      <span id="nav-arrow" title="下一个 Agent" aria-label="下一个 Agent" style="display:none">▶</span>
       <span id="page-indicator" style="display:none"></span>
     </div>
     <div id="expanded">
@@ -64,9 +64,9 @@
       <div class="divider"></div>
       <div id="expanded-footer">
         <div class="nav-group">
-          <button id="btn-prev" title="上一个会话" disabled>◀</button>
+          <button id="btn-prev" title="上一个会话" aria-label="上一个会话" disabled>◀</button>
           <span id="exp-page"></span>
-          <button id="btn-next" title="下一个会话" disabled>▶</button>
+          <button id="btn-next" title="下一个会话" aria-label="下一个会话" disabled>▶</button>
         </div>
         <div class="action-group">
           <button id="btn-overview" title="打开会话总览">总览</button>
@@ -78,6 +78,6 @@
       </div>
     </div>
   </div>
-  <script type="module" src="/src/main.js?v=14"></script>
+  <script type="module" src="/src/main.js?v=15"></script>
 </body>
 </html>

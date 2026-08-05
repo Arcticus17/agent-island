@@ -383,6 +383,15 @@ async function loadStats() {
         ].map((c) => `<span>${c}</span>`).join("");
         wrap.appendChild(row);
       }
+      const totalSecs = day.agents.reduce((s, a) => s + (a.total_seconds || 0), 0);
+      const totalErr = day.agents.reduce((s, a) => s + (a.error_count || 0), 0);
+      const totalDone = day.agents.reduce((s, a) => s + (a.done_count || 0), 0);
+      const total = document.createElement("div");
+      total.className = "stat-row total";
+      total.innerHTML = ["合计", fmtUptime(totalSecs), String(totalErr), String(totalDone)]
+        .map((c) => `<span>${c}</span>`)
+        .join("");
+      wrap.appendChild(total);
     }
     statsTable.appendChild(wrap);
   }

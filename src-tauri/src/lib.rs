@@ -1833,6 +1833,7 @@ const REMOTE_HTML: &str = r#"<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>Agent Island Remote</title>
 <style>
 body{background:#121214;color:#f2f2f5;font-family:"Segoe UI","Microsoft YaHei",sans-serif;margin:0;padding:24px}
@@ -1848,6 +1849,7 @@ h1{font-size:18px;margin:0 0 16px}
 </head>
 <body>
 <h1>Agent Island</h1>
+<div id="updated" class="meta"></div>
 <div id="list">加载中...</div>
 <script>
 async function load(){
@@ -1855,15 +1857,16 @@ async function load(){
     const r=await fetch('/api/agents');
     const data=await r.json();
     const colors={working:'green',running:'green',done:'green',idle:'yellow',waiting:'yellow',high_load:'yellow',stopped:'red',error:'red'};
+    const statusText={working:'工作中',running:'工作中',done:'已完成',idle:'等待中',waiting:'等待确认',high_load:'高负载',stopped:'已停止',error:'报错'};
     document.getElementById('list').innerHTML=data.map(a=>{
       const c=colors[a.status]||'gray';
-      const out=(a.recent_output||[]).slice(-3).join('\n');
       return '<div class="card"><div class="row"><span class="dot '+c+'"></span><span class="name"></span><span class="meta"></span></div><div class="cwd"></div><div class="out"></div></div>';
     }).join('');
+    document.getElementById('updated').textContent='更新于 '+new Date().toLocaleTimeString();
     const nodes=document.querySelectorAll('.card');
     nodes.forEach((n,i)=>{
       const a=data[i]; if(!a)return;
-      n.querySelector('.name').textContent=a.name+' · '+(a.status||'-');
+      n.querySelector('.name').textContent=a.name+' · '+(statusText[a.status]||a.status||'-');
       n.querySelector('.meta').textContent='CPU '+(a.cpu!=null?a.cpu.toFixed(1)+'%':'-')+' · 内存 '+(a.memory!=null?a.memory.toFixed(0)+' MB':'-')+' · '+(a.session_count||0)+' 会话';
       n.querySelector('.cwd').textContent=a.cwd||'-';
       n.querySelector('.out').textContent=(a.recent_output||[]).slice(-3).join('\n')||'暂无日志';

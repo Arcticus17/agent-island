@@ -538,7 +538,7 @@ function pushNotify(agent, kind, sess) {
   card.innerHTML = `
     <span class="notify-dot"></span>
     <span class="notify-text"><strong>${escapeHtml(agent.name)}</strong>${detail} ${label}</span>
-    <button class="notify-close" title="关闭">×</button>
+    <button class="notify-close" title="关闭" aria-label="关闭通知">×</button>
   `;
   card.querySelector(".notify-close").addEventListener("click", () => dismissNotify(card));
   notifyStackEl.prepend(card);
