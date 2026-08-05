@@ -39,12 +39,14 @@
 
 已实现：紧凑胶囊图标叠层与数量角标、展开页 Agent 快捷条（点击直达）、日志逐行流入动画与实时标记、字段面板（按 `V` 或点“字段”开关）、目录/文件路径点击打开（`open_path`）。
 
-### v0.4：可扩展的 Agent 平台
+### v0.4：可扩展的 Agent 平台（已完成）
 
 - 插件式 Agent 适配器：新增 Agent 只需写一个适配器
 - 会话恢复补全：Claude、OpenCode、Hermes 与 Codex 对齐
 - 统计报表：按天/周看各 Agent 用时、完成数、报错数
 - 远程查看：手机或另一台电脑查看 Agent 状态
+
+已实现：`~/.agent-island/agents.json` 配置式适配器（内置默认值，参考 `agent-adapters.example.json`），恢复命令按 CLI 实测对齐（Codex `exec resume`、OpenCode `run -s`），总览页新增按天/7 天统计表与每日统计存档，内置局域网远程查看服务 `http://<电脑IP>:8765`（总览页“远程”按钮显示地址）。
 
 ## 长期要求与开发约定
 
