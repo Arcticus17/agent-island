@@ -219,6 +219,18 @@ body { display: flex; justify-content: center; }
 .divider { height: 1px; background: var(--divider); }
 #expanded-body { display: flex; flex-direction: column; gap: 8px; }
 #expanded-body { gap: 6px; }
+.section-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 18px;
+}
+.section-grid .info-row {
+  margin: 0;
+  min-width: 0;
+}
+.info-row.wide {
+  grid-column: 1 / -1;
+}
 .section-label {
   margin: 4px 0 -2px;
   font-size: 10px;
@@ -276,7 +288,7 @@ body { display: flex; justify-content: center; }
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 64px;
+  max-height: 56px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scroll-behavior: smooth;
