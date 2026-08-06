@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent Island</title>
-  <link rel="stylesheet" href="/src/style.css?v=16" />
+  <link rel="stylesheet" href="/src/style.css?v=17" />
 </head>
 <body>
   <div id="island">
@@ -27,6 +27,7 @@
           <button id="btn-privacy" title="隐私遮罩">隐私</button>
           <button id="btn-focus" title="专注模式">专注:关</button>
           <button id="btn-fields" title="显示字段">字段</button>
+          <button id="btn-theme" title="外观设置">外观</button>
         </div>
       </div>
       <div id="fields-pop" class="hidden">
@@ -60,7 +61,18 @@
           <label>结束 <input id="quiet-end-input" type="time" /></label>
         </div>
       </div>
+      <div id="theme-pop" class="hidden">
+        <label class="theme-row">透明度 <input type="range" data-theme="opacity" min="50" max="100" value="92" /></label>
+        <label class="theme-row">圆角 <input type="range" data-theme="radius" min="12" max="30" value="26" /></label>
+        <label class="theme-row">宽度 <input type="range" data-theme="width" min="360" max="520" step="10" value="420" /></label>
+        <label class="theme-row"><input type="checkbox" data-theme="snap" /> 位置吸附</label>
+        <label class="theme-row"><input type="checkbox" data-theme="announce" /> 语音播报</label>
+        <label class="theme-row"><input type="checkbox" data-theme="contrast" /> 高对比度</label>
+        <label class="theme-row"><input type="checkbox" data-theme="notify" /> 系统通知</label>
+        <label class="theme-row"><input type="checkbox" data-theme="taskbar" /> 任务栏显示</label>
+      </div>
       <div id="agent-strip"></div>
+      <div id="card-preview" class="hidden"></div>
       <div id="notify-stack"></div>
       <div class="divider"></div>
       <div id="expanded-body">
@@ -97,6 +109,6 @@
       </div>
     </div>
   </div>
-  <script type="module" src="/src/main.js?v=16"></script>
+  <script type="module" src="/src/main.js?v=17"></script>
 </body>
 </html>

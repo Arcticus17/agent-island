@@ -2030,6 +2030,7 @@ pub fn run() {
     let stats_path = stats_path();
     let daily_path = daily_path();
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             sys: Mutex::new(System::new_all()),
             session: Mutex::new(SessionState {

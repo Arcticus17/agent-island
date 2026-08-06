@@ -7,6 +7,11 @@ import {
   LogicalPosition,
   LogicalSize,
 } from "@tauri-apps/api/window";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 
 const inTauri = "__TAURI_INTERNALS__" in window;
 const tauriWin = inTauri ? getCurrentWindow() : null;
@@ -33,6 +38,16 @@ let lastAgentName = "";
 let focusMode = localStorage.getItem("agent-island-focus") || "off";
 let pinnedAgents = [];
 try { pinnedAgents = JSON.parse(localStorage.getItem("agent-island-pinned") || "[]") || []; } catch (_) {}
+let agentOrder = [];
+try { agentOrder = JSON.parse(localStorage.getItem("agent-island-order") || "[]") || []; } catch (_) {}
+let themeOpacity = Number(localStorage.getItem("agent-island-theme-opacity")) || 92;
+let themeRadius = Number(localStorage.getItem("agent-island-theme-radius")) || 26;
+let themeWidth = Number(localStorage.getItem("agent-island-theme-width")) || 420;
+let snapEnabled = localStorage.getItem("agent-island-theme-snap") === "1";
+let announceEnabled = localStorage.getItem("agent-island-theme-announce") === "1";
+let contrastEnabled = localStorage.getItem("agent-island-theme-contrast") === "1";
+let systemNotify = localStorage.getItem("agent-island-theme-notify") === "1";
+let showInTaskbar = localStorage.getItem("agent-island-theme-taskbar") === "1";
 let privacyManual = localStorage.getItem("agent-island-privacy") === "1";
 let privacyAuto = false;
 let quietAuto = localStorage.getItem("agent-island-quiet-auto") === "1";
@@ -91,10 +106,13 @@ const btnFields = $("btn-fields");
 const fieldsPop = $("fields-pop");
 const liveBadge = $("live-badge");
 const quickMenuEl = $("quick-menu");
+const cardPreviewEl = $("card-preview");
 const focusPop = $("focus-pop");
 const quietAutoInput = $("quiet-auto-input");
 const quietStartInput = $("quiet-start-input");
 const quietEndInput = $("quiet-end-input");
+const btnTheme = $("btn-theme");
+const themePop = $("theme-pop");
 
 const ICON_PATHS = {
   "Claude Code": "/icons/claude.svg",
@@ -169,7 +187,18 @@ async function stopDrag() {
   try {
     scale = await tauriWin.scaleFactor();
     const pos = await tauriWin.outerPosition();
-    localStorage.setItem(POS_KEY, String(pos.x / scale));
+    let x = pos.x / scale;
+    if (snapEnabled) {
+      const mon = await primaryMonitor();
+      if (mon) {
+        const sw = mon.size.width / scale;
+        const w = themeWidth;
+        const targets = [0, Math.max(0, (sw - w) / 2), Math.max(0, sw - w)];
+        x = targets.reduce((a, b) => (Math.abs(b - x) < Math.abs(a - x) ? b : a));
+        await tauriWin.setPosition(new LogicalPosition(x, 0));
+      }
+    }
+    localStorage.setItem(POS_KEY, String(x));
   } catch (_) {}
 }
 
@@ -231,12 +260,47 @@ window.addEventListener("mousemove", (e) => {
   }
 });
 
+function applyTheme() {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const o = (themeOpacity / 100).toFixed(2);
+  const bg = dark ? `rgba(22, 22, 24, ${o})` : `rgba(250, 250, 252, ${o})`;
+  const deepO = Math.min(1, themeOpacity / 100 + 0.05).toFixed(2);
+  const bgDeep = dark ? `rgba(14, 14, 16, ${deepO})` : `rgba(238, 238, 243, ${deepO})`;
+  const root = document.documentElement;
+  root.style.setProperty("--bg", bg);
+  root.style.setProperty("--bg-deep", bgDeep);
+  root.style.setProperty("--radius-lg", `${themeRadius}px`);
+  document.body.classList.toggle("high-contrast", contrastEnabled);
+  island.style.width = `${themeWidth}px`;
+  if (inTauri) {
+    tauriWin
+      .setSize(new LogicalSize(themeWidth, expanded ? EXPANDED_H : COLLAPSED_H))
+      .catch(() => {});
+    tauriWin.setSkipTaskbar(!showInTaskbar).catch(() => {});
+  }
+}
+
+function syncThemePop() {
+  themePop.querySelectorAll("[data-theme]").forEach((el) => {
+    const key = el.dataset.theme;
+    if (key === "opacity") el.value = themeOpacity;
+    else if (key === "radius") el.value = themeRadius;
+    else if (key === "width") el.value = themeWidth;
+    else if (key === "snap") el.checked = snapEnabled;
+    else if (key === "announce") el.checked = announceEnabled;
+    else if (key === "contrast") el.checked = contrastEnabled;
+    else if (key === "notify") el.checked = systemNotify;
+    else if (key === "taskbar") el.checked = showInTaskbar;
+  });
+}
+
 // Theme
 function setTheme() {
   document.documentElement.setAttribute(
     "data-theme",
     matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
   );
+  applyTheme();
 }
 setTheme();
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", setTheme);
@@ -419,6 +483,25 @@ function escapeHtml(s) {
   }[c]));
 }
 
+function announce(text) {
+  if (!announceEnabled || !("speechSynthesis" in window)) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "zh-CN";
+    speechSynthesis.speak(u);
+  } catch (_) {}
+}
+
+async function sendSystemNotify(title, body) {
+  if (!systemNotify || !inTauri) return;
+  try {
+    let granted = await isPermissionGranted();
+    if (!granted) granted = (await requestPermission()) === "granted";
+    if (granted) sendNotification({ title, body });
+  } catch (_) {}
+}
+
 function dotClass(s) {
   return ({ working: "green", idle: "yellow", high_load: "yellow", running: "green", stopped: "red", error: "red", waiting: "yellow", done: "green" }[s] || "gray");
 }
@@ -462,13 +545,15 @@ function updateAgentStrip() {
   for (const agent of list) {
     const chip = document.createElement("button");
     chip.type = "button";
+    chip.draggable = list.length > 1;
     chip.className = "agent-chip" + (agent.name === agents[cur]?.name ? " active" : "");
     chip.title = agent.name;
+    chip.dataset.name = agent.name;
     const src = ICON_PATHS[agent.name] || "";
     chip.innerHTML = (src
       ? `<img class="agent-chip-icon" alt="" src="${src}">`
       : `<span class="agent-chip-letter">${escapeHtml((agent.name || "?")[0])}</span>`
-    ) + `<span class="agent-chip-name">${escapeHtml(agent.name)}</span><span class="agent-chip-dot ${dotClass(agent.status)}"></span>`;
+    ) + `<span class="agent-chip-name">${escapeHtml(agent.name)}</span><span class="agent-chip-dot ${dotClass(agent.status)}"></span><span class="agent-chip-handle" title="拖拽排序">⋮⋮</span>`;
     chip.addEventListener("click", (e) => {
       e.stopPropagation();
       const idx = agents.findIndex((x) => x.name === agent.name);
@@ -479,6 +564,55 @@ function updateAgentStrip() {
         refresh();
       }
     });
+    chip.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/plain", agent.name);
+      chip.classList.add("dragging");
+      cardPreviewEl.classList.add("hidden");
+    });
+    chip.addEventListener("dragend", () => {
+      chip.classList.remove("dragging", "drag-over");
+    });
+    chip.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      chip.classList.add("drag-over");
+    });
+    chip.addEventListener("dragleave", () => chip.classList.remove("drag-over"));
+    chip.addEventListener("drop", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      chip.classList.remove("drag-over");
+      const dragged = e.dataTransfer.getData("text/plain");
+      if (!dragged || dragged === agent.name) return;
+      const order = agentOrder.filter((n) => n !== dragged);
+      const targetIdx = order.indexOf(agent.name);
+      order.splice(targetIdx < 0 ? order.length : targetIdx, 0, dragged);
+      for (const a of agents) {
+        if (!order.includes(a.name)) order.push(a.name);
+      }
+      agentOrder = order;
+      localStorage.setItem("agent-island-order", JSON.stringify(agentOrder));
+      refresh();
+    });
+    let previewTimer = null;
+    const clearPreview = () => {
+      clearTimeout(previewTimer);
+      cardPreviewEl.classList.add("hidden");
+    };
+    chip.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      previewTimer = setTimeout(() => {
+        const lines = (agent.recent_output || []).slice(-3).join("\n") || "暂无日志";
+        cardPreviewEl.textContent = lines;
+        const rect = chip.getBoundingClientRect();
+        const left = Math.max(8, Math.min(rect.left - 40, WINDOW_W - 300 - 8));
+        const top = Math.max(36, rect.bottom + 4);
+        cardPreviewEl.style.left = `${left}px`;
+        cardPreviewEl.style.top = `${top}px`;
+        cardPreviewEl.classList.remove("hidden");
+      }, 450);
+    });
+    chip.addEventListener("mouseup", clearPreview);
+    chip.addEventListener("mouseleave", clearPreview);
     agentStripEl.appendChild(chip);
   }
 }
@@ -571,6 +705,8 @@ function pushNotify(agent, kind, sess) {
   }
   group.items.push({ kind, label, sessName: sess?.name || "" });
   if (group.items.length > 8) group.items.shift();
+  announce(`${agent.name}，${label}`);
+  sendSystemNotify(agent.name, label + (sess?.name ? ` · ${sess.name}` : ""));
   clearTimeout(group.timer);
   group.timer = setTimeout(() => dismissNotifyGroup(agent.name), 6500);
   while (notifyGroups.size > 3) {
@@ -732,13 +868,21 @@ function togglePin(index) {
 }
 
 function agentIndexes() {
+  let list = agents.map((a, i) => [a, i]);
   if (focusMode === "errors") {
-    return agents.map((a, i) => [a, i]).filter(([a]) => a.status === "error").map(([, i]) => i);
+    list = list.filter(([a]) => a.status === "error");
   }
   if (focusMode === "pinned" && pinnedAgents.length) {
-    return agents.map((a, i) => [a, i]).filter(([a]) => pinnedAgents.includes(a.name)).map(([, i]) => i);
+    list = list.filter(([a]) => pinnedAgents.includes(a.name));
   }
-  return agents.map((_, i) => i);
+  if (agentOrder.length) {
+    list.sort((x, y) => {
+      const ix = agentOrder.indexOf(x[0].name);
+      const iy = agentOrder.indexOf(y[0].name);
+      return (ix < 0 ? 999 : ix) - (iy < 0 ? 999 : iy);
+    });
+  }
+  return list.map(([, i]) => i);
 }
 
 function jumpToAgentByKey(key) {
@@ -898,6 +1042,9 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest("#focus-pop") && !e.target.closest("#btn-focus")) {
     focusPop.classList.add("hidden");
   }
+  if (!e.target.closest("#theme-pop") && !e.target.closest("#btn-theme")) {
+    themePop.classList.add("hidden");
+  }
 });
 fieldsPop.addEventListener("change", (e) => {
   const key = e.target.dataset.fieldCheck;
@@ -930,6 +1077,26 @@ quietEndInput.addEventListener("change", () => {
   localStorage.setItem("agent-island-quiet-end", quietEnd);
   updateFocusButton();
 });
+btnTheme.addEventListener("click", (e) => {
+  e.stopPropagation();
+  themePop.classList.toggle("hidden");
+  syncThemePop();
+});
+themePop.addEventListener("input", (e) => {
+  const key = e.target.dataset.theme;
+  if (!key) return;
+  if (key === "opacity") themeOpacity = Number(e.target.value);
+  else if (key === "radius") themeRadius = Number(e.target.value);
+  else if (key === "width") themeWidth = Number(e.target.value);
+  else if (key === "snap") snapEnabled = e.target.checked;
+  else if (key === "announce") announceEnabled = e.target.checked;
+  else if (key === "contrast") contrastEnabled = e.target.checked;
+  else if (key === "notify") systemNotify = e.target.checked;
+  else if (key === "taskbar") showInTaskbar = e.target.checked;
+  const boolKey = key === "snap" || key === "announce" || key === "contrast" || key === "notify" || key === "taskbar";
+  localStorage.setItem(`agent-island-theme-${key}`, String(boolKey ? (e.target.checked ? "1" : "0") : e.target.value));
+  applyTheme();
+});
 window.addEventListener("keydown", (e) => {
   if (e.target.closest("input,textarea,select")) return;
   if (e.key === "Escape") { setExpanded(false); return; }
@@ -950,6 +1117,7 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "v" || e.key === "V") { btnFields.click(); return; }
+  if (e.key === "m" || e.key === "M") { showQuickMenu(200, 60); return; }
   if (e.key === "o" || e.key === "O") { openOverview(); }
 });
 
@@ -1040,6 +1208,7 @@ updateFocusButton();
 applyPrivacy();
 applyFields();
 syncFocusPop();
+syncThemePop();
 positionIsland();
 poll();
 setInterval(poll, 3000);
