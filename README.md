@@ -1,39 +1,108 @@
 # Agent Island
 
-一个常驻桌面的灵动岛小工具，用来一眼看到正在运行的 AI 编程 Agent。
+一个常驻 Windows 桌面的“Agent 灵动岛”：一眼看到正在运行的 AI 编程 Agent，并直接在桌面上控制它们。
 
-## 当前阶段（第 2 阶段：Agent 工作状态中心）
+## 功能
 
-- 顶部胶囊：悬停展开、横向拖拽、记住上次位置
-- 托盘菜单：显示/隐藏、退出
-- 开机自启：托盘菜单里可以勾选/取消
-- 多显示器：记住小岛停在哪个屏幕，重启后回到原位置
-- 工作状态：工作中、等待中、高负载、已停止
-- 一键控制：停止 Agent（二次确认）、用上次命令重启 Agent
-- 使用统计：累计运行时间、报错次数、完成次数，退出时自动保存
-- 会话信息：工作目录、进程数、最后活动时间
-- 真实日志：读取 Claude Code / Codex CLI / OpenCode / Copilot 最近会话，显示最近输出与当前文件
-- 会话切换：同一 Agent 有多个会话时，箭头优先在会话间切换，再切换到下一个 Agent
-- 会话总览：小岛里点“总览”打开独立窗口，实时列出所有会话和最新输出
-- 会话级操作：总览窗口里可直接打开终端、重启、停止指定会话
-- 发消息：总览窗口可直接给 Claude Code / Codex CLI / OpenCode / Hermes 发送提示词
-- 会话恢复：Claude Code / Codex CLI / OpenCode / Hermes 支持“恢复”到会话
-- 日志滚动：支持滚轮查看，靠近底部时自动跟随最新输出
-- 性能优化：主窗口与总览窗口共用短时缓存，避免重复扫描进程和日志
-- 快捷操作：打开项目目录、在该目录打开终端
+- 常驻灵动岛：悬停展开、拖拽记忆、多显示器、托盘、开机自启
 - Agent 监控：Claude Code、Codex CLI、OpenCode、Hermes、Copilot、Cursor
+- 事件通知：报错/完成/等待通知卡，按 Agent 分组折叠，自动展开与收起
+- 会话总览：独立窗口实时列出会话、日志、统计，可发消息、恢复、停止、重启
+- 全局快捷键：`Ctrl+Alt+I` 呼出/隐藏小岛，`Ctrl+Alt+O` 打开总览
+- 隐私遮罩：录屏/共享时自动模糊日志与路径
+- 专注模式：仅报错、仅固定 Agent、静音、勿扰时段
+- 插件市场：一键安装 Aider、Gemini CLI、Cline、Qwen Code、Windsurf 等适配器
+- 远程查看：局域网状态页 + 自建中继公网访问 + 手机 PWA 页面
+- 主题定制：透明度、圆角、宽度、位置吸附、高对比度、语音播报
+- 统计报表：按天/周查看各 Agent 用时、报错数、完成数
 
-## 运行
+## 安装
+
+从 GitHub Release 下载：
+
+- `Agent.Island_1.0.0_x64-setup.exe`：Windows 安装器
+- `Agent.Island_1.0.0_x64_en-US.msi`：MSI 安装包
+
+日常使用直接运行安装后的 `Agent Island` 即可。
+
+## 快捷键
+
+| 按键 | 功能 |
+| --- | --- |
+| 滚轮 | 切换 Agent |
+| `空格` | 展开/收起 |
+| `1-9` | 直达指定 Agent |
+| `方向键` | 切换 Agent / 会话 |
+| `P` | 隐私遮罩 |
+| `F` | 专注模式 |
+| `Q` | 自动勿扰开关 |
+| `M` | 快捷菜单 |
+| `V` | 显示字段 |
+| `Ctrl+Alt+I` | 全局呼出/隐藏小岛 |
+| `Ctrl+Alt+O` | 全局打开总览 |
+
+右键或长按小岛也会弹出快捷菜单。
+
+## 配置
+
+- `~/.agent-island/agents.json`：Agent 适配器配置，新增 Agent 无需改代码
+- `~/.agent-island/stats.json`：累计统计
+- `~/.agent-island/stats-daily.json`：每日统计
+- `~/.agent-island/relay.json`：公网中继配置
+
+适配器格式参考 [agent-adapters.example.json](agent-adapters.example.json)。
+
+## 远程查看
+
+### 局域网
+
+打开总览窗口，点“远程”，会显示类似 `http://192.168.x.x:8765` 的地址。同一网络下的手机或电脑打开即可查看。
+
+### 公网（自建中继）
+
+1. 在服务器上运行：
+
+```bash
+python relay-server.py
+```
+
+2. 在应用总览的“远程”面板填入：
+
+- 中继地址：`http://服务器IP:8787`
+- 设备 ID：任意标识，例如 `my-pc`
+- 令牌：自己设置的一串密码
+
+3. 手机打开：
+
+```text
+http://服务器IP:8787/device/<设备ID>?token=<令牌>
+```
+
+手机浏览器支持“添加到主屏幕”，可作为轻量 App 使用。
+
+## 隐私说明
+
+- Agent 状态、日志、统计都保存在本机，不上传任何密钥
+- 远程/中继数据受令牌保护
+- 自建中继是原型实现，默认使用明文 HTTP，公网部署建议套一层 HTTPS 反代
+
+## 开发
 
 ```bash
 npm install
 npm run tauri dev
 ```
 
-## 打包
+打包与测试：
 
 ```bash
 npm run tauri build
+cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
-日常使用直接运行 `src-tauri/target/release/dynamic-island.exe` 即可，不需要启动开发服务。
+GitHub Actions 会在推送 `v*` 标签时自动构建 EXE/MSI 并发布到 Release。
+
+## 文档
+
+- [开发路线图](ROADMAP.md)
+- [与苹果灵动岛的差异研究与升级清单](UPGRADE-RESEARCH.md)

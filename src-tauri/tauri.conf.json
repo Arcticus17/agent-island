@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicholasio/tauri-docs/refs/heads/v2/src/content/docs/_schema/config.schema.json",
   "productName": "Agent Island",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.agent-island.app",
   "build": {
     "frontendDist": "../dist",
