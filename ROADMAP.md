@@ -15,6 +15,7 @@
 - 会话操作：打开终端、打开目录、恢复、停止、重启
 - 发消息：给 Claude Code / Codex CLI / OpenCode / Hermes 发送提示词
 - 使用统计：累计运行时间、报错次数、完成次数
+- 全局快捷键：Ctrl+Alt+I 呼出/隐藏小岛，Ctrl+Alt+O 打开总览
 - 安装包：Windows EXE 安装器 + MSI，已挂 GitHub Release
 - GitHub：代码已上传，仓库为私有，含 Release v0.1.0
 

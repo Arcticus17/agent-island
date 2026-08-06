@@ -953,54 +953,57 @@ static HERMES_CACHE: OnceLock<Mutex<Option<(Instant, Vec<AgentSession>)>>> = Onc
 fn run_command_timeout(
     command: &mut std::process::Command,
     secs: u64,
-) -> Option<std::process::Output> {
+) -> Option<(bool, String)> {
     use std::sync::mpsc;
+    let token = format!(
+        "agent-island-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let out_path = std::env::temp_dir().join(format!("{token}.out"));
+    let err_path = std::env::temp_dir().join(format!("{token}.err"));
+    let out_file = File::create(&out_path).ok()?;
+    let err_file = File::create(&err_path).ok()?;
     let child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
         .spawn()
         .ok()?;
-    let shared = Arc::new(Mutex::new(child));
+    let shared = Arc::new(Mutex::new(Some(child)));
     let worker = shared.clone();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let status = worker.lock().unwrap().wait();
+        let child = worker.lock().unwrap().take();
+        let status = child.map(|mut c| c.wait()).transpose();
         let _ = tx.send(status);
     });
-    match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
-        Ok(Ok(status)) => {
-            let mut guard = shared.lock().unwrap();
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            if let Some(mut pipe) = guard.stdout.take() {
-                let _ = pipe.read_to_end(&mut stdout);
-            }
-            if let Some(mut pipe) = guard.stderr.take() {
-                let _ = pipe.read_to_end(&mut stderr);
-            }
-            Some(std::process::Output {
-                status,
-                stdout,
-                stderr,
-            })
-        }
+    let result = match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+        Ok(Ok(Some(status))) => Some(status.success()),
         _ => {
-            let _ = shared.lock().unwrap().kill();
+            if let Some(mut child) = shared.lock().unwrap().take() {
+                let _ = child.kill();
+            }
             None
         }
-    }
+    };
+    let text = fs::read_to_string(&out_path).unwrap_or_default();
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_file(&err_path);
+    result.map(|success| (success, text))
 }
 
 fn parse_hermes_sessions() -> Vec<AgentSession> {
     let mut command = quiet_command("hermes");
     command.args(["sessions", "list"]);
-    let Some(output) = run_command_timeout(&mut command, 8) else {
+    let Some((success, text)) = run_command_timeout(&mut command, 8) else {
         return Vec::new();
     };
-    if !output.status.success() {
+    if !success {
         return Vec::new();
     }
-    let text = String::from_utf8_lossy(&output.stdout);
     let mut sessions = Vec::new();
     for line in text.lines().skip(2) {
         let line = line.trim();
@@ -1826,6 +1829,41 @@ fn open_overview(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn start_global_hotkeys(app: tauri::AppHandle) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, MOD_ALT, MOD_CONTROL};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, GetMessageW, TranslateMessage, MSG, WM_HOTKEY,
+    };
+    std::thread::spawn(move || unsafe {
+        let toggle_id = 1;
+        let overview_id = 2;
+        if RegisterHotKey(None, toggle_id, MOD_CONTROL | MOD_ALT, b'I' as u32).is_err() {
+            eprintln!("failed to register Ctrl+Alt+I");
+        }
+        if RegisterHotKey(None, overview_id, MOD_CONTROL | MOD_ALT, b'O' as u32).is_err() {
+            eprintln!("failed to register Ctrl+Alt+O");
+        }
+        let mut msg = MSG::default();
+        loop {
+            let result = GetMessageW(&mut msg, None, 0, 0);
+            if result.0 == 0 || result.0 == -1 {
+                break;
+            }
+            if msg.message == WM_HOTKEY {
+                let id = msg.wParam.0 as i32;
+                if id == toggle_id {
+                    toggle_window(&app);
+                } else if id == overview_id {
+                    let _ = open_overview(app.clone());
+                }
+            }
+            let _ = TranslateMessage(&msg);
+            let _ = DispatchMessageW(&msg);
+        }
+    });
+}
+
 const REMOTE_PORT: u16 = 8765;
 
 const REMOTE_HTML: &str = r#"<!DOCTYPE html>
@@ -2092,6 +2130,8 @@ pub fn run() {
                 .build(app)?;
 
             start_remote_server(app.handle().clone());
+            #[cfg(target_os = "windows")]
+            start_global_hotkeys(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())
