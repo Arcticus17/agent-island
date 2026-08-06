@@ -61,7 +61,7 @@ struct AgentCommand {
     cmd: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct AgentDef {
     name: String,
     keyword: String,
@@ -73,7 +73,14 @@ struct AgentDef {
     send_args: Vec<String>,
 }
 
-static AGENT_DEFS: OnceLock<Vec<AgentDef>> = OnceLock::new();
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RelayConfig {
+    url: String,
+    device_id: String,
+    token: String,
+}
+
+static AGENT_DEFS: OnceLock<Mutex<Option<(Instant, Vec<AgentDef>)>>> = OnceLock::new();
 
 fn default_agent_defs() -> Vec<AgentDef> {
     vec![
@@ -142,21 +149,208 @@ fn default_agent_defs() -> Vec<AgentDef> {
     ]
 }
 
-fn agent_defs() -> &'static Vec<AgentDef> {
-    AGENT_DEFS.get_or_init(|| {
-        let path = home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".agent-island")
-            .join("agents.json");
-        if let Ok(text) = fs::read_to_string(&path) {
-            if let Ok(defs) = serde_json::from_str::<Vec<AgentDef>>(&text) {
-                if !defs.is_empty() {
-                    return defs;
-                }
+fn load_agent_defs() -> Vec<AgentDef> {
+    let path = home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".agent-island")
+        .join("agents.json");
+    if let Ok(text) = fs::read_to_string(&path) {
+        if let Ok(defs) = serde_json::from_str::<Vec<AgentDef>>(&text) {
+            if !defs.is_empty() {
+                return defs;
             }
         }
-        default_agent_defs()
-    })
+    }
+    default_agent_defs()
+}
+
+fn agent_defs() -> Vec<AgentDef> {
+    let cache = AGENT_DEFS.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((at, defs)) = guard.as_ref() {
+            if at.elapsed().as_secs() < 5 {
+                return defs.clone();
+            }
+        }
+    }
+    let defs = load_agent_defs();
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((Instant::now(), defs.clone()));
+    }
+    defs
+}
+
+#[tauri::command]
+fn reload_agent_defs() {
+    if let Ok(mut guard) = AGENT_DEFS.get_or_init(|| Mutex::new(None)).lock() {
+        *guard = None;
+    }
+}
+
+fn agents_path() -> PathBuf {
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".agent-island")
+        .join("agents.json")
+}
+
+fn relay_path() -> PathBuf {
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".agent-island")
+        .join("relay.json")
+}
+
+fn load_relay_config() -> Option<RelayConfig> {
+    let path = relay_path();
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
+fn save_relay_config(cfg: &RelayConfig) -> Result<(), String> {
+    let path = relay_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let data = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    fs::write(path, data).map_err(|e| e.to_string())
+}
+
+fn relay_push(cfg: &RelayConfig, body: &str) -> Result<(), String> {
+    use std::io::Write;
+    let rest = cfg
+        .url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
+    let host_port = match rest.find('/') {
+        Some(i) => &rest[..i],
+        None => rest,
+    };
+    let (host, port) = match host_port.rsplit_once(':') {
+        Some((h, p)) => (h, p.parse::<u16>().unwrap_or(80)),
+        None => (host_port, 80),
+    };
+    let path = "/api/push";
+    let mut stream = std::net::TcpStream::connect((host, port)).map_err(|e| e.to_string())?;
+    let req = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\nX-Device-Id: {}\r\nX-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        cfg.device_id,
+        cfg.token,
+        body.len()
+    );
+    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_relay_config(
+    url: String,
+    device_id: String,
+    token: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let cfg = RelayConfig {
+        url,
+        device_id,
+        token,
+    };
+    save_relay_config(&cfg)?;
+    *state.relay.lock().unwrap() = Some(cfg);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_relay_config(state: tauri::State<AppState>) -> Option<RelayConfig> {
+    state.relay.lock().unwrap().clone()
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MarketplaceItem {
+    name: String,
+    keyword: String,
+    log_kind: String,
+    resume_args: Vec<String>,
+    send_args: Vec<String>,
+    description: String,
+}
+
+fn marketplace_items() -> Vec<MarketplaceItem> {
+    vec![
+        MarketplaceItem {
+            name: "Aider".into(),
+            keyword: "aider".into(),
+            log_kind: String::new(),
+            resume_args: vec![],
+            send_args: vec![
+                "{exe}".into(), "--message".into(), "{prompt}".into(), "--yes-always".into(),
+            ],
+            description: "Aider：终端里的 AI 结对编程助手".into(),
+        },
+        MarketplaceItem {
+            name: "Gemini CLI".into(),
+            keyword: "gemini".into(),
+            log_kind: String::new(),
+            resume_args: vec![],
+            send_args: vec!["{exe}".into(), "-p".into(), "{prompt}".into()],
+            description: "Gemini CLI：Google 官方终端 Agent".into(),
+        },
+        MarketplaceItem {
+            name: "Cline".into(),
+            keyword: "cline".into(),
+            log_kind: String::new(),
+            resume_args: vec![],
+            send_args: vec![],
+            description: "Cline：VS Code 里的自主编码 Agent（进程监控）".into(),
+        },
+        MarketplaceItem {
+            name: "Qwen Code".into(),
+            keyword: "qwen".into(),
+            log_kind: String::new(),
+            resume_args: vec![],
+            send_args: vec![],
+            description: "Qwen Code：通义千问编程 CLI（进程监控）".into(),
+        },
+        MarketplaceItem {
+            name: "Windsurf".into(),
+            keyword: "windsurf".into(),
+            log_kind: String::new(),
+            resume_args: vec![],
+            send_args: vec![],
+            description: "Windsurf：AI 编程编辑器（进程监控）".into(),
+        },
+    ]
+}
+
+#[tauri::command]
+fn get_agent_marketplace() -> Vec<MarketplaceItem> {
+    marketplace_items()
+}
+
+#[tauri::command]
+fn install_marketplace_agent(name: String) -> Result<String, String> {
+    let item = marketplace_items()
+        .into_iter()
+        .find(|i| i.name == name)
+        .ok_or_else(|| "未找到该适配器".to_string())?;
+    let def = AgentDef {
+        name: item.name.clone(),
+        keyword: item.keyword.clone(),
+        log_kind: item.log_kind.clone(),
+        resume_args: item.resume_args.clone(),
+        send_args: item.send_args.clone(),
+    };
+    let path = agents_path();
+    let mut defs = load_agent_defs();
+    defs.retain(|d| d.name != def.name);
+    defs.push(def);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let data = serde_json::to_string_pretty(&defs).map_err(|e| e.to_string())?;
+    fs::write(&path, data).map_err(|e| e.to_string())?;
+    reload_agent_defs();
+    Ok(item.name)
 }
 
 fn fill_template(template: &[String], exe: &str, session: &str, prompt: Option<&str>) -> Vec<String> {
@@ -198,6 +392,7 @@ struct AppState {
     stats_path: PathBuf,
     daily_path: PathBuf,
     remote_privacy: AtomicBool,
+    relay: Mutex<Option<RelayConfig>>,
     send_tasks: Mutex<HashMap<String, Arc<SendTask>>>,
 }
 
@@ -1056,7 +1251,8 @@ fn hermes_sessions() -> Vec<AgentSession> {
 }
 
 fn build_sessions(name: &str) -> Vec<AgentSession> {
-    let kind = agent_defs()
+    let defs = agent_defs();
+    let kind = defs
         .iter()
         .find(|d| d.name == name)
         .map(|d| d.log_kind.as_str())
@@ -1870,6 +2066,25 @@ fn start_global_hotkeys(app: tauri::AppHandle) {
     });
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marketplace_has_adapters() {
+        assert!(!marketplace_items().is_empty());
+        assert!(marketplace_items().iter().any(|i| i.name == "Aider"));
+    }
+
+    #[test]
+    fn default_defs_cover_core_agents() {
+        let defs = default_agent_defs();
+        for name in ["Claude Code", "Codex CLI", "OpenCode", "Hermes", "Copilot", "Cursor"] {
+            assert!(defs.iter().any(|d| d.name == name), "missing {name}");
+        }
+    }
+}
+
 const REMOTE_PORT: u16 = 8765;
 
 const REMOTE_HTML: &str = r#"<!DOCTYPE html>
@@ -2026,6 +2241,21 @@ fn start_remote_server(app: tauri::AppHandle) {
     });
 }
 
+fn start_relay_sync(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let state = app.state::<AppState>();
+        let cfg = state.relay.lock().unwrap().clone();
+        if let Some(cfg) = cfg {
+            if !cfg.url.is_empty() && !cfg.device_id.is_empty() {
+                let agents = get_agents(state);
+                let body = serde_json::to_string(&agents).unwrap_or_else(|_| "[]".to_string());
+                let _ = relay_push(&cfg, &body);
+            }
+        }
+    });
+}
+
 pub fn run() {
     let stats_path = stats_path();
     let daily_path = daily_path();
@@ -2046,11 +2276,17 @@ pub fn run() {
             stats_path,
             daily_path,
             remote_privacy: AtomicBool::new(false),
+            relay: Mutex::new(load_relay_config()),
             send_tasks: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             get_agents,
             get_stats_report,
+            reload_agent_defs,
+            get_agent_marketplace,
+            install_marketplace_agent,
+            set_relay_config,
+            get_relay_config,
             open_project_dir,
             open_path,
             open_terminal,
@@ -2164,6 +2400,7 @@ pub fn run() {
                 .build(app)?;
 
             start_remote_server(app.handle().clone());
+            start_relay_sync(app.handle().clone());
             #[cfg(target_os = "windows")]
             start_global_hotkeys(app.handle().clone());
             Ok(())

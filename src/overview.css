@@ -204,6 +204,108 @@ main {
   font-size: 12px;
 }
 
+#market-view {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+  scrollbar-width: thin;
+}
+.market-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  margin-bottom: 10px;
+}
+.market-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.market-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.market-keyword {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.market-desc {
+  font-size: 11px;
+  color: var(--muted);
+}
+.market-install {
+  background: rgba(94, 156, 255, 0.16);
+  border: 1px solid rgba(94, 156, 255, 0.4);
+  color: #7ab0ff;
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.market-install:disabled { opacity: 0.45; cursor: default; }
+.market-install.installed {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--muted);
+}
+@media (prefers-color-scheme: light) {
+  .market-install { color: #0a63d6; }
+}
+
+#relay-pop {
+  position: fixed;
+  top: 70px;
+  right: 14px;
+  z-index: 40;
+  width: 300px;
+  padding: 12px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text);
+}
+#relay-pop label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+}
+#relay-pop input {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+#relay-pop button {
+  background: rgba(94, 156, 255, 0.16);
+  border: 1px solid rgba(94, 156, 255, 0.4);
+  color: #7ab0ff;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#relay-status {
+  color: var(--muted);
+  font-size: 11px;
+  word-break: break-all;
+}
+
 #session-list {
   overflow-y: auto;
   padding: 10px;

@@ -18,6 +18,15 @@ const btnStats = document.getElementById("btn-stats");
 const btnRemote = document.getElementById("btn-remote");
 const remoteUrlEl = document.getElementById("remote-url");
 const btnStatsDays = document.getElementById("btn-stats-days");
+const marketView = document.getElementById("market-view");
+const marketList = document.getElementById("market-list");
+const btnMarket = document.getElementById("btn-market");
+const relayPop = document.getElementById("relay-pop");
+const relayUrlInput = document.getElementById("relay-url-input");
+const relayDeviceInput = document.getElementById("relay-device-input");
+const relayTokenInput = document.getElementById("relay-token-input");
+const relaySave = document.getElementById("relay-save");
+const relayStatus = document.getElementById("relay-status");
 
 const ICONS = {
   "Claude Code": "/icons/claude.svg",
@@ -97,6 +106,7 @@ let sendPollTimer = null;
 const lastRowStatus = {};
 let statsMode = "sessions";
 let statsDays = 7;
+let marketMode = false;
 
 function loadChat() {
   try {
@@ -401,6 +411,9 @@ function toggleStats() {
   statsMode = statsMode === "stats" ? "sessions" : "stats";
   const stats = statsMode === "stats";
   statsView.classList.toggle("hidden", !stats);
+  marketView.classList.add("hidden");
+  marketMode = false;
+  btnMarket.classList.remove("active");
   listEl.classList.toggle("hidden", stats);
   detailEl.classList.toggle("hidden", stats || !selected);
   btnStats.classList.toggle("active", stats);
@@ -408,12 +421,102 @@ function toggleStats() {
 }
 
 async function showRemote() {
-  let url = "http://localhost:8765";
+  relayPop.classList.toggle("hidden");
+  let lan = "http://localhost:8765";
   try {
-    url = await invoke("get_remote_url");
+    lan = await invoke("get_remote_url");
   } catch (_) {}
-  remoteUrlEl.textContent = url;
+  remoteUrlEl.textContent = lan;
   remoteUrlEl.classList.remove("hidden");
+  try {
+    const cfg = await invoke("get_relay_config");
+    if (cfg) {
+      relayUrlInput.value = cfg.url;
+      relayDeviceInput.value = cfg.device_id;
+      relayTokenInput.value = cfg.token;
+      relayStatus.textContent = `已开启 · 手机打开：${cfg.url.replace(/\/+$/, "")}/device/${encodeURIComponent(cfg.device_id)}?token=${encodeURIComponent(cfg.token)}`;
+    }
+  } catch (_) {}
+}
+
+async function saveRelay() {
+  const url = relayUrlInput.value.trim();
+  const deviceId = relayDeviceInput.value.trim();
+  const token = relayTokenInput.value.trim();
+  if (!url || !deviceId) {
+    relayStatus.textContent = "请填写中继地址和设备ID";
+    return;
+  }
+  try {
+    await invoke("set_relay_config", { url, deviceId, token });
+    const mobile = `${url.replace(/\/+$/, "")}/device/${encodeURIComponent(deviceId)}?token=${encodeURIComponent(token)}`;
+    relayStatus.textContent = `已开启 · 手机打开：${mobile}`;
+    remoteUrlEl.textContent = mobile;
+  } catch (err) {
+    relayStatus.textContent = `保存失败：${err}`;
+  }
+}
+
+const DEMO_MARKET = [
+  { name: "Aider", keyword: "aider", description: "Aider：终端里的 AI 结对编程助手" },
+  { name: "Gemini CLI", keyword: "gemini", description: "Gemini CLI：Google 官方终端 Agent" },
+  { name: "Cline", keyword: "cline", description: "Cline：VS Code 里的自主编码 Agent（进程监控）" },
+  { name: "Qwen Code", keyword: "qwen", description: "Qwen Code：通义千问编程 CLI（进程监控）" },
+  { name: "Windsurf", keyword: "windsurf", description: "Windsurf：AI 编程编辑器（进程监控）" },
+];
+
+async function loadMarket() {
+  let items;
+  try {
+    items = await invoke("get_agent_marketplace");
+  } catch (_) {
+    items = DEMO_MARKET;
+  }
+  const installed = new Set(agents.map((a) => a.name));
+  marketList.innerHTML = "";
+  for (const item of items) {
+    const card = document.createElement("div");
+    card.className = "market-card";
+    const isInstalled = installed.has(item.name);
+    card.innerHTML = `
+      <div class="market-head">
+        <div>
+          <div class="market-name">${escapeHtml(item.name)}</div>
+          <div class="market-keyword">${escapeHtml(item.keyword || "")}</div>
+        </div>
+        <button class="market-install ${isInstalled ? "installed" : ""}" ${isInstalled ? "disabled" : ""}>${isInstalled ? "已安装" : "安装"}</button>
+      </div>
+      <div class="market-desc">${escapeHtml(item.description || "")}</div>
+    `;
+    const btn = card.querySelector(".market-install");
+    if (!isInstalled) {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "安装中...";
+        try {
+          await invoke("install_marketplace_agent", { name: item.name });
+          btn.textContent = "已安装";
+          btn.classList.add("installed");
+          load();
+        } catch (_) {
+          btn.disabled = false;
+          btn.textContent = "安装失败";
+        }
+      });
+    }
+    marketList.appendChild(card);
+  }
+}
+
+function toggleMarket() {
+  marketMode = !marketMode;
+  marketView.classList.toggle("hidden", !marketMode);
+  statsView.classList.add("hidden");
+  listEl.classList.toggle("hidden", marketMode);
+  detailEl.classList.toggle("hidden", marketMode || !selected);
+  btnMarket.classList.toggle("active", marketMode);
+  btnStats.classList.remove("active");
+  if (marketMode) loadMarket();
 }
 
 async function runSessionAction(action, payload) {
@@ -530,6 +633,13 @@ promptInput.addEventListener("input", () => {
 });
 btnStats.addEventListener("click", toggleStats);
 btnRemote.addEventListener("click", showRemote);
+btnMarket.addEventListener("click", toggleMarket);
+relaySave.addEventListener("click", saveRelay);
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#relay-pop") && !e.target.closest("#btn-remote")) {
+    relayPop.classList.add("hidden");
+  }
+});
 btnStatsDays.addEventListener("click", () => {
   statsDays = statsDays === 7 ? 1 : 7;
   btnStatsDays.textContent = statsDays === 7 ? "最近 7 天" : "今天";
@@ -572,6 +682,7 @@ async function load() {
   renderSummary();
   renderDetail();
   if (statsMode === "stats") loadStats();
+  if (marketMode) loadMarket();
   updatedEl.textContent = new Date().toLocaleTimeString();
 }
 
