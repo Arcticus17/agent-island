@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent Island</title>
-  <link rel="stylesheet" href="/src/style.css?v=15" />
+  <link rel="stylesheet" href="/src/style.css?v=16" />
 </head>
 <body>
   <div id="island">
@@ -40,6 +40,25 @@
         <label><input type="checkbox" data-field-check="cwd"> 目录</label>
         <label><input type="checkbox" data-field-check="file"> 当前文件</label>
         <label><input type="checkbox" data-field-check="output"> 最近输出</label>
+      </div>
+      <div id="quick-menu" class="hidden">
+        <button data-action="overview">打开总览</button>
+        <button data-action="privacy">隐私遮罩</button>
+        <button data-action="focus">专注模式</button>
+        <button data-action="quiet">勿扰开关</button>
+      </div>
+      <div id="focus-pop" class="hidden">
+        <div class="focus-mode-row">
+          <button data-focus="off">关闭</button>
+          <button data-focus="errors">仅报错</button>
+          <button data-focus="quiet">静音</button>
+          <button data-focus="pinned">固定</button>
+        </div>
+        <label class="focus-toggle"><input id="quiet-auto-input" type="checkbox" /> 自动勿扰</label>
+        <div class="focus-times">
+          <label>开始 <input id="quiet-start-input" type="time" /></label>
+          <label>结束 <input id="quiet-end-input" type="time" /></label>
+        </div>
       </div>
       <div id="agent-strip"></div>
       <div id="notify-stack"></div>
@@ -78,6 +97,6 @@
       </div>
     </div>
   </div>
-  <script type="module" src="/src/main.js?v=15"></script>
+  <script type="module" src="/src/main.js?v=16"></script>
 </body>
 </html>

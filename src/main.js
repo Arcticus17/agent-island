@@ -47,7 +47,10 @@ let lastOutputLines = [];
 let liveBadgeTimer = null;
 let lastWheelAt = 0;
 let eventCollapseTimer = null;
+let longPressTimer = null;
+let longPressStart = { x: 0, y: 0 };
 const notifyCooldown = {};
+const notifyGroups = new Map();
 
 // DOM
 const $ = (id) => document.getElementById(id);
@@ -87,6 +90,11 @@ const agentStripEl = $("agent-strip");
 const btnFields = $("btn-fields");
 const fieldsPop = $("fields-pop");
 const liveBadge = $("live-badge");
+const quickMenuEl = $("quick-menu");
+const focusPop = $("focus-pop");
+const quietAutoInput = $("quiet-auto-input");
+const quietStartInput = $("quiet-start-input");
+const quietEndInput = $("quiet-end-input");
 
 const ICON_PATHS = {
   "Claude Code": "/icons/claude.svg",
@@ -198,6 +206,30 @@ island.addEventListener("wheel", (e) => {
   if (e.deltaY > 0) nextAgent();
   else prevAgent();
 }, { passive: false });
+island.addEventListener("contextmenu", (e) => {
+  if (e.target.closest("button")) return;
+  e.preventDefault();
+  showQuickMenu(e.clientX, e.clientY);
+});
+island.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  if (e.target.closest("button, .path-link, #exp-output")) return;
+  clearTimeout(longPressTimer);
+  longPressStart = { x: e.clientX, y: e.clientY };
+  longPressTimer = setTimeout(() => showQuickMenu(e.clientX, e.clientY), 550);
+});
+window.addEventListener("mouseup", () => {
+  clearTimeout(longPressTimer);
+});
+window.addEventListener("mousemove", (e) => {
+  if (
+    longPressTimer &&
+    (Math.abs(e.clientX - longPressStart.x) > 5 ||
+      Math.abs(e.clientY - longPressStart.y) > 5)
+  ) {
+    clearTimeout(longPressTimer);
+  }
+});
 
 // Theme
 function setTheme() {
@@ -532,33 +564,86 @@ function pushNotify(agent, kind, sess) {
   if (focusMode === "errors" && kind !== "error") return;
   if (!canNotify(agent, kind)) return;
   const label = NOTIFY_LABEL[kind] || kind;
-  const card = document.createElement("div");
-  card.className = `notify-card ${kind}`;
-  const detail = sess?.name ? ` · ${escapeHtml(sess.name)}` : "";
-  card.innerHTML = `
-    <span class="notify-dot"></span>
-    <span class="notify-text"><strong>${escapeHtml(agent.name)}</strong>${detail} ${label}</span>
-    <button class="notify-close" title="关闭" aria-label="关闭通知">×</button>
-  `;
-  card.querySelector(".notify-close").addEventListener("click", () => dismissNotify(card));
-  notifyStackEl.prepend(card);
-  while (notifyStackEl.children.length > 3) notifyStackEl.lastElementChild.remove();
-  card.dataset.timer = setTimeout(() => dismissNotify(card), 6500);
+  let group = notifyGroups.get(agent.name);
+  if (!group) {
+    group = { agent, items: [], timer: null, open: false };
+    notifyGroups.set(agent.name, group);
+  }
+  group.items.push({ kind, label, sessName: sess?.name || "" });
+  if (group.items.length > 8) group.items.shift();
+  clearTimeout(group.timer);
+  group.timer = setTimeout(() => dismissNotifyGroup(agent.name), 6500);
+  while (notifyGroups.size > 3) {
+    dismissNotifyGroup(notifyGroups.keys().next().value);
+  }
   if (!expanded) {
     setExpanded(true);
     clearTimeout(eventCollapseTimer);
     eventCollapseTimer = setTimeout(() => {
-      if (!island.matches(":hover")) setExpanded(false);
+      if (!island.matches(":hover") && !notifyGroups.size) setExpanded(false);
     }, 8000);
+  }
+  renderNotifyGroups();
+}
+
+function dismissNotifyGroup(name) {
+  const group = notifyGroups.get(name);
+  if (!group) return;
+  clearTimeout(group.timer);
+  notifyGroups.delete(name);
+  renderNotifyGroups();
+  if (!notifyGroups.size && !island.matches(":hover")) {
+    setExpanded(false);
   }
 }
 
-function dismissNotify(card) {
-  if (!card.isConnected) return;
-  clearTimeout(Number(card.dataset.timer));
-  card.style.opacity = "0";
-  card.style.transform = "translateY(-4px)";
-  setTimeout(() => card.remove(), 160);
+function renderNotifyGroups() {
+  notifyStackEl.innerHTML = "";
+  for (const [name, group] of notifyGroups) {
+    const card = document.createElement("div");
+    card.className = "notify-group" + (group.open ? " open" : "");
+    const icon = ICON_PATHS[name] || "";
+    const latest = group.items[group.items.length - 1] || { kind: "done", label: "" };
+    const severity = ["error", "waiting", "done"].find((k) =>
+      group.items.some((it) => it.kind === k)
+    ) || "done";
+    card.innerHTML = `
+      <div class="notify-head" role="button" tabindex="0" title="点开查看详情">
+        ${icon
+          ? `<img class="notify-icon" alt="" src="${icon}">`
+          : `<span class="notify-letter">${escapeHtml((name || "?")[0])}</span>`}
+        <span class="notify-title">${escapeHtml(name)}</span>
+        <span class="notify-summary ${severity}">${escapeHtml(latest.label)}${group.items.length > 1 ? ` +${group.items.length - 1}` : ""}</span>
+        <span class="notify-arrow">${group.open ? "▾" : "▸"}</span>
+        <button class="notify-close" title="关闭" aria-label="关闭通知">×</button>
+      </div>
+      <div class="notify-items">
+        ${group.items.map((it) => `
+          <div class="notify-item ${it.kind}">
+            <span class="notify-dot"></span>
+            <span>${escapeHtml(it.label)}${it.sessName ? ` · ${escapeHtml(it.sessName)}` : ""}</span>
+          </div>
+        `).join("")}
+      </div>
+    `;
+    const head = card.querySelector(".notify-head");
+    head.addEventListener("click", (e) => {
+      if (e.target.closest(".notify-close")) return;
+      group.open = !group.open;
+      card.classList.toggle("open", group.open);
+    });
+    head.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        head.click();
+      }
+    });
+    card.querySelector(".notify-close").addEventListener("click", (e) => {
+      e.stopPropagation();
+      dismissNotifyGroup(name);
+    });
+    notifyStackEl.appendChild(card);
+  }
 }
 
 function applyPrivacy() {
@@ -566,12 +651,26 @@ function applyPrivacy() {
   document.body.classList.toggle("privacy-mask", on);
   btnPrivacy.classList.toggle("active", on);
   privacyBadge.classList.toggle("hidden", !on);
+  if (inTauri) invoke("set_remote_privacy", { enabled: on }).catch(() => {});
 }
 
 function togglePrivacy() {
   privacyManual = !privacyManual;
   localStorage.setItem("agent-island-privacy", privacyManual ? "1" : "0");
   applyPrivacy();
+}
+
+function hideQuickMenu() {
+  quickMenuEl.classList.add("hidden");
+}
+
+function showQuickMenu(x, y) {
+  setExpanded(true);
+  const left = Math.max(8, Math.min(x - 10, WINDOW_W - 132 - 8));
+  const top = Math.max(40, y + 4);
+  quickMenuEl.style.left = `${left}px`;
+  quickMenuEl.style.top = `${top}px`;
+  quickMenuEl.classList.remove("hidden");
 }
 
 function minuteOfDay(s) {
@@ -600,6 +699,15 @@ function updateFocusButton() {
   btnFocus.title = quietActive() ? "勿扰中，按 Q 关闭" : "专注模式";
 }
 
+function syncFocusPop() {
+  focusPop.querySelectorAll("[data-focus]").forEach((b) => {
+    b.classList.toggle("active", b.dataset.focus === focusMode);
+  });
+  quietAutoInput.checked = quietAuto;
+  quietStartInput.value = quietStart;
+  quietEndInput.value = quietEnd;
+}
+
 function cycleFocus() {
   let i = FOCUS_MODES.indexOf(focusMode);
   for (let step = 1; step <= FOCUS_MODES.length; step++) {
@@ -610,6 +718,7 @@ function cycleFocus() {
   }
   localStorage.setItem("agent-island-focus", focusMode);
   updateFocusButton();
+  syncFocusPop();
   poll();
 }
 
@@ -755,14 +864,39 @@ async function openOverview() {
 
 btnOverview.addEventListener("click", (e) => { e.stopPropagation(); openOverview(); });
 btnPrivacy.addEventListener("click", (e) => { e.stopPropagation(); togglePrivacy(); });
-btnFocus.addEventListener("click", (e) => { e.stopPropagation(); cycleFocus(); });
+btnFocus.addEventListener("click", (e) => {
+  e.stopPropagation();
+  focusPop.classList.toggle("hidden");
+  syncFocusPop();
+});
 btnFields.addEventListener("click", (e) => {
   e.stopPropagation();
   fieldsPop.classList.toggle("hidden");
 });
+quickMenuEl.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  hideQuickMenu();
+  const action = btn.dataset.action;
+  if (action === "overview") openOverview();
+  else if (action === "privacy") togglePrivacy();
+  else if (action === "focus") cycleFocus();
+  else if (action === "quiet") {
+    quietAuto = !quietAuto;
+    localStorage.setItem("agent-island-quiet-auto", quietAuto ? "1" : "0");
+    updateFocusButton();
+    syncFocusPop();
+  }
+});
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#fields-pop") && !e.target.closest("#btn-fields")) {
     fieldsPop.classList.add("hidden");
+  }
+  if (!e.target.closest("#quick-menu")) {
+    quickMenuEl.classList.add("hidden");
+  }
+  if (!e.target.closest("#focus-pop") && !e.target.closest("#btn-focus")) {
+    focusPop.classList.add("hidden");
   }
 });
 fieldsPop.addEventListener("change", (e) => {
@@ -771,6 +905,30 @@ fieldsPop.addEventListener("change", (e) => {
   if (e.target.checked) visibleFields.add(key);
   else visibleFields.delete(key);
   applyFields();
+});
+focusPop.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-focus]");
+  if (!btn) return;
+  focusMode = btn.dataset.focus;
+  localStorage.setItem("agent-island-focus", focusMode);
+  updateFocusButton();
+  syncFocusPop();
+  poll();
+});
+quietAutoInput.addEventListener("change", () => {
+  quietAuto = quietAutoInput.checked;
+  localStorage.setItem("agent-island-quiet-auto", quietAuto ? "1" : "0");
+  updateFocusButton();
+});
+quietStartInput.addEventListener("change", () => {
+  quietStart = quietStartInput.value || "22:00";
+  localStorage.setItem("agent-island-quiet-start", quietStart);
+  updateFocusButton();
+});
+quietEndInput.addEventListener("change", () => {
+  quietEnd = quietEndInput.value || "08:00";
+  localStorage.setItem("agent-island-quiet-end", quietEnd);
+  updateFocusButton();
 });
 window.addEventListener("keydown", (e) => {
   if (e.target.closest("input,textarea,select")) return;
@@ -788,6 +946,7 @@ window.addEventListener("keydown", (e) => {
     quietAuto = !quietAuto;
     localStorage.setItem("agent-island-quiet-auto", quietAuto ? "1" : "0");
     updateFocusButton();
+    syncFocusPop();
     return;
   }
   if (e.key === "v" || e.key === "V") { btnFields.click(); return; }
@@ -880,6 +1039,7 @@ refresh();
 updateFocusButton();
 applyPrivacy();
 applyFields();
+syncFocusPop();
 positionIsland();
 poll();
 setInterval(poll, 3000);

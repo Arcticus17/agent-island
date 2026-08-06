@@ -197,6 +197,7 @@ struct AppState {
     session: Mutex<SessionState>,
     stats_path: PathBuf,
     daily_path: PathBuf,
+    remote_privacy: AtomicBool,
     send_tasks: Mutex<HashMap<String, Arc<SendTask>>>,
 }
 
@@ -1809,6 +1810,11 @@ fn privacy_active(state: tauri::State<AppState>) -> bool {
     })
 }
 
+#[tauri::command]
+fn set_remote_privacy(enabled: bool, state: tauri::State<AppState>) {
+    state.remote_privacy.store(enabled, Ordering::SeqCst);
+}
+
 fn toggle_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
@@ -1952,9 +1958,34 @@ fn handle_remote(mut stream: std::net::TcpStream, app: tauri::AppHandle) {
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .unwrap_or("/");
-    let (status, content_type, body) = if path == "/api/agents" {
+    let (status, content_type, body) = if path.starts_with("/api/agents") {
         let state = app.state::<AppState>();
+        let mask_remote =
+            state.remote_privacy.load(Ordering::SeqCst) || path.contains("privacy=1");
         let agents = get_agents(state);
+        let agents = if mask_remote {
+            agents
+                .into_iter()
+                .map(|mut a| {
+                    a.cwd = Some("[已隐藏]".to_string());
+                    a.current_file = Some("[已隐藏]".to_string());
+                    a.recent_output = vec!["[已隐藏]".to_string()];
+                    a.session_list = a
+                        .session_list
+                        .into_iter()
+                        .map(|mut s| {
+                            s.cwd = Some("[已隐藏]".to_string());
+                            s.current_file = Some("[已隐藏]".to_string());
+                            s.recent_output = vec!["[已隐藏]".to_string()];
+                            s
+                        })
+                        .collect();
+                    a
+                })
+                .collect()
+        } else {
+            agents
+        };
         let json = serde_json::to_string(&agents).unwrap_or_else(|_| "[]".to_string());
         ("200 OK", "application/json; charset=utf-8", json)
     } else if path == "/" || path.starts_with("/?") {
@@ -2013,6 +2044,7 @@ pub fn run() {
             }),
             stats_path,
             daily_path,
+            remote_privacy: AtomicBool::new(false),
             send_tasks: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
@@ -2031,6 +2063,7 @@ pub fn run() {
             get_autostart,
             set_autostart,
             privacy_active,
+            set_remote_privacy,
             get_remote_url,
             open_overview
         ])

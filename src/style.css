@@ -391,60 +391,195 @@ button:focus-visible {
   cursor: pointer;
 }
 #fields-pop input { accent-color: var(--accent); }
+#quick-menu {
+  position: absolute;
+  z-index: 40;
+  min-width: 132px;
+  padding: 6px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.32);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+#quick-menu button {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+#quick-menu button:hover { background: var(--surface-hover); }
+#focus-pop {
+  position: absolute;
+  top: 50px;
+  right: 20px;
+  z-index: 35;
+  width: 250px;
+  padding: 10px 12px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text);
+}
+.focus-mode-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.focus-mode-row button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.focus-mode-row button.active {
+  background: rgba(94, 156, 255, 0.14);
+  border-color: rgba(94, 156, 255, 0.45);
+  color: #7ab0ff;
+}
+.focus-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.focus-toggle input { accent-color: var(--accent); }
+.focus-times {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.focus-times label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.focus-times input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 3px 5px;
+  font-size: 11px;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  .focus-times input { color-scheme: light; }
+  .focus-mode-row button.active {
+    background: rgba(10, 99, 214, 0.08);
+    border-color: rgba(10, 99, 214, 0.45);
+    color: #0a63d6;
+  }
+}
 #notify-stack {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
-.notify-card {
+.notify-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+  animation: notify-in 0.22s ease;
+}
+.notify-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  font-size: 12px;
+  padding: 6px 8px;
   min-height: 32px;
-  animation: notify-in 0.22s ease;
-  transition: opacity 0.16s ease, transform 0.16s ease;
+  cursor: pointer;
+  transition: background 0.15s;
+  -webkit-app-region: no-drag;
 }
-.notify-card .notify-dot {
-  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+.notify-head:hover { background: var(--surface-hover); }
+.notify-icon, .notify-letter {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
-.notify-card.error {
-  border-color: rgba(255, 69, 58, 0.5);
-  background: rgba(255, 69, 58, 0.12);
+.notify-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-hover);
+  font-size: 10px;
+  font-weight: 600;
 }
-.notify-card.error .notify-dot {
-  background: var(--red);
-  box-shadow: 0 0 8px rgba(255, 69, 58, 0.7);
-}
-.notify-card.done {
-  border-color: rgba(48, 209, 88, 0.45);
-  background: rgba(48, 209, 88, 0.1);
-}
-.notify-card.done .notify-dot {
-  background: var(--green);
-  box-shadow: 0 0 8px rgba(48, 209, 88, 0.6);
-}
-.notify-card.waiting {
-  border-color: rgba(255, 214, 10, 0.45);
-  background: rgba(255, 214, 10, 0.1);
-}
-.notify-card.waiting .notify-dot {
-  background: var(--yellow);
-  box-shadow: 0 0 8px rgba(255, 214, 10, 0.6);
-}
-.notify-card .notify-text {
-  flex: 1;
+.notify-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text);
 }
-.notify-card .notify-text strong { font-weight: 600; }
+.notify-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+.notify-summary.error { color: #ff6b60; }
+.notify-summary.waiting { color: var(--yellow); }
+.notify-summary.done { color: var(--green); }
+.notify-arrow {
+  font-size: 10px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.notify-items {
+  display: none;
+  border-top: 1px solid var(--border);
+  padding: 4px 8px 6px;
+  gap: 4px;
+  flex-direction: column;
+}
+.notify-group.open .notify-items { display: flex; }
+.notify-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+.notify-item > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notify-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+}
+.notify-item.error .notify-dot { background: var(--red); box-shadow: 0 0 7px rgba(255, 69, 58, 0.7); }
+.notify-item.done .notify-dot { background: var(--green); box-shadow: 0 0 7px rgba(48, 209, 88, 0.6); }
+.notify-item.waiting .notify-dot { background: var(--yellow); box-shadow: 0 0 7px rgba(255, 214, 10, 0.6); }
 .notify-close {
   background: transparent;
   border: none;
@@ -469,7 +604,9 @@ body.privacy-mask #expanded-header .agent-icon {
   filter: blur(2px);
 }
 body.privacy-mask .agent-chip-name,
-body.privacy-mask .notify-card .notify-text {
+body.privacy-mask .notify-title,
+body.privacy-mask .notify-summary,
+body.privacy-mask .notify-item > span:last-child {
   filter: blur(6px);
   user-select: none;
 }
