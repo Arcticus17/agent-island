@@ -53,20 +53,24 @@
 
 原则：不做复刻，做"补空位"；每个能力选最可靠的数据源，全部本地读取，不上云。
 
-### v1.1：用量监控（差异化最大、风险最低）
+### v1.1：功能瘦身（已完成，2026-08-18）
+
+按"鸡肋即砍"原则移除：远程查看整套、Windows 通知中心、插件市场 UI、Copilot/Cursor 适配器、语音播报、高对比度。
+
+### v1.2：用量监控（已完成，2026-08-18）
 
 **目标**：岛上新增"用量"层，一眼看到 token 消耗与额度剩余，超限预警。
 
 | 子项 | 数据源 | 参考项目 |
 | --- | --- | --- |
-| Claude Code 5 小时窗口用量 | `claude` CLI 的 usage 命令输出（本地缓存于 `~/.claude`），或 hooks 的 SessionEnd 事件（含 cost_usd） | Claude-Code-Usage-Monitor、ClaudeBar |
-| Codex 额度余额 | Codex 本地 auth/session 缓存与 `/usage` 输出 | token-monitor、ClaudeBar |
-| 限流倒计时与预警 | 5h 窗口滚动计算 + 告警阈值 | notch-tracker、lumos（预测） |
-| 展示 | 胶囊上用量环/百分比，展开面板用量明细，总览页按天统计 | 自设计 |
+| Claude Code 5 小时窗口用量 | 解析 `~/.claude/projects` transcript 的 `usage` 字段汇总 | Claude-Code-Usage-Monitor、ClaudeBar |
+| Codex 额度余额 | 解析 `~/.codex/sessions` 的 `token_count` 事件（`used_percent`/`resets_at`/`credits`） | token-monitor、ClaudeBar |
+| 超限预警 | 用量条绿→黄→红变色 + 重置倒计时 | notch-tracker、lumos（预测） |
+| 展示 | 胶囊底部用量条、展开面板"用量"行、总览页详情行 | 自设计 |
 
-**工作量**：中。后端新增 usage 采集 + 前端用量环组件 + 总览页卡片。
+**工作量**：中。已实现：`UsageInfo` 采集（30 秒缓存）、`scan_claude_text`/`scan_codex_text` 解析 + 6 个单元测试。
 
-### v1.2：Hook 事件接入 + 权限审批卡
+### v1.3：Hook 事件接入 + 权限审批卡
 
 **目标**：事件从"秒级轮询"升级到"毫秒级推送"，并解锁审批能力。
 
@@ -94,4 +98,4 @@
 
 ## 五、决策记录
 
-- 2026-08-18：调研确认用量监控为最大差异化空位，定为 v1.1；审批卡依赖 hooks，定为 v1.2。
+- 2026-08-18：调研确认用量监控为最大差异化空位；同日先完成 v1.1 功能瘦身（用户决策），再完成 v1.2 用量监控（Claude transcript + Codex token_count 数据源实测可用）。

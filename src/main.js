@@ -48,7 +48,7 @@ let privacyAuto = false;
 let quietAuto = localStorage.getItem("agent-island-quiet-auto") === "1";
 let quietStart = localStorage.getItem("agent-island-quiet-start") || "22:00";
 let quietEnd = localStorage.getItem("agent-island-quiet-end") || "08:00";
-const FIELD_KEYS = ["status", "cpu", "mem", "pid", "uptime", "last-active", "stats", "cwd", "file", "output"];
+const FIELD_KEYS = ["status", "cpu", "mem", "pid", "uptime", "last-active", "stats", "usage", "cwd", "file", "output"];
 let visibleFields = new Set();
 try { visibleFields = new Set(JSON.parse(localStorage.getItem("agent-island-fields") || "[]")); } catch (_) {}
 if (!visibleFields.size) visibleFields = new Set(FIELD_KEYS);
@@ -82,6 +82,8 @@ const expLastActive = $("exp-last-active");
 const expFile = $("exp-file");
 const expOutput = $("exp-output");
 const expStats = $("exp-stats");
+const expUsage = $("exp-usage");
+const usageBar = $("usage-bar");
 const expPage = $("exp-page");
 const btnPrev = $("btn-prev");
 const btnNext = $("btn-next");
@@ -415,6 +417,8 @@ function refresh() {
     lastOutputLines = [];
     liveBadge.classList.add("hidden");
     expStats.textContent = "-";
+    expUsage.textContent = "-";
+    if (usageBar) { usageBar.style.width = "0"; usageBar.title = ""; }
     island.classList.remove("alert-error", "flash-error");
     island.classList.remove("working-glow");
     statusDot.classList.remove("pulse");
@@ -469,6 +473,20 @@ function refresh() {
   expStats.textContent = a.stats
     ? `${fmtUptime(a.stats.total_seconds)} · 报错${a.stats.error_count} · 完成${a.stats.done_count}`
     : "-";
+  const usageText = usageTextFor(a.usage);
+  expUsage.textContent = usageText || "-";
+  expUsage.title = usageText || "";
+  if (usageBar) {
+    const bar = usageBarFor(a.usage);
+    if (bar) {
+      usageBar.style.width = `${bar.pct.toFixed(2)}%`;
+      usageBar.style.background = bar.color;
+      usageBar.title = usageText || "";
+    } else {
+      usageBar.style.width = "0";
+      usageBar.title = "";
+    }
+  }
   const sessionCount = a.session_list?.length || 0;
   expPage.textContent = sessionCount > 1 ? `会话 ${sessionIdx + 1}/${sessionCount}` : "单一会话";
   btnPrev.disabled = sessionCount <= 1 || sessionIdx === 0;
@@ -534,6 +552,51 @@ function fmtUptime(s) {
   if (s < 60) return `${Math.floor(s)}秒`;
   if (s < 3600) return `${Math.floor(s / 60)}分钟`;
   return `${Math.floor(s / 3600)}小时${Math.floor((s % 3600) / 60)}分`;
+}
+function fmtTokens(n) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1000)}K`;
+  return String(n);
+}
+function fmtReset(secs) {
+  if (secs < 60) return "1分钟内";
+  if (secs < 3600) return `${Math.floor(secs / 60)}分钟`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}小时`;
+  return `${Math.floor(secs / 86400)}天`;
+}
+
+function usageTextFor(u) {
+  if (!u) return null;
+  const parts = [];
+  if (u.tokens_total > 0 || u.stale) {
+    parts.push(`tokens ${fmtTokens(u.tokens_total)}`);
+    if (u.tokens_output > 0) parts.push(`输出 ${fmtTokens(u.tokens_output)}`);
+  }
+  if (u.cost_usd != null) parts.push(`$${u.cost_usd.toFixed(2)}`);
+  if (u.used_percent != null) parts.push(`额度 ${u.used_percent.toFixed(1)}%`);
+  if (u.resets_at_secs != null) {
+    const remain = Math.max(0, u.resets_at_secs * 1000 - Date.now()) / 1000;
+    parts.push(`${fmtReset(remain)}后重置`);
+  }
+  if (u.unlimited === true) parts.push("无限额度");
+  else if (u.credits != null) parts.push(`余额 $${u.credits}`);
+  if (!parts.length) return null;
+  if (u.stale && u.used_percent == null) parts.push("(窗口外)");
+  return parts.join(" · ");
+}
+
+function usageBarFor(u) {
+  if (!u) return null;
+  let pct = null;
+  let color = "rgba(48, 209, 88, 0.9)";
+  if (u.used_percent != null) {
+    pct = Math.min(100, Math.max(0, u.used_percent));
+    color = pct >= 85 ? "rgba(255, 69, 58, 0.95)" : pct >= 60 ? "rgba(255, 214, 10, 0.95)" : "rgba(48, 209, 88, 0.9)";
+  } else if (u.tokens_total > 0) {
+    pct = Math.min(100, (u.tokens_total / 2_000_000) * 100);
+    color = pct >= 80 ? "rgba(255, 69, 58, 0.95)" : pct >= 50 ? "rgba(255, 214, 10, 0.95)" : "rgba(48, 209, 88, 0.9)";
+  }
+  return pct == null ? null : { pct, color };
 }
 function fmtAgo(secs) {
   if (secs < 3) return "刚刚";
@@ -697,7 +760,7 @@ function renderOutput(lines, key) {
 }
 
 const FIELD_SECTIONS = {
-  run: ["status", "cpu", "mem", "pid", "uptime", "last-active", "stats"],
+  run: ["status", "cpu", "mem", "pid", "uptime", "last-active", "stats", "usage"],
   session: ["cwd"],
   output: ["file", "output"],
 };

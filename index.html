@@ -7,8 +7,9 @@
   <link rel="stylesheet" href="/src/style.css?v=17" />
 </head>
 <body>
-  <div id="island">
-    <div id="compact">
+    <div id="island">
+      <div id="usage-bar" title=""></div>
+      <div id="compact">
       <div id="icon-stack">
         <img id="compact-icon" class="agent-icon" alt="" style="display:none" />
         <span id="stack-count" class="hidden"></span>
@@ -38,6 +39,7 @@
         <label><input type="checkbox" data-field-check="uptime"> 本次运行</label>
         <label><input type="checkbox" data-field-check="last-active"> 最后活动</label>
         <label><input type="checkbox" data-field-check="stats"> 统计</label>
+        <label><input type="checkbox" data-field-check="usage"> 用量</label>
         <label><input type="checkbox" data-field-check="cwd"> 目录</label>
         <label><input type="checkbox" data-field-check="file"> 当前文件</label>
         <label><input type="checkbox" data-field-check="output"> 最近输出</label>
@@ -82,6 +84,7 @@
           <div class="info-row" data-field="uptime"><span class="label">本次运行</span><span id="exp-uptime"></span></div>
           <div class="info-row" data-field="last-active"><span class="label">最后活动</span><span id="exp-last-active"></span></div>
           <div class="info-row wide" data-field="stats"><span class="label">统计</span><span id="exp-stats"></span></div>
+          <div class="info-row wide" data-field="usage"><span class="label">用量</span><span id="exp-usage"></span></div>
         </div>
         <div class="section-label" data-section="session">会话信息</div>
         <div class="info-row wide" data-field="cwd"><span class="label">目录</span><span id="exp-cwd" class="path-link"></span></div>

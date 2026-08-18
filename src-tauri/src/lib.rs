@@ -33,6 +33,20 @@ pub struct AgentInfo {
     pub stats: Option<AgentStats>,
     pub session_count: usize,
     pub session_list: Vec<AgentSession>,
+    pub usage: Option<UsageInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UsageInfo {
+    pub tokens_total: u64,
+    pub tokens_output: u64,
+    pub cost_usd: Option<f64>,
+    pub used_percent: Option<f32>,
+    pub window_secs: u64,
+    pub resets_at_secs: Option<u64>,
+    pub credits: Option<f64>,
+    pub unlimited: Option<bool>,
+    pub stale: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -276,6 +290,7 @@ fn scan_agents(sys: &mut System, session: &mut SessionState) -> (Vec<AgentInfo>,
                 stats: session.stats.get(agent_name).cloned(),
                 session_count: session_list.len(),
                 session_list,
+                usage: usage_for(agent_name),
             });
             continue;
         }
@@ -409,6 +424,7 @@ fn scan_agents(sys: &mut System, session: &mut SessionState) -> (Vec<AgentInfo>,
             stats: Some(stats_snapshot),
             session_count: session_list.len(),
             session_list,
+            usage: usage_for(agent_name),
         });
     }
     (agents, stats_changed)
@@ -1040,6 +1056,283 @@ fn build_sessions(name: &str) -> Vec<AgentSession> {
         "hermes" => hermes_sessions(),
         _ => Vec::new(),
     }
+}
+
+fn epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = m as i64 + if m > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn parse_rfc3339_secs(s: &str) -> Option<u64> {
+    let (date, rest) = s.split_once('T')?;
+    let mut dp = date.split('-');
+    let year: i64 = dp.next()?.parse().ok()?;
+    let month: i64 = dp.next()?.parse().ok()?;
+    let day: i64 = dp.next()?.parse().ok()?;
+    let time = rest
+        .strip_suffix('Z')
+        .unwrap_or_else(|| rest.split(['+', '-']).next().unwrap_or(rest));
+    let mut tp = time.split(':');
+    let hour: i64 = tp.next()?.parse().ok()?;
+    let minute: i64 = tp.next()?.parse().ok()?;
+    let second: i64 = tp.next()?.split('.').next()?.parse().ok()?;
+    let days = days_from_civil(year, month as u32, day as u32);
+    Some((days * 86400 + hour * 3600 + minute * 60 + second) as u64)
+}
+
+struct ClaudePrice {
+    input: f64,
+    output: f64,
+    cache_read: f64,
+    cache_write: f64,
+}
+
+fn claude_price(model: &str) -> Option<ClaudePrice> {
+    let m = model.to_lowercase();
+    let p = if m.contains("opus") {
+        ClaudePrice { input: 15.0, output: 75.0, cache_read: 1.5, cache_write: 18.75 }
+    } else if m.contains("sonnet") {
+        ClaudePrice { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 }
+    } else if m.contains("haiku") {
+        ClaudePrice { input: 1.0, output: 5.0, cache_read: 0.1, cache_write: 1.25 }
+    } else {
+        return None;
+    };
+    Some(p)
+}
+
+struct ClaudeScan {
+    found: bool,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+    cost: f64,
+    cost_known: bool,
+}
+
+fn scan_claude_text(text: &str, window_start: u64) -> ClaudeScan {
+    let mut scan = ClaudeScan {
+        found: false,
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        cost: 0.0,
+        cost_known: false,
+    };
+    for line in text.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(ts) = v
+            .get("timestamp")
+            .and_then(|t| t.as_str())
+            .and_then(parse_rfc3339_secs)
+        {
+            if ts < window_start {
+                break;
+            }
+        }
+        let Some(msg) = v.get("message") else { continue };
+        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(usage) = msg.get("usage") else { continue };
+        let input = usage.get("input_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+        let output = usage.get("output_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+        let cache_read = usage
+            .get("cache_read_input_tokens")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0);
+        let cache_write = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0);
+        scan.found = true;
+        scan.input += input;
+        scan.output += output;
+        scan.cache_read += cache_read;
+        scan.cache_write += cache_write;
+        if let Some(model) = msg.get("model").and_then(|m| m.as_str()) {
+            if let Some(p) = claude_price(model) {
+                scan.cost += input as f64 / 1e6 * p.input
+                    + output as f64 / 1e6 * p.output
+                    + cache_read as f64 / 1e6 * p.cache_read
+                    + cache_write as f64 / 1e6 * p.cache_write;
+                scan.cost_known = true;
+            }
+        }
+    }
+    scan
+}
+
+const CLAUDE_WINDOW_SECS: u64 = 5 * 3600;
+
+fn claude_usage() -> Option<UsageInfo> {
+    let root = home_dir()?.join(".claude").join("projects");
+    let files = list_newest_files(&root, 4, "jsonl", 8);
+    if files.is_empty() {
+        return None;
+    }
+    let window_start = epoch_secs().saturating_sub(CLAUDE_WINDOW_SECS);
+    let mut total = ClaudeScan {
+        found: false,
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        cost: 0.0,
+        cost_known: false,
+    };
+    for path in &files {
+        let text = read_tail(path, 512 * 1024);
+        let scan = scan_claude_text(&text, window_start);
+        total.found |= scan.found;
+        total.input += scan.input;
+        total.output += scan.output;
+        total.cache_read += scan.cache_read;
+        total.cache_write += scan.cache_write;
+        total.cost += scan.cost;
+        total.cost_known |= scan.cost_known;
+    }
+    Some(UsageInfo {
+        tokens_total: total.input + total.output + total.cache_read + total.cache_write,
+        tokens_output: total.output,
+        cost_usd: if total.cost_known {
+            Some((total.cost * 100.0).round() / 100.0)
+        } else {
+            None
+        },
+        used_percent: None,
+        window_secs: CLAUDE_WINDOW_SECS,
+        resets_at_secs: None,
+        credits: None,
+        unlimited: None,
+        stale: !total.found,
+    })
+}
+
+fn scan_codex_text(text: &str, now: u64) -> Option<UsageInfo> {
+    let mut best: Option<(u64, UsageInfo)> = None;
+    for line in text.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("event_msg") {
+            continue;
+        }
+        let Some(payload) = v.get("payload") else { continue };
+        if payload.get("type").and_then(|t| t.as_str()) != Some("token_count") {
+            continue;
+        }
+        let Some(info) = payload.get("info") else { continue };
+        let tokens_total = info
+            .pointer("/total_token_usage/total_tokens")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0);
+        let tokens_output = info
+            .pointer("/total_token_usage/output_tokens")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0);
+        let rl = payload.get("rate_limits");
+        let primary = rl.and_then(|r| r.get("primary"));
+        let used_percent = primary
+            .and_then(|p| p.get("used_percent"))
+            .and_then(|x| x.as_f64())
+            .map(|x| x as f32);
+        let resets_at = primary.and_then(|p| p.get("resets_at")).and_then(|x| x.as_u64());
+        let window_minutes = primary
+            .and_then(|p| p.get("window_minutes"))
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0);
+        let credits = rl.and_then(|r| r.get("credits"));
+        let has_credits = credits
+            .and_then(|c| c.get("has_credits"))
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        let unlimited = credits
+            .and_then(|c| c.get("unlimited"))
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        let balance = credits.and_then(|c| c.get("balance")).and_then(|x| x.as_f64());
+        let mut info_out = UsageInfo {
+            tokens_total,
+            tokens_output,
+            cost_usd: None,
+            used_percent,
+            window_secs: window_minutes * 60,
+            resets_at_secs: resets_at,
+            credits: if has_credits { balance } else { None },
+            unlimited: Some(unlimited),
+            stale: false,
+        };
+        if resets_at.map(|r| r <= now).unwrap_or(false) {
+            info_out.used_percent = Some(0.0);
+            info_out.stale = true;
+        }
+        let key = resets_at.unwrap_or(0);
+        if best.as_ref().map(|(k, _)| key > *k).unwrap_or(true) {
+            best = Some((key, info_out));
+        }
+        break;
+    }
+    best.map(|(_, info)| info)
+}
+
+fn codex_usage() -> Option<UsageInfo> {
+    let root = home_dir()?.join(".codex").join("sessions");
+    let files = list_newest_files(&root, 5, "jsonl", 6);
+    if files.is_empty() {
+        return None;
+    }
+    let now = epoch_secs();
+    let mut best: Option<(u64, UsageInfo)> = None;
+    for path in &files {
+        let text = read_tail(path, 256 * 1024);
+        if let Some(info) = scan_codex_text(&text, now) {
+            let key = info.resets_at_secs.unwrap_or(0);
+            if best.as_ref().map(|(k, _)| key > *k).unwrap_or(true) {
+                best = Some((key, info));
+            }
+        }
+    }
+    best.map(|(_, info)| info)
+}
+
+static USAGE_CACHE: OnceLock<Mutex<HashMap<String, (Instant, Option<UsageInfo>)>>> =
+    OnceLock::new();
+
+fn usage_for(name: &str) -> Option<UsageInfo> {
+    let cache = USAGE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some((at, value)) = guard.get(name) {
+            if at.elapsed().as_secs() < 30 {
+                return value.clone();
+            }
+        }
+    }
+    let value = match name {
+        "Claude Code" => claude_usage(),
+        "Codex CLI" => codex_usage(),
+        _ => None,
+    };
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(name.to_string(), (Instant::now(), value.clone()));
+    }
+    value
 }
 
 #[tauri::command]
@@ -1846,6 +2139,63 @@ mod tests {
         for name in ["Claude Code", "Codex CLI", "OpenCode", "Hermes"] {
             assert!(defs.iter().any(|d| d.name == name), "missing {name}");
         }
+    }
+
+    #[test]
+    fn parse_rfc3339_handles_z_and_offsets() {
+        assert_eq!(
+            parse_rfc3339_secs("2026-08-18T11:10:42.166Z"),
+            Some(1787051442)
+        );
+        assert_eq!(parse_rfc3339_secs("not-a-date"), None);
+    }
+
+    #[test]
+    fn claude_scan_sums_window_tokens() {
+        let window_start = parse_rfc3339_secs("2026-08-18T10:00:00Z").unwrap();
+        let lines = "\
+{\"timestamp\":\"2026-08-18T09:00:00Z\",\"message\":{\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-5\",\"usage\":{\"input_tokens\":9999,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":9999}},\"type\":\"assistant\"}\n\
+{\"timestamp\":\"2026-08-18T11:10:42.166Z\",\"message\":{\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-5\",\"usage\":{\"input_tokens\":1000,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":2000,\"output_tokens\":500}},\"type\":\"assistant\"}\n\
+{\"timestamp\":\"2026-08-18T11:20:00Z\",\"message\":{\"type\":\"message\",\"role\":\"user\"},\"type\":\"user\"}\n";
+        let scan = scan_claude_text(lines, window_start);
+        assert!(scan.found);
+        assert_eq!(scan.input, 1000);
+        assert_eq!(scan.output, 500);
+        assert_eq!(scan.cache_read, 2000);
+        assert!(scan.cost_known);
+        assert!(scan.cost > 0.0);
+    }
+
+    #[test]
+    fn claude_scan_ignores_unknown_model_cost() {
+        let window_start = parse_rfc3339_secs("2026-08-18T10:00:00Z").unwrap();
+        let lines = "{\"timestamp\":\"2026-08-18T11:10:42.166Z\",\"message\":{\"type\":\"message\",\"role\":\"assistant\",\"model\":\"deepseek-v4-pro\",\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":5}},\"type\":\"assistant\"}\n";
+        let scan = scan_claude_text(lines, window_start);
+        assert!(scan.found);
+        assert_eq!(scan.input, 10);
+        assert!(!scan.cost_known);
+    }
+
+    #[test]
+    fn codex_scan_reads_token_count_and_rate_limits() {
+        let now = 1787056242u64;
+        let line = "{\"timestamp\":\"2026-08-18T11:10:42.980Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":6313264,\"output_tokens\":24262,\"total_tokens\":6337526},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"primary\":{\"used_percent\":96.0,\"window_minutes\":43200,\"resets_at\":1789130031},\"secondary\":null,\"credits\":{\"has_credits\":false,\"unlimited\":true,\"balance\":null}}}}\n";
+        let info = scan_codex_text(line, now).expect("should parse");
+        assert_eq!(info.tokens_total, 6337526);
+        assert!((info.used_percent.unwrap() - 96.0).abs() < 0.01);
+        assert_eq!(info.resets_at_secs, Some(1789130031));
+        assert_eq!(info.unlimited, Some(true));
+        assert_eq!(info.credits, None);
+        assert!(!info.stale);
+    }
+
+    #[test]
+    fn codex_scan_marks_reset_window_as_stale() {
+        let now = 1789130031u64;
+        let line = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}},\"rate_limits\":{\"primary\":{\"used_percent\":96.0,\"window_minutes\":43200,\"resets_at\":1789130000},\"credits\":{\"has_credits\":false,\"unlimited\":false,\"balance\":null}}}}\n";
+        let info = scan_codex_text(line, now).expect("should parse");
+        assert!(info.stale);
+        assert_eq!(info.used_percent, Some(0.0));
     }
 }
 

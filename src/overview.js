@@ -296,6 +296,7 @@ function renderDetail() {
     <div>
       <div class="detail-title">${escapeHtml(r.agent.name)} · ${escapeHtml(r.name)}</div>
       <div class="detail-status">${escapeHtml(STATUS_TEXT[r.status] || r.status)} · ${escapeHtml(fmtAgo(r.agent.last_active_secs))}</div>
+      ${usageLine(r.agent.usage) ? `<div class="detail-usage">${escapeHtml(usageLine(r.agent.usage))}</div>` : ""}
       <div class="detail-cwd">${escapeHtml(r.cwd || "无目录")}</div>
     </div>
   `;
@@ -312,6 +313,29 @@ function fmtUptime(s) {
   if (s < 60) return `${s}秒`;
   if (s < 3600) return `${Math.floor(s / 60)}分钟`;
   return `${Math.floor(s / 3600)}小时${Math.floor((s % 3600) / 60)}分`;
+}
+
+function fmtTokens(n) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1000)}K`;
+  return String(n);
+}
+
+function usageLine(u) {
+  if (!u) return "";
+  const parts = [];
+  if (u.tokens_total > 0) parts.push(`tokens ${fmtTokens(u.tokens_total)}`);
+  if (u.cost_usd != null) parts.push(`$${u.cost_usd.toFixed(2)}`);
+  if (u.used_percent != null) parts.push(`额度 ${u.used_percent.toFixed(1)}%`);
+  if (u.resets_at_secs != null) {
+    const remain = Math.max(0, u.resets_at_secs * 1000 - Date.now()) / 1000;
+    if (remain < 3600) parts.push(`${Math.floor(remain / 60)}分钟后重置`);
+    else if (remain < 86400) parts.push(`${Math.floor(remain / 3600)}小时后重置`);
+    else parts.push(`${Math.floor(remain / 86400)}天后重置`);
+  }
+  if (u.unlimited === true) parts.push("无限额度");
+  else if (u.credits != null) parts.push(`余额 $${u.credits}`);
+  return parts.join(" · ");
 }
 
 function todayStr() {
