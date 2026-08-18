@@ -424,7 +424,7 @@ function refresh() {
     expUsage.textContent = "-";
     if (usageBar) { usageBar.style.width = "0"; usageBar.title = ""; }
     island.classList.remove("alert-error", "flash-error");
-    island.classList.remove("working-glow");
+    island.classList.remove("working-glow", "status-waiting", "status-done");
     statusDot.classList.remove("pulse");
     expPage.textContent = "";
     btnPrev.disabled = true;
@@ -536,6 +536,8 @@ function refresh() {
   }
   island.classList.toggle("alert-error", a.status === "error");
   island.classList.toggle("working-glow", a.status === "working");
+  island.classList.toggle("status-waiting", a.status === "waiting");
+  island.classList.toggle("status-done", a.status === "done");
   statusDot.classList.toggle("pulse", a.status === "working");
   updateIconStack();
   updateAgentStrip();

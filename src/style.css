@@ -19,7 +19,9 @@
   --radius-lg: 26px;
   --radius-md: 12px;
   --radius-sm: 8px;
-  --shadow: 0 12px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 12px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --ease-spring: cubic-bezier(0.32, 1.3, 0.5, 1);
+  --ease-soft: cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -32,7 +34,7 @@
     --border: rgba(0, 0, 0, 0.09);
     --divider: rgba(0, 0, 0, 0.1);
     --accent: #0a63d6;
-    --shadow: 0 12px 36px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 12px 36px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.7);
   }
 }
 
@@ -64,10 +66,10 @@ body { display: flex; justify-content: center; }
   width: var(--island-width);
   max-width: calc(100vw - 16px);
   height: 36px;
-  transition: height 0.35s cubic-bezier(0.22, 0.61, 0.36, 1),
-              border-radius 0.35s cubic-bezier(0.22, 0.61, 0.36, 1),
-              box-shadow 0.35s ease;
-  animation: island-enter 0.45s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  transition: height 0.45s var(--ease-spring),
+              border-radius 0.45s var(--ease-spring),
+              box-shadow 0.4s ease;
+  animation: island-enter 0.5s cubic-bezier(0.32, 1.3, 0.5, 1) both;
 }
 #island::before {
   content: "";
@@ -85,7 +87,7 @@ body { display: flex; justify-content: center; }
   width: 0;
   background: rgba(48, 209, 88, 0.9);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  transition: width 0.6s ease, background 0.6s ease;
+  transition: width 0.7s var(--ease-soft), background 0.5s ease;
   pointer-events: none;
   z-index: 5;
 }
@@ -110,8 +112,14 @@ body { display: flex; justify-content: center; }
   50% { background: rgba(255, 69, 58, 0.28); }
 }
 #island.working-glow {
-  box-shadow: 0 12px 44px rgba(48, 209, 88, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 12px 44px rgba(48, 209, 88, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   animation: working-breathe 2.4s ease-in-out infinite;
+}
+#island.status-waiting {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 12px 40px rgba(255, 214, 10, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+#island.status-done {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 12px 40px rgba(48, 209, 88, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 @keyframes working-breathe {
   0%, 100% { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06); }
@@ -257,11 +265,15 @@ body { display: flex; justify-content: center; }
   height: 22px;
   cursor: pointer;
   -webkit-app-region: no-drag;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.12s var(--ease-spring), box-shadow 0.15s;
 }
 .header-actions button:hover {
   background: var(--surface-hover);
   color: var(--text);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+.header-actions button:active:not(:disabled) {
+  transform: scale(0.94);
 }
 button:focus-visible {
   outline: 2px solid var(--accent);
@@ -271,6 +283,11 @@ button:focus-visible {
   background: rgba(255, 69, 58, 0.14);
   border-color: rgba(255, 69, 58, 0.4);
   color: #ff6b60;
+}
+#btn-hook.active {
+  background: rgba(48, 209, 88, 0.14);
+  border-color: rgba(48, 209, 88, 0.4);
+  color: #30d158;
 }
 #btn-focus.active {
   background: rgba(94, 156, 255, 0.14);
@@ -333,11 +350,14 @@ button:focus-visible {
   height: 34px;
   cursor: pointer;
   position: relative;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background 0.15s, border-color 0.15s, height 0.25s var(--ease-spring), margin-top 0.25s var(--ease-spring), transform 0.15s var(--ease-spring);
   -webkit-app-region: no-drag;
 }
 .agent-chip + .agent-chip { margin-top: -9px; }
-.agent-chip:hover { background: var(--surface-hover); }
+.agent-chip:hover {
+  background: var(--surface-hover);
+  transform: translateX(2px);
+}
 .agent-chip.active {
   border-color: rgba(94, 156, 255, 0.5);
   background: rgba(94, 156, 255, 0.14);
@@ -747,8 +767,29 @@ button:focus-visible {
 }
 .notify-close:hover { color: var(--text); }
 @keyframes notify-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
+  0% { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  60% { opacity: 1; transform: translateY(1px) scale(1.005); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+#notify-stack .notify-group,
+#approval-stack .approval-card {
+  animation: notify-in 0.3s var(--ease-spring);
+}
+#expanded-body::-webkit-scrollbar,
+#exp-output::-webkit-scrollbar,
+#approval-stack::-webkit-scrollbar {
+  width: 5px;
+}
+#expanded-body::-webkit-scrollbar-thumb,
+#exp-output::-webkit-scrollbar-thumb,
+#approval-stack::-webkit-scrollbar-thumb {
+  background: rgba(127, 127, 127, 0.32);
+  border-radius: 3px;
+}
+#expanded-body::-webkit-scrollbar-thumb:hover,
+#exp-output::-webkit-scrollbar-thumb:hover,
+#approval-stack::-webkit-scrollbar-thumb:hover {
+  background: rgba(127, 127, 127, 0.5);
 }
 body.privacy-mask #expanded .info-row span:last-child,
 body.privacy-mask #exp-output,

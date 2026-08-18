@@ -2,6 +2,25 @@
 
 > 调研时间：2026-08-18。对象：同类灵动岛竞品（EchoIsland、vibe-island、Dynamic-island-for-arch、claude-notch-tracker、lumos）与用量监控生态（Claude-Code-Usage-Monitor、abtop、token-monitor、ClaudeBar）及 UI 参考项目（Edge-Drop、widgetsack）。
 
+## 附：美感与观感调研（2026-08-18 第二轮）
+
+### 参考项目
+
+| 项目 | 亮点 | 可借鉴 |
+| --- | --- | --- |
+| window-vibrancy（tauri 官方，1k★） | Windows Mica/Acrylic 原生材质 | 岛的透明背景换成原生玻璃材质 |
+| Edge-Drop（422★） | Framer Motion 弹簧形变动画 | 展开/收起用 spring 曲线而非线性过渡 |
+| Atoll（3.9k★）/ NotchDrop（2k★）/ SuperIsland（638★） | macOS 灵动岛交互细节 | 悬停预览、拖入交互、动画节奏 |
+| clash-verge-rev（138k★） | Tauri 深色玻璃 UI 天花板 | 阴影分层、边框渐变、按钮细节 |
+| cc-switch（128k★） | Tauri + React 最精致的 AI 工具界面 | 排版、卡片层级、配色 |
+| lumos | Mica 材质 + 用量预测小组件 | 材质落地方式 |
+
+### 落地清单（按风险排序）
+
+- P0 纯 CSS：spring 弹性动画曲线（cubic-bezier 回弹）、阴影分层 + 状态色溢光、边框高光渐变、按钮 hover/active 微动效、focus-visible 焦点环、滚动条细化
+- P1 材质：window-vibrancy 接入 Mica/Acrylic（注意 Win11 圆角黑角，需验证后作为主题选项）
+- P2 图标：单色 SVG 图标替换字符按钮（▶◀× 等）
+
 ## 一、功能对比矩阵
 
 | 能力 | Agent Island（我们） | EchoIsland | vibe-island | 用量监控群* | notch-tracker / lumos |
