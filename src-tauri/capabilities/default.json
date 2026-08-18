@@ -6,7 +6,6 @@
   "permissions": [
     "core:default",
     "core:window:allow-set-position",
-    "core:window:allow-set-size",
-    "notification:default"
+    "core:window:allow-set-size"
   ]
 }

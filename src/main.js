@@ -2,21 +2,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   getCurrentWindow,
+  currentMonitor,
   primaryMonitor,
   availableMonitors,
   LogicalPosition,
   LogicalSize,
 } from "@tauri-apps/api/window";
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
+import { clampIslandX, getSafeIslandHeight, getSafeIslandWidth } from "./layout.js";
 
 const inTauri = "__TAURI_INTERNALS__" in window;
 const tauriWin = inTauri ? getCurrentWindow() : null;
 
-const WINDOW_W = 420;
 const COLLAPSED_H = 36;
 const EXPANDED_H = 570;
 const POS_KEY = "agent-island-x";
@@ -43,10 +39,9 @@ try { agentOrder = JSON.parse(localStorage.getItem("agent-island-order") || "[]"
 let themeOpacity = Number(localStorage.getItem("agent-island-theme-opacity")) || 92;
 let themeRadius = Number(localStorage.getItem("agent-island-theme-radius")) || 26;
 let themeWidth = Number(localStorage.getItem("agent-island-theme-width")) || 420;
+let effectiveIslandWidth = themeWidth;
+let effectiveExpandedHeight = EXPANDED_H;
 let snapEnabled = localStorage.getItem("agent-island-theme-snap") === "1";
-let announceEnabled = localStorage.getItem("agent-island-theme-announce") === "1";
-let contrastEnabled = localStorage.getItem("agent-island-theme-contrast") === "1";
-let systemNotify = localStorage.getItem("agent-island-theme-notify") === "1";
 let showInTaskbar = localStorage.getItem("agent-island-theme-taskbar") === "1";
 let privacyManual = localStorage.getItem("agent-island-privacy") === "1";
 let privacyAuto = false;
@@ -119,8 +114,6 @@ const ICON_PATHS = {
   "Codex CLI": "/icons/codex.png",
   OpenCode: "/icons/opencode.png",
   Hermes: "/icons/hermes.png",
-  Copilot: "/icons/copilot.svg",
-  Cursor: "/icons/cursor.png",
 };
 
 async function virtualBounds() {
@@ -136,6 +129,47 @@ async function virtualBounds() {
   return { minX, maxX };
 }
 
+function fallbackDisplaySize() {
+  return {
+    width: Math.max(window.screen?.availWidth || 0, window.innerWidth || 0),
+    height: Math.max(window.screen?.availHeight || 0, window.innerHeight || 0),
+  };
+}
+
+async function displaySize() {
+  const fallback = fallbackDisplaySize();
+  if (!tauriWin) return fallback;
+  try {
+    const monitor = await currentMonitor() || await primaryMonitor();
+    if (!monitor) return fallback;
+    const scaleFactor = monitor.scaleFactor || 1;
+    return {
+      width: monitor.workArea.size.width / scaleFactor,
+      height: monitor.workArea.size.height / scaleFactor,
+    };
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function applyIslandDimensions(width, height) {
+  effectiveIslandWidth = width;
+  effectiveExpandedHeight = height;
+  document.documentElement.style.setProperty("--island-width", `${width}px`);
+  document.documentElement.style.setProperty("--island-expanded-height", `${height}px`);
+  if (tauriWin) {
+    tauriWin.setSize(new LogicalSize(width, expanded ? height : COLLAPSED_H)).catch(() => {});
+  }
+}
+
+async function syncIslandDimensions() {
+  const size = await displaySize();
+  applyIslandDimensions(
+    getSafeIslandWidth(themeWidth, size.width),
+    getSafeIslandHeight(EXPANDED_H, size.height),
+  );
+}
+
 // Position: restore saved absolute X, clamped to the virtual desktop
 async function positionIsland() {
   if (!tauriWin) return;
@@ -143,15 +177,14 @@ async function positionIsland() {
     const saved = Number(localStorage.getItem(POS_KEY));
     const bounds = await virtualBounds();
     if (Number.isFinite(saved) && bounds) {
-      const maxX = Math.max(bounds.minX, bounds.maxX - WINDOW_W);
-      const x = Math.min(Math.max(saved, bounds.minX), maxX);
+      const x = clampIslandX(saved, bounds.minX, bounds.maxX, effectiveIslandWidth);
       await tauriWin.setPosition(new LogicalPosition(x, 0));
       return;
     }
     const mon = await primaryMonitor();
     if (!mon) return;
     scale = mon.scaleFactor || 1;
-    const defaultX = Math.max(0, Math.floor((mon.size.width / scale - WINDOW_W) / 2));
+    const defaultX = Math.max(0, Math.floor((mon.workArea.size.width / scale - effectiveIslandWidth) / 2));
     await tauriWin.setPosition(new LogicalPosition(defaultX, 0));
   } catch (_) {}
 }
@@ -160,6 +193,8 @@ async function positionIsland() {
 let dragging = false;
 let startX = 0;
 let winStartX = 0;
+let dragBounds = null;
+let dragReady = false;
 
 island.addEventListener("mousedown", (e) => {
   if (e.target.closest("button")) return;
@@ -167,43 +202,77 @@ island.addEventListener("mousedown", (e) => {
   if (e.target.closest(".path-link")) return;
   if (!tauriWin) return;
   dragging = true;
+  dragReady = false;
   startX = e.screenX;
-  Promise.all([tauriWin.scaleFactor(), tauriWin.outerPosition()])
-    .then(([s, pos]) => { scale = s; winStartX = pos.x / s; })
-    .catch(() => { winStartX = 0; });
+  Promise.all([tauriWin.scaleFactor(), tauriWin.outerPosition(), virtualBounds()])
+    .then(([s, pos, bounds]) => {
+      if (!dragging) return;
+      scale = s;
+      winStartX = pos.x / s;
+      dragBounds = bounds;
+      dragReady = true;
+    })
+    .catch(() => {
+      if (!dragging) return;
+      winStartX = 0;
+      dragBounds = null;
+      dragReady = true;
+    });
 });
 
 window.addEventListener("mousemove", async (e) => {
-  if (!dragging || !tauriWin) return;
+  if (!dragging || !dragReady || !tauriWin) return;
   const dx = e.screenX - startX;
   try {
-    await tauriWin.setPosition(new LogicalPosition(winStartX + dx, 0));
+    const x = dragBounds
+      ? clampIslandX(winStartX + dx, dragBounds.minX, dragBounds.maxX, effectiveIslandWidth)
+      : winStartX + dx;
+    await tauriWin.setPosition(new LogicalPosition(x, 0));
   } catch (_) {}
 });
 
 async function stopDrag() {
   if (!dragging || !tauriWin) return;
   dragging = false;
+  if (!dragReady) {
+    dragBounds = null;
+    return;
+  }
   try {
     scale = await tauriWin.scaleFactor();
     const pos = await tauriWin.outerPosition();
     let x = pos.x / scale;
+    const bounds = dragBounds || await virtualBounds();
+    if (bounds) x = clampIslandX(x, bounds.minX, bounds.maxX, effectiveIslandWidth);
     if (snapEnabled) {
       const mon = await primaryMonitor();
       if (mon) {
         const sw = mon.size.width / scale;
-        const w = themeWidth;
+        const w = effectiveIslandWidth;
         const targets = [0, Math.max(0, (sw - w) / 2), Math.max(0, sw - w)];
         x = targets.reduce((a, b) => (Math.abs(b - x) < Math.abs(a - x) ? b : a));
-        await tauriWin.setPosition(new LogicalPosition(x, 0));
       }
     }
+    if (bounds) x = clampIslandX(x, bounds.minX, bounds.maxX, effectiveIslandWidth);
+    await tauriWin.setPosition(new LogicalPosition(x, 0));
     localStorage.setItem(POS_KEY, String(x));
-  } catch (_) {}
+  } catch (_) {
+  } finally {
+    dragBounds = null;
+    dragReady = false;
+  }
 }
 
 window.addEventListener("mouseup", stopDrag);
 window.addEventListener("blur", stopDrag);
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    syncIslandDimensions();
+    positionIsland();
+  }, 120);
+});
 
 // Expand/collapse: resize the native window with the island so transparent
 // space never blocks the desktop or triggers false hovers
@@ -214,11 +283,11 @@ function setExpanded(next) {
   island.classList.toggle("expanded", next);
   if (!tauriWin) return;
   if (next) {
-    tauriWin.setSize(new LogicalSize(WINDOW_W, EXPANDED_H)).catch(() => {});
+    tauriWin.setSize(new LogicalSize(effectiveIslandWidth, effectiveExpandedHeight)).catch(() => {});
   } else {
     collapseTimer = setTimeout(() => {
       if (!expanded) {
-        tauriWin.setSize(new LogicalSize(WINDOW_W, COLLAPSED_H)).catch(() => {});
+        tauriWin.setSize(new LogicalSize(effectiveIslandWidth, COLLAPSED_H)).catch(() => {});
       }
     }, 360);
   }
@@ -270,14 +339,13 @@ function applyTheme() {
   root.style.setProperty("--bg", bg);
   root.style.setProperty("--bg-deep", bgDeep);
   root.style.setProperty("--radius-lg", `${themeRadius}px`);
-  document.body.classList.toggle("high-contrast", contrastEnabled);
-  island.style.width = `${themeWidth}px`;
-  if (inTauri) {
-    tauriWin
-      .setSize(new LogicalSize(themeWidth, expanded ? EXPANDED_H : COLLAPSED_H))
-      .catch(() => {});
-    tauriWin.setSkipTaskbar(!showInTaskbar).catch(() => {});
-  }
+  const fallback = fallbackDisplaySize();
+  applyIslandDimensions(
+    getSafeIslandWidth(themeWidth, fallback.width),
+    getSafeIslandHeight(EXPANDED_H, fallback.height),
+  );
+  syncIslandDimensions();
+  if (inTauri) tauriWin.setSkipTaskbar(!showInTaskbar).catch(() => {});
 }
 
 function syncThemePop() {
@@ -287,9 +355,6 @@ function syncThemePop() {
     else if (key === "radius") el.value = themeRadius;
     else if (key === "width") el.value = themeWidth;
     else if (key === "snap") el.checked = snapEnabled;
-    else if (key === "announce") el.checked = announceEnabled;
-    else if (key === "contrast") el.checked = contrastEnabled;
-    else if (key === "notify") el.checked = systemNotify;
     else if (key === "taskbar") el.checked = showInTaskbar;
   });
 }
@@ -483,25 +548,6 @@ function escapeHtml(s) {
   }[c]));
 }
 
-function announce(text) {
-  if (!announceEnabled || !("speechSynthesis" in window)) return;
-  try {
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "zh-CN";
-    speechSynthesis.speak(u);
-  } catch (_) {}
-}
-
-async function sendSystemNotify(title, body) {
-  if (!systemNotify || !inTauri) return;
-  try {
-    let granted = await isPermissionGranted();
-    if (!granted) granted = (await requestPermission()) === "granted";
-    if (granted) sendNotification({ title, body });
-  } catch (_) {}
-}
-
 function dotClass(s) {
   return ({ working: "green", idle: "yellow", high_load: "yellow", running: "green", stopped: "red", error: "red", waiting: "yellow", done: "green" }[s] || "gray");
 }
@@ -604,7 +650,8 @@ function updateAgentStrip() {
         const lines = (agent.recent_output || []).slice(-3).join("\n") || "暂无日志";
         cardPreviewEl.textContent = lines;
         const rect = chip.getBoundingClientRect();
-        const left = Math.max(8, Math.min(rect.left - 40, WINDOW_W - 300 - 8));
+        const previewWidth = Math.min(300, Math.max(180, effectiveIslandWidth - 16));
+        const left = Math.max(8, Math.min(rect.left - 40, effectiveIslandWidth - previewWidth - 8));
         const top = Math.max(36, rect.bottom + 4);
         cardPreviewEl.style.left = `${left}px`;
         cardPreviewEl.style.top = `${top}px`;
@@ -705,8 +752,6 @@ function pushNotify(agent, kind, sess) {
   }
   group.items.push({ kind, label, sessName: sess?.name || "" });
   if (group.items.length > 8) group.items.shift();
-  announce(`${agent.name}，${label}`);
-  sendSystemNotify(agent.name, label + (sess?.name ? ` · ${sess.name}` : ""));
   clearTimeout(group.timer);
   group.timer = setTimeout(() => dismissNotifyGroup(agent.name), 6500);
   while (notifyGroups.size > 3) {
@@ -787,7 +832,6 @@ function applyPrivacy() {
   document.body.classList.toggle("privacy-mask", on);
   btnPrivacy.classList.toggle("active", on);
   privacyBadge.classList.toggle("hidden", !on);
-  if (inTauri) invoke("set_remote_privacy", { enabled: on }).catch(() => {});
 }
 
 function togglePrivacy() {
@@ -802,7 +846,7 @@ function hideQuickMenu() {
 
 function showQuickMenu(x, y) {
   setExpanded(true);
-  const left = Math.max(8, Math.min(x - 10, WINDOW_W - 132 - 8));
+  const left = Math.max(8, Math.min(x - 10, effectiveIslandWidth - 132 - 8));
   const top = Math.max(40, y + 4);
   quickMenuEl.style.left = `${left}px`;
   quickMenuEl.style.top = `${top}px`;
@@ -1089,11 +1133,8 @@ themePop.addEventListener("input", (e) => {
   else if (key === "radius") themeRadius = Number(e.target.value);
   else if (key === "width") themeWidth = Number(e.target.value);
   else if (key === "snap") snapEnabled = e.target.checked;
-  else if (key === "announce") announceEnabled = e.target.checked;
-  else if (key === "contrast") contrastEnabled = e.target.checked;
-  else if (key === "notify") systemNotify = e.target.checked;
   else if (key === "taskbar") showInTaskbar = e.target.checked;
-  const boolKey = key === "snap" || key === "announce" || key === "contrast" || key === "notify" || key === "taskbar";
+  const boolKey = key === "snap" || key === "taskbar";
   localStorage.setItem(`agent-island-theme-${key}`, String(boolKey ? (e.target.checked ? "1" : "0") : e.target.value));
   applyTheme();
 });
@@ -1209,7 +1250,7 @@ applyPrivacy();
 applyFields();
 syncFocusPop();
 syncThemePop();
-positionIsland();
+syncIslandDimensions().then(positionIsland);
 poll();
 setInterval(poll, 3000);
 

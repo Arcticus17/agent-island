@@ -73,13 +73,6 @@ struct AgentDef {
     send_args: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct RelayConfig {
-    url: String,
-    device_id: String,
-    token: String,
-}
-
 static AGENT_DEFS: OnceLock<Mutex<Option<(Instant, Vec<AgentDef>)>>> = OnceLock::new();
 
 fn default_agent_defs() -> Vec<AgentDef> {
@@ -132,20 +125,6 @@ fn default_agent_defs() -> Vec<AgentDef> {
                 "-z".into(), "{prompt}".into(),
             ],
         },
-        AgentDef {
-            name: "Copilot".into(),
-            keyword: "copilot".into(),
-            log_kind: "copilot".into(),
-            resume_args: vec![],
-            send_args: vec![],
-        },
-        AgentDef {
-            name: "Cursor".into(),
-            keyword: "cursor".into(),
-            log_kind: String::new(),
-            resume_args: vec![],
-            send_args: vec![],
-        },
     ]
 }
 
@@ -187,172 +166,6 @@ fn reload_agent_defs() {
     }
 }
 
-fn agents_path() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".agent-island")
-        .join("agents.json")
-}
-
-fn relay_path() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".agent-island")
-        .join("relay.json")
-}
-
-fn load_relay_config() -> Option<RelayConfig> {
-    let path = relay_path();
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-}
-
-fn save_relay_config(cfg: &RelayConfig) -> Result<(), String> {
-    let path = relay_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let data = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
-    fs::write(path, data).map_err(|e| e.to_string())
-}
-
-fn relay_push(cfg: &RelayConfig, body: &str) -> Result<(), String> {
-    use std::io::Write;
-    let rest = cfg
-        .url
-        .trim_start_matches("http://")
-        .trim_start_matches("https://");
-    let host_port = match rest.find('/') {
-        Some(i) => &rest[..i],
-        None => rest,
-    };
-    let (host, port) = match host_port.rsplit_once(':') {
-        Some((h, p)) => (h, p.parse::<u16>().unwrap_or(80)),
-        None => (host_port, 80),
-    };
-    let path = "/api/push";
-    let mut stream = std::net::TcpStream::connect((host, port)).map_err(|e| e.to_string())?;
-    let req = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\nX-Device-Id: {}\r\nX-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        cfg.device_id,
-        cfg.token,
-        body.len()
-    );
-    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-fn set_relay_config(
-    url: String,
-    device_id: String,
-    token: String,
-    state: tauri::State<AppState>,
-) -> Result<(), String> {
-    let cfg = RelayConfig {
-        url,
-        device_id,
-        token,
-    };
-    save_relay_config(&cfg)?;
-    *state.relay.lock().unwrap() = Some(cfg);
-    Ok(())
-}
-
-#[tauri::command]
-fn get_relay_config(state: tauri::State<AppState>) -> Option<RelayConfig> {
-    state.relay.lock().unwrap().clone()
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct MarketplaceItem {
-    name: String,
-    keyword: String,
-    log_kind: String,
-    resume_args: Vec<String>,
-    send_args: Vec<String>,
-    description: String,
-}
-
-fn marketplace_items() -> Vec<MarketplaceItem> {
-    vec![
-        MarketplaceItem {
-            name: "Aider".into(),
-            keyword: "aider".into(),
-            log_kind: String::new(),
-            resume_args: vec![],
-            send_args: vec![
-                "{exe}".into(), "--message".into(), "{prompt}".into(), "--yes-always".into(),
-            ],
-            description: "Aider：终端里的 AI 结对编程助手".into(),
-        },
-        MarketplaceItem {
-            name: "Gemini CLI".into(),
-            keyword: "gemini".into(),
-            log_kind: String::new(),
-            resume_args: vec![],
-            send_args: vec!["{exe}".into(), "-p".into(), "{prompt}".into()],
-            description: "Gemini CLI：Google 官方终端 Agent".into(),
-        },
-        MarketplaceItem {
-            name: "Cline".into(),
-            keyword: "cline".into(),
-            log_kind: String::new(),
-            resume_args: vec![],
-            send_args: vec![],
-            description: "Cline：VS Code 里的自主编码 Agent（进程监控）".into(),
-        },
-        MarketplaceItem {
-            name: "Qwen Code".into(),
-            keyword: "qwen".into(),
-            log_kind: String::new(),
-            resume_args: vec![],
-            send_args: vec![],
-            description: "Qwen Code：通义千问编程 CLI（进程监控）".into(),
-        },
-        MarketplaceItem {
-            name: "Windsurf".into(),
-            keyword: "windsurf".into(),
-            log_kind: String::new(),
-            resume_args: vec![],
-            send_args: vec![],
-            description: "Windsurf：AI 编程编辑器（进程监控）".into(),
-        },
-    ]
-}
-
-#[tauri::command]
-fn get_agent_marketplace() -> Vec<MarketplaceItem> {
-    marketplace_items()
-}
-
-#[tauri::command]
-fn install_marketplace_agent(name: String) -> Result<String, String> {
-    let item = marketplace_items()
-        .into_iter()
-        .find(|i| i.name == name)
-        .ok_or_else(|| "未找到该适配器".to_string())?;
-    let def = AgentDef {
-        name: item.name.clone(),
-        keyword: item.keyword.clone(),
-        log_kind: item.log_kind.clone(),
-        resume_args: item.resume_args.clone(),
-        send_args: item.send_args.clone(),
-    };
-    let path = agents_path();
-    let mut defs = load_agent_defs();
-    defs.retain(|d| d.name != def.name);
-    defs.push(def);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let data = serde_json::to_string_pretty(&defs).map_err(|e| e.to_string())?;
-    fs::write(&path, data).map_err(|e| e.to_string())?;
-    reload_agent_defs();
-    Ok(item.name)
-}
-
 fn fill_template(template: &[String], exe: &str, session: &str, prompt: Option<&str>) -> Vec<String> {
     template
         .iter()
@@ -391,8 +204,6 @@ struct AppState {
     session: Mutex<SessionState>,
     stats_path: PathBuf,
     daily_path: PathBuf,
-    remote_privacy: AtomicBool,
-    relay: Mutex<Option<RelayConfig>>,
     send_tasks: Mutex<HashMap<String, Arc<SendTask>>>,
 }
 
@@ -1024,31 +835,6 @@ fn read_opencode_log() -> Option<LogSnapshot> {
     })
 }
 
-fn copilot_snapshot(path: &Path) -> Option<LogSnapshot> {
-    let text = read_tail(path, 12 * 1024);
-    let mut recent = Vec::new();
-    for line in text.lines().rev() {
-        let clean = clean_line(line, 160);
-        if !clean.is_empty() && !recent.contains(&clean) {
-            recent.push(clean);
-        }
-        if recent.len() >= 5 {
-            break;
-        }
-    }
-    if recent.is_empty() {
-        recent.push("暂无输出".to_string());
-    }
-    Some(LogSnapshot {
-        path: path.display().to_string(),
-        recent,
-        file: None,
-        cwd: None,
-        log_status: None,
-        alert: None,
-    })
-}
-
 fn list_newest_files(root: &Path, depth: usize, ext: &str, max: usize) -> Vec<PathBuf> {
     let mut found: Vec<(SystemTime, PathBuf)> = Vec::new();
     fn walk(dir: &Path, depth: usize, ext: &str, found: &mut Vec<(SystemTime, PathBuf)>) {
@@ -1121,16 +907,6 @@ fn codex_sessions() -> Vec<AgentSession> {
     list_newest_files(&root, 5, "jsonl", 3)
         .into_iter()
         .filter_map(|path| codex_snapshot(&path).map(|snap| to_session(&path, snap)))
-        .collect()
-}
-
-fn copilot_sessions() -> Vec<AgentSession> {
-    let Some(root) = home_dir().map(|h| h.join(".copilot").join("logs")) else {
-        return Vec::new();
-    };
-    list_newest_files(&root, 2, "log", 3)
-        .into_iter()
-        .filter_map(|path| copilot_snapshot(&path).map(|snap| to_session(&path, snap)))
         .collect()
 }
 
@@ -1261,7 +1037,6 @@ fn build_sessions(name: &str) -> Vec<AgentSession> {
         "claude" => claude_sessions(),
         "codex" => codex_sessions(),
         "opencode" => opencode_sessions(),
-        "copilot" => copilot_sessions(),
         "hermes" => hermes_sessions(),
         _ => Vec::new(),
     }
@@ -2006,11 +1781,6 @@ fn privacy_active(state: tauri::State<AppState>) -> bool {
     })
 }
 
-#[tauri::command]
-fn set_remote_privacy(enabled: bool, state: tauri::State<AppState>) {
-    state.remote_privacy.store(enabled, Ordering::SeqCst);
-}
-
 fn toggle_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
@@ -2071,196 +1841,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn marketplace_has_adapters() {
-        assert!(!marketplace_items().is_empty());
-        assert!(marketplace_items().iter().any(|i| i.name == "Aider"));
-    }
-
-    #[test]
     fn default_defs_cover_core_agents() {
         let defs = default_agent_defs();
-        for name in ["Claude Code", "Codex CLI", "OpenCode", "Hermes", "Copilot", "Cursor"] {
+        for name in ["Claude Code", "Codex CLI", "OpenCode", "Hermes"] {
             assert!(defs.iter().any(|d| d.name == name), "missing {name}");
         }
     }
-}
-
-const REMOTE_PORT: u16 = 8765;
-
-const REMOTE_HTML: &str = r#"<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark light">
-<title>Agent Island Remote</title>
-<style>
-body{background:#121214;color:#f2f2f5;font-family:"Segoe UI","Microsoft YaHei",sans-serif;margin:0;padding:24px}
-h1{font-size:18px;margin:0 0 16px}
-.card{background:#1c1c1f;border:1px solid #2a2a2e;border-radius:10px;padding:12px 14px;margin-bottom:10px}
-.row{display:flex;align-items:center;gap:10px}
-.dot{width:9px;height:9px;border-radius:50%}
-.green{background:#30d158}.yellow{background:#ffd60a}.red{background:#ff453a}.gray{background:#636366}
-.name{font-weight:600}.cwd{color:#9a9aa0;font-size:12px;margin-top:4px;word-break:break-all}
-.out{color:#c8c8cc;font-size:12px;margin-top:6px;white-space:pre-wrap;max-height:64px;overflow:hidden}
-.meta{color:#8e8e93;font-size:11px;margin-top:4px}
-</style>
-</head>
-<body>
-<h1>Agent Island</h1>
-<div id="updated" class="meta"></div>
-<div id="list">加载中...</div>
-<script>
-async function load(){
-  try{
-    const r=await fetch('/api/agents');
-    const data=await r.json();
-    const colors={working:'green',running:'green',done:'green',idle:'yellow',waiting:'yellow',high_load:'yellow',stopped:'red',error:'red'};
-    const statusText={working:'工作中',running:'工作中',done:'已完成',idle:'等待中',waiting:'等待确认',high_load:'高负载',stopped:'已停止',error:'报错'};
-    document.getElementById('list').innerHTML=data.map(a=>{
-      const c=colors[a.status]||'gray';
-      return '<div class="card"><div class="row"><span class="dot '+c+'"></span><span class="name"></span><span class="meta"></span></div><div class="cwd"></div><div class="out"></div></div>';
-    }).join('');
-    document.getElementById('updated').textContent='更新于 '+new Date().toLocaleTimeString();
-    const nodes=document.querySelectorAll('.card');
-    nodes.forEach((n,i)=>{
-      const a=data[i]; if(!a)return;
-      n.querySelector('.name').textContent=a.name+' · '+(statusText[a.status]||a.status||'-');
-      n.querySelector('.meta').textContent='CPU '+(a.cpu!=null?a.cpu.toFixed(1)+'%':'-')+' · 内存 '+(a.memory!=null?a.memory.toFixed(0)+' MB':'-')+' · '+(a.session_count||0)+' 会话';
-      n.querySelector('.cwd').textContent=a.cwd||'-';
-      n.querySelector('.out').textContent=(a.recent_output||[]).slice(-3).join('\n')||'暂无日志';
-    });
-  }catch(e){
-    document.getElementById('list').textContent='无法连接 Agent Island';
-  }
-}
-load();
-setInterval(load,3000);
-</script>
-</body>
-</html>"#;
-
-fn local_ipv4() -> Option<String> {
-    use std::net::UdpSocket;
-    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    let ip = socket.local_addr().ok()?.ip();
-    if ip.is_unspecified() || ip.is_loopback() {
-        None
-    } else {
-        Some(ip.to_string())
-    }
-}
-
-#[tauri::command]
-fn get_remote_url() -> String {
-    format!(
-        "http://{}:{REMOTE_PORT}",
-        local_ipv4().unwrap_or_else(|| "localhost".to_string())
-    )
-}
-
-fn handle_remote(mut stream: std::net::TcpStream, app: tauri::AppHandle) {
-    use std::io::{Read, Write};
-    let mut buf = [0u8; 8192];
-    let n = match stream.read(&mut buf) {
-        Ok(n) => n,
-        Err(_) => return,
-    };
-    let req = String::from_utf8_lossy(&buf[..n]);
-    let path = req
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .unwrap_or("/");
-    let (status, content_type, body) = if path.starts_with("/api/agents") {
-        let state = app.state::<AppState>();
-        let mask_remote =
-            state.remote_privacy.load(Ordering::SeqCst) || path.contains("privacy=1");
-        let agents = get_agents(state);
-        let agents = if mask_remote {
-            agents
-                .into_iter()
-                .map(|mut a| {
-                    a.cwd = Some("[已隐藏]".to_string());
-                    a.current_file = Some("[已隐藏]".to_string());
-                    a.recent_output = vec!["[已隐藏]".to_string()];
-                    a.session_list = a
-                        .session_list
-                        .into_iter()
-                        .map(|mut s| {
-                            s.cwd = Some("[已隐藏]".to_string());
-                            s.current_file = Some("[已隐藏]".to_string());
-                            s.recent_output = vec!["[已隐藏]".to_string()];
-                            s
-                        })
-                        .collect();
-                    a
-                })
-                .collect()
-        } else {
-            agents
-        };
-        let json = serde_json::to_string(&agents).unwrap_or_else(|_| "[]".to_string());
-        ("200 OK", "application/json; charset=utf-8", json)
-    } else if path == "/" || path.starts_with("/?") {
-        (
-            "200 OK",
-            "text/html; charset=utf-8",
-            REMOTE_HTML.to_string(),
-        )
-    } else {
-        (
-            "404 Not Found",
-            "text/plain; charset=utf-8",
-            "not found".to_string(),
-        )
-    };
-    let _ = write!(
-        stream,
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    let _ = stream.flush();
-}
-
-fn start_remote_server(app: tauri::AppHandle) {
-    std::thread::spawn(move || {
-        let listener = match std::net::TcpListener::bind(("0.0.0.0", REMOTE_PORT)) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("remote server failed to bind: {e}");
-                return;
-            }
-        };
-        for stream in listener.incoming().flatten() {
-            let app = app.clone();
-            std::thread::spawn(move || handle_remote(stream, app));
-        }
-    });
-}
-
-fn start_relay_sync(app: tauri::AppHandle) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(5));
-        let state = app.state::<AppState>();
-        let cfg = state.relay.lock().unwrap().clone();
-        if let Some(cfg) = cfg {
-            if !cfg.url.is_empty() && !cfg.device_id.is_empty() {
-                let agents = get_agents(state);
-                let body = serde_json::to_string(&agents).unwrap_or_else(|_| "[]".to_string());
-                let _ = relay_push(&cfg, &body);
-            }
-        }
-    });
 }
 
 pub fn run() {
     let stats_path = stats_path();
     let daily_path = daily_path();
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             sys: Mutex::new(System::new_all()),
             session: Mutex::new(SessionState {
@@ -2275,18 +1867,12 @@ pub fn run() {
             }),
             stats_path,
             daily_path,
-            remote_privacy: AtomicBool::new(false),
-            relay: Mutex::new(load_relay_config()),
             send_tasks: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             get_agents,
             get_stats_report,
             reload_agent_defs,
-            get_agent_marketplace,
-            install_marketplace_agent,
-            set_relay_config,
-            get_relay_config,
             open_project_dir,
             open_path,
             open_terminal,
@@ -2300,8 +1886,6 @@ pub fn run() {
             get_autostart,
             set_autostart,
             privacy_active,
-            set_remote_privacy,
-            get_remote_url,
             open_overview
         ])
         .on_window_event(|window, event| {
@@ -2399,8 +1983,6 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            start_remote_server(app.handle().clone());
-            start_relay_sync(app.handle().clone());
             #[cfg(target_os = "windows")]
             start_global_hotkeys(app.handle().clone());
             Ok(())

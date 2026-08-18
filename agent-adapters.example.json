@@ -34,19 +34,5 @@
     "log_kind": "hermes",
     "resume_args": ["{exe}", "--resume", "{session}"],
     "send_args": ["{exe}", "--resume", "{session}", "-z", "{prompt}"]
-  },
-  {
-    "name": "Copilot",
-    "keyword": "copilot",
-    "log_kind": "copilot",
-    "resume_args": [],
-    "send_args": []
-  },
-  {
-    "name": "Cursor",
-    "keyword": "cursor",
-    "log_kind": "",
-    "resume_args": [],
-    "send_args": []
   }
 ]
