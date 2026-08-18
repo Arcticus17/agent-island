@@ -8,6 +8,8 @@
 - Agent 监控：Claude Code、Codex CLI、OpenCode、Hermes
 - 事件通知：报错/完成/等待通知卡，按 Agent 分组折叠，自动展开与收起
 - 用量监控：Claude Code 5 小时窗口 tokens/费用、Codex 额度百分比与重置倒计时，超限变色预警
+- Hook 事件：Claude Code 会话完成/通知秒级直达；危险命令在岛上弹审批卡，允许/拒绝/回退原生确认
+- 终端跳回：一键跳回 Agent 所在终端窗口
 - 会话总览：独立窗口实时列出会话、日志、统计，可发消息、恢复、停止、重启
 - 全局快捷键：`Ctrl+Alt+I` 呼出/隐藏小岛，`Ctrl+Alt+O` 打开总览
 - 隐私遮罩：录屏/共享时自动模糊日志与路径
@@ -41,6 +43,8 @@
 | `Ctrl+Alt+O` | 全局打开总览 |
 
 右键或长按小岛也会弹出快捷菜单。
+
+点击展开面板的“事件”按钮即可接入 Claude hooks（会写入 `~/.claude/settings.json`，原文件自动备份为 `settings.json.agent-island.bak`）。
 
 ## 配置
 

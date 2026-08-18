@@ -1,5 +1,6 @@
 // v10 — resident island: hover expansion, drag persistence, official Tauri API
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   getCurrentWindow,
   currentMonitor,
@@ -92,6 +93,9 @@ const btnTerm = $("btn-term");
 const btnStop = $("btn-stop");
 const btnRestart = $("btn-restart");
 const btnOverview = $("btn-overview");
+const btnJump = $("btn-jump");
+const btnHook = $("btn-hook");
+const approvalStackEl = $("approval-stack");
 const notifyStackEl = $("notify-stack");
 const btnPrivacy = $("btn-privacy");
 const btnFocus = $("btn-focus");
@@ -427,6 +431,7 @@ function refresh() {
     btnNext.disabled = true;
     btnDir.disabled = true;
     btnTerm.disabled = true;
+    btnJump.disabled = true;
     btnStop.disabled = true;
     btnRestart.disabled = true;
     updateIconStack();
@@ -494,6 +499,7 @@ function refresh() {
   const hasCwd = Boolean(useCwd && a.status !== "stopped");
   btnDir.disabled = !hasCwd;
   btnTerm.disabled = !hasCwd;
+  btnJump.disabled = !hasCwd;
   btnStop.disabled = a.status === "stopped";
   btnRestart.disabled = !a.can_restart;
   if (confirmingStop && confirmAgent !== a.name) {
@@ -897,6 +903,90 @@ function applyPrivacy() {
   privacyBadge.classList.toggle("hidden", !on);
 }
 
+let hookEnabled = false;
+const pendingApprovals = new Map();
+
+function refreshHookButton() {
+  btnHook.classList.toggle("active", hookEnabled);
+  btnHook.title = hookEnabled ? "Claude hooks 已接入，点击断开" : "接入 Claude hooks 事件与审批";
+}
+
+function renderApprovals() {
+  approvalStackEl.innerHTML = "";
+  for (const [id, a] of pendingApprovals) {
+    const card = document.createElement("div");
+    card.className = "approval-card";
+    const tool = a.tool === "Bash" ? "命令" : a.tool || "操作";
+    card.innerHTML = `
+      <div class="approval-head">
+        <span class="approval-title">Claude 待审批</span>
+        <span class="approval-meta">${escapeHtml(a.session ? `会话 ${a.session.slice(0, 8)}` : "")}</span>
+      </div>
+      <div class="approval-body">${tool}：<code>${escapeHtml(a.command || "-")}</code></div>
+      <div class="approval-actions">
+        <button class="approval-allow" title="允许执行">允许</button>
+        <button class="approval-deny" title="拒绝执行">拒绝</button>
+      </div>
+    `;
+    card.querySelector(".approval-allow").addEventListener("click", () => {
+      pendingApprovals.delete(id);
+      renderApprovals();
+      invoke("respond_hook_approval", { id, allow: true }).catch(() => {});
+    });
+    card.querySelector(".approval-deny").addEventListener("click", () => {
+      pendingApprovals.delete(id);
+      renderApprovals();
+      invoke("respond_hook_approval", { id, allow: false }).catch(() => {});
+    });
+    approvalStackEl.appendChild(card);
+  }
+}
+
+async function initHookEvents() {
+  if (!inTauri) return;
+  try { hookEnabled = await invoke("get_hook_status"); } catch (_) {}
+  refreshHookButton();
+  listen("hook-approval", (e) => {
+    const a = e.payload || {};
+    if (!a.id || pendingApprovals.has(a.id)) return;
+    pendingApprovals.set(a.id, a);
+    while (pendingApprovals.size > 3) {
+      const evicted = pendingApprovals.keys().next().value;
+      pendingApprovals.delete(evicted);
+      invoke("dismiss_hook_approval", { id: evicted }).catch(() => {});
+    }
+    renderApprovals();
+    setExpanded(true);
+    clearTimeout(eventCollapseTimer);
+    eventCollapseTimer = setTimeout(() => {
+      if (!island.matches(":hover") && !notifyGroups.size && !pendingApprovals.size) {
+        setExpanded(false);
+      }
+    }, 15000);
+  }).catch(() => {});
+  listen("hook-event", (e) => {
+    const ev = e.payload || {};
+    if (ev.kind === "stop") {
+      poll();
+    } else if (ev.kind === "notification" && ev.message) {
+      const agent = agents.find((x) => x.name === "Claude Code");
+      if (agent) pushNotify(agent, "waiting", null);
+    }
+  }).catch(() => {});
+}
+
+async function toggleHook() {
+  if (!inTauri) return;
+  try {
+    const msg = await invoke("set_hook_enabled", { enabled: !hookEnabled });
+    hookEnabled = !hookEnabled;
+    refreshHookButton();
+    console.log(msg);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
 function togglePrivacy() {
   privacyManual = !privacyManual;
   localStorage.setItem("agent-island-privacy", privacyManual ? "1" : "0");
@@ -1114,6 +1204,13 @@ async function openOverview() {
 }
 
 btnOverview.addEventListener("click", (e) => { e.stopPropagation(); openOverview(); });
+btnJump.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const a = agents[cur];
+  if (!a) return;
+  try { await invoke("focus_agent_terminal", { name: a.name }); } catch (_) {}
+});
+btnHook.addEventListener("click", (e) => { e.stopPropagation(); toggleHook(); });
 btnPrivacy.addEventListener("click", (e) => { e.stopPropagation(); togglePrivacy(); });
 btnFocus.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -1314,6 +1411,7 @@ applyFields();
 syncFocusPop();
 syncThemePop();
 syncIslandDimensions().then(positionIsland);
+initHookEvents();
 poll();
 setInterval(poll, 3000);
 

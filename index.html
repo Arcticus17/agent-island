@@ -26,6 +26,7 @@
         <span id="privacy-badge" class="hidden">隐私遮罩</span>
         <div class="header-actions">
           <button id="btn-privacy" title="隐私遮罩">隐私</button>
+          <button id="btn-hook" title="接入 Claude hooks 事件与审批">事件</button>
           <button id="btn-focus" title="专注模式">专注:关</button>
           <button id="btn-fields" title="显示字段">字段</button>
           <button id="btn-theme" title="外观设置">外观</button>
@@ -72,6 +73,7 @@
       </div>
       <div id="agent-strip"></div>
       <div id="card-preview" class="hidden"></div>
+      <div id="approval-stack"></div>
       <div id="notify-stack"></div>
       <div class="divider"></div>
       <div id="expanded-body">
@@ -103,6 +105,7 @@
           <button id="btn-overview" title="打开会话总览">总览</button>
           <button id="btn-dir" title="打开项目目录" disabled>打开目录</button>
           <button id="btn-term" title="打开终端" disabled>打开终端</button>
+          <button id="btn-jump" title="跳回 Agent 所在终端窗口" disabled>跳回</button>
           <button id="btn-stop" title="停止 Agent" disabled>停止</button>
           <button id="btn-restart" title="重启 Agent" disabled>重启</button>
         </div>
