@@ -17,8 +17,9 @@
 
 ### 落地清单（按风险排序）
 
-- P0 纯 CSS：spring 弹性动画曲线（cubic-bezier 回弹）、阴影分层 + 状态色溢光、边框高光渐变、按钮 hover/active 微动效、focus-visible 焦点环、滚动条细化
-- P1 材质：window-vibrancy 接入 Mica/Acrylic（注意 Win11 圆角黑角，需验证后作为主题选项）
+- P0 纯 CSS：spring 弹性动画曲线（cubic-bezier 回弹）、阴影分层 + 状态色溢光、边框高光渐变、按钮 hover/active 微动效、focus-visible 焦点环、滚动条细化（已完成，v1.4）
+- P1 材质：**实测结论——原生 Mica/Acrylic 不适合小岛**。window-vibrancy 的 DWM 材质会填满整个窗口矩形，我们的胶囊用 CSS border-radius 裁剪圆角，启用 Mica 后圆角外会变成磨砂色块破坏透明胶囊感；官方文档还提示 Acrylic 在 Win11 22621+ 调整大小时性能差（小岛每次展开都在 resize）。**改用 CSS Acrylic 实现同等效果**（blur 40px + 饱和度 + 噪点纹理），保形且无风险
+- P1 Windows 适配：Segoe UI Variable Text 原生字体（Win11 标配）、prefers-reduced-motion 尊重系统"减弱动画"设置、深浅色跟随（已有）
 - P2 图标：单色 SVG 图标替换字符按钮（▶◀× 等）
 
 ## 一、功能对比矩阵

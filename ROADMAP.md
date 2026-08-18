@@ -39,6 +39,12 @@
 - 细节：细滚动条 + hover 加深、用量条缓动曲线统一
 - 参考：Edge-Drop 弹簧动画、Atoll/NotchDrop 交互节奏、clash-verge-rev 阴影分层（详见调研文档"美感与观感"附节）
 
+## v1.5：Windows 适配 + Acrylic 质感（已完成）
+
+- CSS Acrylic：背景模糊从 28px 提升到 40px + 饱和度 1.8 + 细微噪点纹理（feTurbulence），视觉接近 Windows Acrylic 但保形——实测原生 Mica（window-vibrancy）会破坏胶囊圆角透明，且官方文档提示 Acrylic 在 Win11 调整大小时性能差，故放弃原生材质方案
+- 字体：Segoe UI Variable Text 优先（Win11 原生 UI 字体，Win10 自动回退 Segoe UI）
+- 已验证 Windows 适配项：深浅色跟随系统（prefers-color-scheme）、减弱动画尊重系统设置（prefers-reduced-motion）、DPI 缩放感知、任务栏隐藏
+
 ## 当前已完成
 
 - 常驻灵动岛：悬停展开、拖拽记忆、多显示器、托盘、开机自启
