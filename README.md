@@ -21,8 +21,8 @@
 
 从 GitHub Release 下载：
 
-- `Agent.Island_1.0.0_x64-setup.exe`：Windows 安装器
-- `Agent.Island_1.0.0_x64_en-US.msi`：MSI 安装包
+- `Agent.Island_1.6.1_x64-setup.exe`：Windows 安装器
+- `Agent.Island_1.6.1_x64_en-US.msi`：MSI 安装包
 
 日常使用直接运行安装后的 `Agent Island` 即可。
 
