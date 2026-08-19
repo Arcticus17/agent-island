@@ -40,6 +40,7 @@ try { agentOrder = JSON.parse(localStorage.getItem("agent-island-order") || "[]"
 let themeOpacity = Number(localStorage.getItem("agent-island-theme-opacity")) || 92;
 let themeRadius = Number(localStorage.getItem("agent-island-theme-radius")) || 26;
 let themeWidth = Number(localStorage.getItem("agent-island-theme-width")) || 420;
+let themeStyle = localStorage.getItem("agent-island-theme-style") || "mac";
 let effectiveIslandWidth = themeWidth;
 let effectiveExpandedHeight = EXPANDED_H;
 let snapEnabled = localStorage.getItem("agent-island-theme-snap") === "1";
@@ -342,8 +343,15 @@ function applyTheme() {
   const deepO = Math.min(1, themeOpacity / 100 + 0.05).toFixed(2);
   const bgDeep = dark ? `rgba(14, 14, 16, ${deepO})` : `rgba(238, 238, 243, ${deepO})`;
   const root = document.documentElement;
-  root.style.setProperty("--bg", bg);
-  root.style.setProperty("--bg-deep", bgDeep);
+  const mac = themeStyle === "mac";
+  document.body.classList.toggle("mac-style", mac);
+  if (mac) {
+    root.style.setProperty("--bg", "rgba(10, 10, 12, 0.97)");
+    root.style.setProperty("--bg-deep", "rgba(6, 6, 8, 0.99)");
+  } else {
+    root.style.setProperty("--bg", bg);
+    root.style.setProperty("--bg-deep", bgDeep);
+  }
   root.style.setProperty("--radius-lg", `${themeRadius}px`);
   const fallback = fallbackDisplaySize();
   applyIslandDimensions(
@@ -362,6 +370,9 @@ function syncThemePop() {
     else if (key === "width") el.value = themeWidth;
     else if (key === "snap") el.checked = snapEnabled;
     else if (key === "taskbar") el.checked = showInTaskbar;
+  });
+  themePop.querySelectorAll("[data-style]").forEach((el) => {
+    el.checked = el.dataset.style === themeStyle;
   });
 }
 
@@ -1298,6 +1309,13 @@ themePop.addEventListener("input", (e) => {
   else if (key === "taskbar") showInTaskbar = e.target.checked;
   const boolKey = key === "snap" || key === "taskbar";
   localStorage.setItem(`agent-island-theme-${key}`, String(boolKey ? (e.target.checked ? "1" : "0") : e.target.value));
+  applyTheme();
+});
+themePop.addEventListener("change", (e) => {
+  const style = e.target.dataset.style;
+  if (!style) return;
+  themeStyle = style;
+  localStorage.setItem("agent-island-theme-style", style);
   applyTheme();
 });
 window.addEventListener("keydown", (e) => {

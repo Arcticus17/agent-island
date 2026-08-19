@@ -45,6 +45,12 @@
 - 字体：Segoe UI Variable Text 优先（Win11 原生 UI 字体，Win10 自动回退 Segoe UI）
 - 已验证 Windows 适配项：深浅色跟随系统（prefers-color-scheme）、减弱动画尊重系统设置（prefers-reduced-motion）、DPI 缩放感知、任务栏隐藏
 
+## v1.6：MacBook 灵动岛风格（已完成）
+
+- 新增"风格"预设：外观面板可切换 玻璃 / Mac 灵动岛，默认 Mac 灵动岛
+- Mac 风格：纯黑胶囊（参考 MacBook 刘海），去除玻璃渐变与噪点纹理，保留状态色溢光、spring 动画与全部交互
+- 玻璃风格保留为备选，切换即时生效并持久化
+
 ## 当前已完成
 
 - 常驻灵动岛：悬停展开、拖拽记忆、多显示器、托盘、开机自启
