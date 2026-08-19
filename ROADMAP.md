@@ -51,6 +51,13 @@
 - Mac 风格：纯黑胶囊（参考 MacBook 刘海），去除玻璃渐变与噪点纹理，保留状态色溢光、spring 动画与全部交互
 - 玻璃风格保留为备选，切换即时生效并持久化
 
+## v1.6.1：GitHub 发版（已完成）
+
+- 推送 main + v1.1.0~v1.6.0 tag 到 GitHub，Actions 自动构建 EXE/MSI
+- 发现安装包版本号仍为 1.0.0（package.json/tauri.conf.json/Cargo.toml 未同步），修复为 1.6.1 并重发，删除 6 个命名错误的 Release
+- 现有 Release：v0.1.0、v1.0.0、v1.6.1（安装包 `Agent.Island_1.6.1_x64-setup.exe` / `_en-US.msi`）
+- 开发约定新增：**发版前必须同步三处版本号**（package.json、src-tauri/tauri.conf.json、src-tauri/Cargo.toml）
+
 ## 当前已完成
 
 - 常驻灵动岛：悬停展开、拖拽记忆、多显示器、托盘、开机自启
