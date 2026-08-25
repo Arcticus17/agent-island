@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicholasio/tauri-docs/refs/heads/v2/src/content/docs/_schema/config.schema.json",
   "productName": "Agent Island",
-  "version": "1.6.1",
+  "version": "1.8.1",
   "identifier": "com.agent-island.app",
   "build": {
     "frontendDist": "../dist",
@@ -16,7 +16,7 @@
     "publisher": "Arcticus17",
     "category": "DeveloperTool",
     "shortDescription": "Agent Island",
-    "longDescription": "一个常驻桌面的灵动岛小工具，用来一眼看到正在运行的 AI 编程 Agent。"
+    "longDescription": "涓€涓父椹绘闈㈢殑鐏靛姩宀涘皬宸ュ叿锛岀敤鏉ヤ竴鐪肩湅鍒版鍦ㄨ繍琛岀殑 AI 缂栫▼ Agent銆?
   },
   "app": {
     "windows": [
@@ -36,7 +36,7 @@
       },
       {
         "label": "overview",
-        "title": "Agent 会话总览",
+        "title": "Agent 浼氳瘽鎬昏",
         "url": "overview.html",
         "width": 480,
         "height": 640,
