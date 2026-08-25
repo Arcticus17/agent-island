@@ -546,6 +546,9 @@ function refresh() {
     expStatus.classList.remove("status-flash");
     void expStatus.offsetWidth;
     expStatus.classList.add("status-flash");
+    statusDot.classList.remove("ping");
+    void statusDot.offsetWidth;
+    statusDot.classList.add("ping");
   }
   island.classList.toggle("alert-error", a.status === "error");
   island.classList.toggle("working-glow", a.status === "working");
@@ -560,6 +563,9 @@ function refresh() {
     agentNameEl.classList.remove("fade-swap");
     void agentNameEl.offsetWidth;
     agentNameEl.classList.add("fade-swap");
+    expName.classList.remove("fade-swap");
+    void expName.offsetWidth;
+    expName.classList.add("fade-swap");
   }
   if (a.status === "error" && prev !== "error" && !quietActive()) {
     island.classList.add("flash-error");
