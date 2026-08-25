@@ -841,6 +841,9 @@ function pushNotify(agent, kind, sess) {
   if (quietActive()) return;
   if (focusMode === "errors" && kind !== "error") return;
   if (!canNotify(agent, kind)) return;
+  island.classList.remove("notify-attention");
+  void island.offsetWidth;
+  island.classList.add("notify-attention");
   const label = NOTIFY_LABEL[kind] || kind;
   let group = notifyGroups.get(agent.name);
   if (!group) {

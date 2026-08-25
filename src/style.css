@@ -133,6 +133,22 @@ body { display: flex; justify-content: center; }
 #island.status-done {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 12px 40px rgba(48, 209, 88, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
+#island.notify-attention {
+  animation: island-attention 0.55s ease;
+}
+@keyframes island-attention {
+  0% { transform: scaleX(1); }
+  30% { transform: scaleX(1.012); }
+  100% { transform: scaleX(1); }
+}
+#island.notify-attention::before {
+  animation: hairline-flash 0.8s ease;
+}
+@keyframes hairline-flash {
+  0% { opacity: 1; filter: brightness(1); }
+  50% { opacity: 1; filter: brightness(2.2); }
+  100% { opacity: 1; filter: brightness(1); }
+}
 
 /* ── MacBook Dynamic Island style ── */
 body.mac-style {
