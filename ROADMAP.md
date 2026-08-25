@@ -58,6 +58,14 @@
 - 现有 Release：v0.1.0、v1.0.0、v1.6.1（安装包 `Agent.Island_1.6.1_x64-setup.exe` / `_en-US.msi`）
 - 开发约定新增：**发版前必须同步三处版本号**（package.json、src-tauri/tauri.conf.json、src-tauri/Cargo.toml）
 
+## v1.7.0：界面细节打磨（已完成）
+
+- 状态展示：emoji（🟢🟡🔴）换成 圆点 + 状态色文字，与全项目圆点语言统一
+- 数值 tabular-nums：CPU/内存/时长等数字刷新不再跳动
+- 字符图标换统一 SVG：紧凑条箭头、会话切换 ◀▶、通知折叠箭头（旋转动画）、关闭 ×
+- 日志面板：等宽字体（Cascadia Mono，日志语义）+ 最新一行蓝色渐变高亮
+- 章节标签：accent 刻度线；紧凑条 Agent 名加粗加强存在感
+
 ## 当前已完成
 
 - 常驻灵动岛：悬停展开、拖拽记忆、多显示器、托盘、开机自启

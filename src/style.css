@@ -228,7 +228,8 @@ body.mac-style #island.alert-error {
   flex: 1;
   text-align: center;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
+  letter-spacing: 0.2px;
 }
 #nav-arrow {
   color: var(--text-secondary);
@@ -791,7 +792,11 @@ button:focus-visible {
   font-size: 10px;
   color: var(--text-secondary);
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
 }
+.notify-arrow svg { transition: transform 0.2s var(--ease-soft); }
+.notify-group:not(.open) .notify-arrow svg { transform: rotate(-90deg); }
 .notify-items {
   display: none;
   border-top: 1px solid var(--border);
@@ -899,6 +904,17 @@ body.privacy-mask .notify-item > span:last-child {
   color: var(--text-secondary);
   text-transform: uppercase;
   opacity: 0.75;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.section-label::before {
+  content: "";
+  width: 3px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.55;
 }
 .section-label:first-child { margin-top: 0; }
 .info-row { display: flex; justify-content: space-between; align-items: center; }
@@ -917,7 +933,25 @@ body.privacy-mask .notify-item > span:last-child {
   100% { background: transparent; }
 }
 .info-row .label { color: var(--text-secondary); font-size: 12px; }
-.info-row span:last-child { font-size: 12px; font-weight: 500; }
+.info-row span:last-child { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+#exp-status::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+  vertical-align: 1px;
+}
+#exp-status[data-status="working"] { color: var(--green); }
+#exp-status[data-status="idle"] { color: var(--yellow); }
+#exp-status[data-status="high_load"] { color: var(--yellow); }
+#exp-status[data-status="waiting"] { color: var(--yellow); }
+#exp-status[data-status="done"] { color: var(--green); }
+#exp-status[data-status="error"] { color: var(--red); }
+#exp-status[data-status="stopped"] { color: var(--red); }
 #exp-cwd {
   max-width: 230px;
   overflow: hidden;
@@ -961,6 +995,7 @@ body.privacy-mask .notify-item > span:last-child {
   padding: 8px 10px;
   font-size: 11px;
   line-height: 1.5;
+  font-family: Consolas, "Cascadia Mono", "Segoe UI Mono", "Microsoft YaHei", monospace;
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-all;
@@ -974,7 +1009,14 @@ body.privacy-mask .notify-item > span:last-child {
 }
 .log-line {
   min-height: 14px;
+  padding: 1px 4px;
+  margin: 0 -4px;
+  border-radius: 4px;
   animation: log-in 0.18s ease;
+}
+.log-line.latest {
+  color: var(--text);
+  background: linear-gradient(90deg, rgba(94, 156, 255, 0.14), rgba(94, 156, 255, 0.04) 70%, transparent);
 }
 @keyframes log-in {
   from { opacity: 0; transform: translateY(2px); }

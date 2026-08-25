@@ -419,7 +419,8 @@ function refresh() {
     expIcon.style.display = "none";
     expIcon.removeAttribute("src");
     expName.textContent = "-";
-    expStatus.textContent = "⚪";
+    expStatus.textContent = "无";
+    expStatus.removeAttribute("data-status");
     expPid.textContent = "-";
     expCpu.textContent = "-";
     expMem.textContent = "-";
@@ -471,7 +472,8 @@ function refresh() {
     expIcon.removeAttribute("src");
   }
   expName.textContent = multiSession && sess ? `${a.name} · ${sess.name}` : a.name;
-  expStatus.textContent = { working: "🟢 工作中", idle: "🟡 等待中", high_load: "🟠 高负载", stopped: "🔴 已停止", error: "🔴 报错", waiting: "🟡 等待确认", done: "🟢 已完成" }[a.status] || "⚪";
+  expStatus.textContent = { working: "工作中", idle: "等待中", high_load: "高负载", stopped: "已停止", error: "报错", waiting: "等待确认", done: "已完成" }[a.status] || "无状态";
+  expStatus.dataset.status = a.status || "";
   const pidText = a.pid != null ? String(a.pid) : "";
   const procText = a.sessions ? `${a.sessions} 进程` : "";
   expPid.textContent = [pidText, procText].filter(Boolean).join(" · ") || "-";
@@ -769,6 +771,13 @@ function renderOutput(lines, key) {
   }
   expOutput.appendChild(frag);
   while (expOutput.children.length > 200) expOutput.firstChild.remove();
+  if (added.length) {
+    const last = expOutput.lastElementChild;
+    if (last) {
+      for (const el of expOutput.querySelectorAll(".log-line")) el.classList.remove("latest");
+      last.classList.add("latest");
+    }
+  }
   lastOutputLines = next;
   expOutput.scrollTop = expOutput.scrollHeight;
   if (added.length) {
@@ -877,8 +886,8 @@ function renderNotifyGroups() {
           : `<span class="notify-letter">${escapeHtml((name || "?")[0])}</span>`}
         <span class="notify-title">${escapeHtml(name)}</span>
         <span class="notify-summary ${severity}">${escapeHtml(latest.label)}${group.items.length > 1 ? ` +${group.items.length - 1}` : ""}</span>
-        <span class="notify-arrow">${group.open ? "▾" : "▸"}</span>
-        <button class="notify-close" title="关闭" aria-label="关闭通知">×</button>
+        <span class="notify-arrow"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+        <button class="notify-close" title="关闭" aria-label="关闭通知"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
       <div class="notify-items">
         ${group.items.map((it) => `
