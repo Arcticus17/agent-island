@@ -13,3 +13,4 @@ secrets.*
 credentials.*
 auth.json
 *.local
+.superpowers/
