@@ -1,4 +1,5 @@
 pub mod claude;
+pub mod codex;
 
 use crate::domain::{ConversationMessage, DomainEvent};
 
