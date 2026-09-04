@@ -1,3 +1,4 @@
+mod adapters;
 mod domain;
 
 use serde::{Deserialize, Serialize};

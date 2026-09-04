@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"claude-s2","uuid":"u2","timestamp":"2026-09-04T11:00:00Z","message":{"role":"user","content":[{"type":"text","text":"run current checks"}]}}
+{"type":"assistant","sessionId":"claude-s2","uuid":"a3","timestamp":"2026-09-04T11:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"checks passed"}],"stop_reason":"end_turn"}}
