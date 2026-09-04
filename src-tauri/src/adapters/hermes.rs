@@ -263,4 +263,21 @@ mod tests {
         );
         assert_eq!(report.sessions[0].session_id, "hermes-date-project");
     }
+
+    #[test]
+    fn unicode_spaced_project_with_date_token_preserves_header_mapped_columns() {
+        let report = HermesAdapter.parse(
+            "PROJECT DATE SESSION_ID\n\
+             项目 2026-09-04 Alpha 2026-09-05 hermes-id\n",
+        );
+
+        assert_eq!(report.sessions.len(), 1);
+        assert_eq!(
+            report.sessions[0].project_path.as_deref(),
+            Some("项目 2026-09-04 Alpha")
+        );
+        assert_eq!(report.sessions[0].started_at_ms, 1_788_566_400_000);
+        assert_eq!(report.sessions[0].session_id, "hermes-id");
+        assert_eq!(report.skipped_lines, 0);
+    }
 }
