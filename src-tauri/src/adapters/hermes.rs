@@ -4,40 +4,51 @@ use crate::domain::{Confidence, EventSource, SessionIdentity, SessionLifecycle};
 /// Parses Hermes' session table. A table row identifies history, not live turn state.
 pub struct HermesAdapter;
 
+#[derive(Debug, Clone, Copy)]
+struct TableHeader {
+    project: usize,
+    date: usize,
+    session_id: usize,
+    columns: usize,
+}
+
 impl AgentAdapter for HermesAdapter {
     fn parse(&self, text: &str) -> ParseReport {
         let mut report = ParseReport::default();
+        let mut header = None;
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || is_rule(line) {
                 continue;
             }
+            if header.is_none() {
+                if let Some(parsed) = parse_header(line) {
+                    header = Some(parsed);
+                } else {
+                    report.skipped_lines += 1;
+                }
+                continue;
+            }
+            let header = header.unwrap();
             let columns: Vec<&str> = line.split_whitespace().collect();
-            let Some(date_index) = columns.iter().position(|value| is_date(value)) else {
-                continue;
-            };
-            if date_index == 0 || columns.len() <= date_index + 1 {
+            if columns.len() != header.columns {
                 report.skipped_lines += 1;
                 continue;
             }
-            let project = columns[..date_index].join(" ");
-            let Some(session_id) = columns.last().map(|value| value.trim_matches('"')) else {
-                report.skipped_lines += 1;
-                continue;
-            };
-            let session_id = session_id.to_owned();
-            if project.is_empty() || session_id.is_empty() {
+            let project = columns[header.project].trim_matches('"');
+            let session_id = columns[header.session_id].trim_matches('"');
+            if is_placeholder(project) || is_placeholder(session_id) {
                 report.skipped_lines += 1;
                 continue;
             }
-            let Some(at_ms) = parse_date_ms(columns[date_index]) else {
+            let Some(at_ms) = parse_date_ms(columns[header.date]) else {
                 report.skipped_lines += 1;
                 continue;
             };
             report.sessions.push(SessionIdentity {
                 agent_id: "hermes".to_owned(),
-                session_id,
-                project_path: Some(project.trim_matches('"').to_owned()),
+                session_id: session_id.to_owned(),
+                project_path: Some(project.to_owned()),
                 process_ids: Vec::new(),
                 started_at_ms: at_ms,
                 last_event_at_ms: at_ms,
@@ -56,14 +67,54 @@ fn is_rule(line: &str) -> bool {
     })
 }
 
-fn is_date(value: &str) -> bool {
-    value.len() == 10
-        && value.as_bytes()[4] == b'-'
-        && value.as_bytes()[7] == b'-'
-        && parse_date_ms(value).is_some()
+fn parse_header(line: &str) -> Option<TableHeader> {
+    let raw: Vec<String> = line
+        .split_whitespace()
+        .map(normalize_header)
+        .filter(|value| !value.is_empty())
+        .collect();
+    let mut columns = Vec::new();
+    let mut index = 0;
+    while index < raw.len() {
+        if raw[index] == "session" && raw.get(index + 1).map(String::as_str) == Some("id") {
+            columns.push("sessionid".to_owned());
+            index += 2;
+        } else {
+            columns.push(raw[index].clone());
+            index += 1;
+        }
+    }
+    let project = columns.iter().position(|value| value == "project")?;
+    let date = columns.iter().position(|value| value == "date")?;
+    let session_id = columns.iter().position(|value| value == "sessionid")?;
+    Some(TableHeader {
+        project,
+        date,
+        session_id,
+        columns: columns.len(),
+    })
+}
+
+fn normalize_header(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn is_placeholder(value: &str) -> bool {
+    value.is_empty()
+        || matches!(
+            value.to_ascii_lowercase().as_str(),
+            "-" | "—" | "–" | "none" | "null" | "unknown"
+        )
 }
 
 fn parse_date_ms(value: &str) -> Option<u64> {
+    if !value.is_ascii() || value.len() != 10 {
+        return None;
+    }
     let year = value[0..4].parse::<i64>().ok()?;
     let month = value[5..7].parse::<u32>().ok()?;
     let day = value[8..10].parse::<u32>().ok()?;
@@ -113,5 +164,20 @@ mod tests {
             .events
             .iter()
             .any(|event| matches!(event.kind, EventKind::TurnFailed | EventKind::TurnSucceeded)));
+    }
+
+    #[test]
+    fn table_columns_are_header_mapped_and_malformed_rows_are_skipped() {
+        let report = HermesAdapter.parse(
+            "PROJECT DATE SESSION_ID\n\
+             project-a 2026-09-04 hermes-1\n\
+             project-b 2026-09-04 —\n\
+             project-c 2026-13-99 hermes-3\n\
+             project-d 2026-09-04 hermes-4 status\n",
+        );
+
+        assert_eq!(report.sessions.len(), 1);
+        assert_eq!(report.sessions[0].session_id, "hermes-1");
+        assert_eq!(report.skipped_lines, 3);
     }
 }

@@ -13,11 +13,22 @@ impl AgentAdapter for OpenCodeAdapter {
             if line.trim().is_empty() {
                 continue;
             }
-            let Some(message) = field(line, "message") else {
+            let fields = parse_fields(line);
+            let Some(message) = fields
+                .iter()
+                .find(|(key, _)| key == "message")
+                .map(|(_, value)| value.as_str())
+            else {
                 report.skipped_lines += 1;
                 continue;
             };
-            let Some(at_ms) = timestamp(line) else {
+            // Parse directory as a structured field even though it is intentionally not copied
+            // into the user-facing message or diagnostic payload.
+            let _directory = fields
+                .iter()
+                .find(|(key, _)| key == "directory")
+                .map(|(_, value)| value.as_str());
+            let Some(at_ms) = timestamp(&fields, line) else {
                 report.skipped_lines += 1;
                 continue;
             };
@@ -51,24 +62,88 @@ impl AgentAdapter for OpenCodeAdapter {
     }
 }
 
-fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-    let marker = format!("{key}=");
-    let start = line.find(&marker)? + marker.len();
-    let value = &line[start..];
-    if value.starts_with('"') {
-        let end = value[1..].find('"')? + 1;
-        Some(&value[1..end])
-    } else if key == "message" {
-        Some(value.trim())
-    } else {
-        Some(value.split_whitespace().next().unwrap_or_default())
+fn parse_fields(line: &str) -> Vec<(String, String)> {
+    let bytes = line.as_bytes();
+    let mut fields = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        let key_start = index;
+        while index < bytes.len() && is_key_byte(bytes[index]) {
+            index += 1;
+        }
+        if key_start == index || index >= bytes.len() || bytes[index] != b'=' {
+            while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
+                index += 1;
+            }
+            continue;
+        }
+        let key = line[key_start..index].to_owned();
+        index += 1;
+        let value = if index < bytes.len() && bytes[index] == b'"' {
+            index += 1;
+            let mut value = String::new();
+            let mut escaped = false;
+            while index < bytes.len() {
+                let character = line[index..].chars().next().unwrap();
+                index += character.len_utf8();
+                if escaped {
+                    value.push(character);
+                    escaped = false;
+                } else if character == '\\' {
+                    escaped = true;
+                } else if character == '"' {
+                    break;
+                } else {
+                    value.push(character);
+                }
+            }
+            value
+        } else {
+            let value_start = index;
+            let mut value_end = index;
+            while index < bytes.len() {
+                if bytes[index].is_ascii_whitespace() {
+                    let boundary = index;
+                    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+                        index += 1;
+                    }
+                    if looks_like_key_value(bytes, index) {
+                        value_end = boundary;
+                        break;
+                    }
+                    continue;
+                }
+                let character = line[index..].chars().next().unwrap();
+                index += character.len_utf8();
+                value_end = index;
+            }
+            line[value_start..value_end].to_owned()
+        };
+        fields.push((key, value));
     }
+    fields
 }
 
-fn timestamp(line: &str) -> Option<u64> {
-    field(line, "timestamp")
-        .or_else(|| field(line, "time"))
-        .and_then(parse_rfc3339_ms)
+fn is_key_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
+}
+
+fn looks_like_key_value(bytes: &[u8], mut index: usize) -> bool {
+    let start = index;
+    while index < bytes.len() && is_key_byte(bytes[index]) {
+        index += 1;
+    }
+    index > start && index < bytes.len() && bytes[index] == b'='
+}
+
+fn timestamp(fields: &[(String, String)], line: &str) -> Option<u64> {
+    fields
+        .iter()
+        .find(|(key, _)| key == "timestamp" || key == "time")
+        .and_then(|(_, value)| parse_rfc3339_ms(value))
         .or_else(|| line.split_whitespace().find_map(parse_rfc3339_ms))
 }
 
@@ -123,6 +198,9 @@ fn truncate(text: &str, max_chars: usize) -> String {
 }
 
 fn parse_rfc3339_ms(timestamp: &str) -> Option<u64> {
+    if !timestamp.is_ascii() {
+        return None;
+    }
     let (date, time) = timestamp.split_once('T')?;
     if date.len() != 10 || &date[4..5] != "-" || &date[7..8] != "-" {
         return None;
@@ -237,5 +315,26 @@ mod tests {
             .events
             .iter()
             .any(|event| matches!(event.kind, EventKind::TurnFailed | EventKind::TurnSucceeded)));
+    }
+
+    #[test]
+    fn malformed_unicode_timestamp_is_skipped_without_panicking() {
+        let report = OpenCodeAdapter.parse(
+            "timestamp=123é12-34T00:00:00Z message=bad\n2026-09-04T10:00:00Z message=recovered\n",
+        );
+
+        assert_eq!(report.skipped_lines, 1);
+        assert_eq!(report.messages.len(), 1);
+        assert_eq!(report.messages[0].text, "recovered");
+    }
+
+    #[test]
+    fn unquoted_message_stops_before_following_fields() {
+        let report = OpenCodeAdapter
+            .parse("2026-09-04T10:00:00Z message=working directory=\"D:\\\\private\" token=abc\n");
+
+        assert_eq!(report.messages.len(), 1);
+        assert_eq!(report.messages[0].text, "working");
+        assert!(!report.messages[0].text.contains("private"));
     }
 }
