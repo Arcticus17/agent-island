@@ -9,13 +9,26 @@ use crate::domain::{
 /// Normalizes the event stream written by Codex CLI into the shared domain model.
 pub struct CodexAdapter;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolCallKind {
+    Function,
+    Custom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ToolCallIdentity {
+    session_id: String,
+    turn_id: String,
+    call_id: String,
+}
+
 impl AgentAdapter for CodexAdapter {
     fn parse(&self, text: &str) -> ParseReport {
         let mut report = ParseReport::default();
         let mut session_id = String::from("codex");
         let mut turn_id = String::from("turn-1");
         let mut turn_number = 1_u64;
-        let mut outstanding_calls = HashMap::<String, String>::new();
+        let mut outstanding_calls = HashMap::<ToolCallIdentity, ToolCallKind>::new();
 
         for (line_number, line) in text.lines().enumerate() {
             if line.trim().is_empty() {
@@ -201,19 +214,57 @@ impl AgentAdapter for CodexAdapter {
                     report.skipped_lines += 1;
                     continue;
                 };
-                outstanding_calls.insert(call_id.to_owned(), turn_id.clone());
+                let call_kind = if is_function_call {
+                    ToolCallKind::Function
+                } else {
+                    ToolCallKind::Custom
+                };
+                let required_field = if is_function_call {
+                    "arguments"
+                } else {
+                    "input"
+                };
+                if non_empty_string(payload, "name").is_none()
+                    || payload
+                        .get(required_field)
+                        .map(Value::is_null)
+                        .unwrap_or(true)
+                {
+                    report.skipped_lines += 1;
+                    continue;
+                }
+                let identity = ToolCallIdentity {
+                    session_id: session_id.clone(),
+                    turn_id: turn_id.clone(),
+                    call_id: call_id.to_owned(),
+                };
+                if outstanding_calls.contains_key(&identity) {
+                    report.skipped_lines += 1;
+                    continue;
+                }
+                outstanding_calls.insert(identity, call_kind);
             } else if is_function_output || is_custom_output {
                 let Some(call_id) = non_empty_string(payload, "call_id") else {
                     report.skipped_lines += 1;
                     continue;
                 };
+                let call_kind = if is_function_output {
+                    ToolCallKind::Function
+                } else {
+                    ToolCallKind::Custom
+                };
+                let identity = ToolCallIdentity {
+                    session_id: session_id.clone(),
+                    turn_id: turn_id.clone(),
+                    call_id: call_id.to_owned(),
+                };
                 if payload.get("output").is_none()
-                    || outstanding_calls.get(call_id) != Some(&turn_id)
+                    || outstanding_calls.get(&identity) != Some(&call_kind)
                 {
                     report.skipped_lines += 1;
                     continue;
                 }
-                outstanding_calls.remove(call_id);
+                outstanding_calls.remove(&identity);
             }
 
             let kind = if is_function_call || is_custom_call {
@@ -524,7 +575,9 @@ mod tests {
             "\n",
             r#"{"timestamp":"2026-09-04T10:00:01Z","type":"event_msg","payload":{"type":"exec_approval_request","turn_id":"t"}}"#,
             "\n",
-            r#"{"timestamp":"2026-09-04T10:00:02Z","type":"event_msg","payload":{"type":"error","message":"failed text is not inferred"}}"#,
+            r#"{"timestamp":"2026-09-04T10:00:02Z","type":"event_msg","payload":{"type":"request_user_input","turn_id":"t","message":"confirm"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:03Z","type":"event_msg","payload":{"type":"error","message":"failed text is not inferred"}}"#,
         );
 
         let report = CodexAdapter.parse(input);
@@ -538,6 +591,7 @@ mod tests {
             [
                 &EventKind::TurnStarted,
                 &EventKind::AttentionRequested { approval: true },
+                &EventKind::AttentionRequested { approval: false },
                 &EventKind::TurnFailed,
             ]
         );
@@ -595,5 +649,67 @@ mod tests {
             report.events.last().map(|event| &event.kind),
             Some(EventKind::TurnSucceeded)
         ));
+    }
+
+    #[test]
+    fn active_tool_identity_rejects_duplicate_kind_and_scope_mismatches() {
+        let input = concat!(
+            r#"{"timestamp":"2026-09-04T10:00:00Z","type":"session_meta","payload":{"id":"s1"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:01Z","type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"tool","arguments":"{}"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:02Z","type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"tool","arguments":"{}"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:03Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"c1","output":"ok"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:04Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"ok"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:05Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t2"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:06Z","type":"response_item","payload":{"type":"function_call","call_id":"c2","name":"tool","arguments":"{}"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:07Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t3"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:08Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c2","output":"ok"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:09Z","type":"session_meta","payload":{"id":"s2"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:10Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c2","output":"ok"}}"#,
+        );
+
+        let report = CodexAdapter.parse(input);
+
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .map(|event| &event.kind)
+                .collect::<Vec<_>>(),
+            [
+                &EventKind::TurnStarted,
+                &EventKind::ToolStarted,
+                &EventKind::ToolFinished { success: true },
+                &EventKind::TurnStarted,
+                &EventKind::ToolStarted,
+                &EventKind::TurnStarted,
+            ]
+        );
+        assert_eq!(report.skipped_lines, 4);
+    }
+
+    #[test]
+    fn function_and_custom_calls_require_their_structured_fields() {
+        let input = concat!(
+            r#"{"timestamp":"2026-09-04T10:00:00Z","type":"response_item","payload":{"type":"function_call","call_id":"f1"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:01Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"c1","name":"tool"}}"#,
+        );
+
+        let report = CodexAdapter.parse(input);
+
+        assert!(report.events.is_empty());
+        assert_eq!(report.skipped_lines, 2);
     }
 }
