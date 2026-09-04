@@ -31,17 +31,45 @@ impl AgentAdapter for HermesAdapter {
             }
             let header = header.unwrap();
             let columns: Vec<&str> = line.split_whitespace().collect();
-            if columns.len() != header.columns {
+            if columns.len() < header.columns || header.project == header.date {
                 report.skipped_lines += 1;
                 continue;
             }
-            let project = columns[header.project].trim_matches('"');
-            let session_id = columns[header.session_id].trim_matches('"');
+            let extra_project_tokens = columns.len() - header.columns;
+            let expected_date = if header.project < header.date {
+                header.date + extra_project_tokens
+            } else {
+                header.date
+            };
+            let Some(date_index) = columns
+                .iter()
+                .position(|value| parse_date_ms(value).is_some())
+            else {
+                report.skipped_lines += 1;
+                continue;
+            };
+            if date_index != expected_date {
+                report.skipped_lines += 1;
+                continue;
+            }
+            let project_end = header.project + 1 + extra_project_tokens;
+            let session_index = if header.session_id > header.project {
+                header.session_id + extra_project_tokens
+            } else {
+                header.session_id
+            };
+            if project_end > columns.len() || session_index >= columns.len() {
+                report.skipped_lines += 1;
+                continue;
+            }
+            let project = columns[header.project..project_end].join(" ");
+            let project = project.trim_matches('"');
+            let session_id = columns[session_index].trim_matches('"');
             if is_placeholder(project) || is_placeholder(session_id) {
                 report.skipped_lines += 1;
                 continue;
             }
-            let Some(at_ms) = parse_date_ms(columns[header.date]) else {
+            let Some(at_ms) = parse_date_ms(columns[date_index]) else {
                 report.skipped_lines += 1;
                 continue;
             };
@@ -112,7 +140,7 @@ fn is_placeholder(value: &str) -> bool {
 }
 
 fn parse_date_ms(value: &str) -> Option<u64> {
-    if !value.is_ascii() || value.len() != 10 {
+    if !value.is_ascii() || value.len() != 10 || &value[4..5] != "-" || &value[7..8] != "-" {
         return None;
     }
     let year = value[0..4].parse::<i64>().ok()?;
@@ -179,5 +207,33 @@ mod tests {
         assert_eq!(report.sessions.len(), 1);
         assert_eq!(report.sessions[0].session_id, "hermes-1");
         assert_eq!(report.skipped_lines, 3);
+    }
+
+    #[test]
+    fn date_requires_iso_separators() {
+        let report = HermesAdapter.parse(
+            "PROJECT DATE SESSION_ID\n\
+             project-a 2026/09/04 hermes-bad\n\
+             project-b 2026-09-04 hermes-good\n",
+        );
+
+        assert_eq!(report.sessions.len(), 1);
+        assert_eq!(report.sessions[0].session_id, "hermes-good");
+        assert_eq!(report.skipped_lines, 1);
+    }
+
+    #[test]
+    fn project_names_with_spaces_remain_one_header_mapped_field() {
+        let report = HermesAdapter.parse(
+            "PROJECT DATE SESSION_ID STATUS\n\
+             项目 Alpha 2026-09-04 hermes-unicode idle\n",
+        );
+
+        assert_eq!(report.sessions.len(), 1);
+        assert_eq!(
+            report.sessions[0].project_path.as_deref(),
+            Some("项目 Alpha")
+        );
+        assert_eq!(report.sessions[0].session_id, "hermes-unicode");
     }
 }
