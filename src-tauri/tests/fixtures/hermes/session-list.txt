@@ -1,0 +1,2 @@
+PROJECT DATE SESSION_ID
+project-a 2026-09-04 hermes-1
