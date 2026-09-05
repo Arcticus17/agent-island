@@ -136,7 +136,8 @@ fn build_agent_view(
             Some(candidate.identity.session_id.as_str()) != active_session_id.as_deref()
         })
         .map(|candidate| {
-            let view = session_view(now_ms, candidate, ProcessState::Running, &agent_candidates);
+            let mut view = candidate.view.clone();
+            view.display_status = DisplayStatus::Idle;
             SessionSummary::from(&view)
         })
         .collect();
@@ -323,7 +324,7 @@ mod tests {
         assert_eq!(agent.display_status, DisplayStatus::Working);
         assert_eq!(
             agent.history_sessions[0].display_status,
-            DisplayStatus::Error
+            DisplayStatus::Idle
         );
     }
 
@@ -351,7 +352,7 @@ mod tests {
             r"D:\work\active",
             22_000,
             SessionLifecycle::Active,
-            EventKind::TurnFailed,
+            EventKind::AttentionRequested { approval: true },
         );
 
         let snapshot = build_snapshot(23_000, &[process], &[first, second]);
@@ -362,5 +363,9 @@ mod tests {
         assert_eq!(agent.state.turn, TurnState::Idle);
         assert_eq!(agent.display_status, DisplayStatus::Idle);
         assert_eq!(agent.history_sessions.len(), 2);
+        assert!(agent
+            .history_sessions
+            .iter()
+            .all(|session| session.display_status == DisplayStatus::Idle));
     }
 }

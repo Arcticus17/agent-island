@@ -3,7 +3,9 @@ mod application;
 mod domain;
 pub mod interface;
 
+use adapters::AgentAdapter;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
@@ -16,8 +18,6 @@ use sysinfo::{ProcessesToUpdate, System};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
-use serde_json::Value;
-use adapters::AgentAdapter;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentInfo {
@@ -78,6 +78,12 @@ pub struct AgentSession {
     pub alert: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct SessionScan {
+    legacy_sessions: Vec<AgentSession>,
+    candidates: Vec<interface::snapshot::SessionCandidate>,
+}
+
 #[derive(Debug, Clone)]
 struct AgentCommand {
     cwd: Option<String>,
@@ -105,11 +111,17 @@ fn default_agent_defs() -> Vec<AgentDef> {
             keyword: "claude".into(),
             log_kind: "claude".into(),
             resume_args: vec![
-                "{exe}".into(), "--resume".into(), "{session}".into(), "继续".into(),
+                "{exe}".into(),
+                "--resume".into(),
+                "{session}".into(),
+                "继续".into(),
             ],
             send_args: vec![
-                "{exe}".into(), "-p".into(), "{prompt}".into(),
-                "--resume".into(), "{session}".into(),
+                "{exe}".into(),
+                "-p".into(),
+                "{prompt}".into(),
+                "--resume".into(),
+                "{session}".into(),
             ],
         },
         AgentDef {
@@ -117,11 +129,17 @@ fn default_agent_defs() -> Vec<AgentDef> {
             keyword: "codex".into(),
             log_kind: "codex".into(),
             resume_args: vec![
-                "{exe}".into(), "exec".into(), "resume".into(), "{session}".into(),
+                "{exe}".into(),
+                "exec".into(),
+                "resume".into(),
+                "{session}".into(),
             ],
             send_args: vec![
-                "{exe}".into(), "exec".into(), "resume".into(),
-                "{session}".into(), "{prompt}".into(),
+                "{exe}".into(),
+                "exec".into(),
+                "resume".into(),
+                "{session}".into(),
+                "{prompt}".into(),
             ],
         },
         AgentDef {
@@ -129,23 +147,30 @@ fn default_agent_defs() -> Vec<AgentDef> {
             keyword: "opencode".into(),
             log_kind: "opencode".into(),
             resume_args: vec![
-                "{exe}".into(), "run".into(), "-s".into(), "{session}".into(),
+                "{exe}".into(),
+                "run".into(),
+                "-s".into(),
+                "{session}".into(),
             ],
             send_args: vec![
-                "{exe}".into(), "run".into(), "-s".into(),
-                "{session}".into(), "{prompt}".into(),
+                "{exe}".into(),
+                "run".into(),
+                "-s".into(),
+                "{session}".into(),
+                "{prompt}".into(),
             ],
         },
         AgentDef {
             name: "Hermes".into(),
             keyword: "hermes".into(),
             log_kind: "hermes".into(),
-            resume_args: vec![
-                "{exe}".into(), "--resume".into(), "{session}".into(),
-            ],
+            resume_args: vec!["{exe}".into(), "--resume".into(), "{session}".into()],
             send_args: vec![
-                "{exe}".into(), "--resume".into(), "{session}".into(),
-                "-z".into(), "{prompt}".into(),
+                "{exe}".into(),
+                "--resume".into(),
+                "{session}".into(),
+                "-z".into(),
+                "{prompt}".into(),
             ],
         },
     ]
@@ -189,7 +214,12 @@ fn reload_agent_defs() {
     }
 }
 
-fn fill_template(template: &[String], exe: &str, session: &str, prompt: Option<&str>) -> Vec<String> {
+fn fill_template(
+    template: &[String],
+    exe: &str,
+    session: &str,
+    prompt: Option<&str>,
+) -> Vec<String> {
     template
         .iter()
         .map(|arg| {
@@ -213,13 +243,15 @@ struct SessionState {
     daily: HashMap<String, HashMap<String, AgentStats>>,
     runtime_start: HashMap<String, Instant>,
     last_poll: Instant,
-    cache: Option<(
-        Instant,
-        Vec<AgentInfo>,
-        interface::snapshot::AgentViewSnapshot,
-    )>,
+    cache: AgentDataCache,
     last_save: Instant,
 }
+
+type AgentDataCache = Option<(
+    Instant,
+    Vec<AgentInfo>,
+    interface::snapshot::AgentViewSnapshot,
+)>;
 
 struct SendTask {
     lines: Mutex<Vec<String>>,
@@ -295,25 +327,100 @@ fn matching_processes<'a>(sys: &'a System, keyword: &str) -> Vec<&'a sysinfo::Pr
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessObservation {
+    pid: u32,
+    project_path: Option<String>,
+    started_at_ms: u64,
+}
+
+fn process_fact_from_observations(
+    agent_id: &str,
+    name: &str,
+    observations: &[ProcessObservation],
+) -> interface::snapshot::ProcessFact {
+    let project_path = observations
+        .first()
+        .and_then(|observation| observation.project_path.clone())
+        .filter(|first| {
+            let normalized = normalize_process_path(first);
+            observations.iter().all(|observation| {
+                observation
+                    .project_path
+                    .as_deref()
+                    .map(normalize_process_path)
+                    .as_deref()
+                    == Some(normalized.as_str())
+            })
+        });
+
+    interface::snapshot::ProcessFact {
+        name: name.into(),
+        identity: domain::ProcessIdentity {
+            agent_id: agent_id.into(),
+            project_path,
+            process_ids: observations
+                .iter()
+                .map(|observation| observation.pid)
+                .collect(),
+            started_at_ms: observations
+                .iter()
+                .map(|observation| observation.started_at_ms)
+                .max()
+                .unwrap_or(0),
+        },
+        process_state: if observations.is_empty() {
+            domain::ProcessState::Stopped
+        } else {
+            domain::ProcessState::Running
+        },
+    }
+}
+
+fn normalize_process_path(path: &str) -> String {
+    path.trim_end_matches(['/', '\\'])
+        .replace('/', "\\")
+        .to_lowercase()
+}
+
 fn scan_agents(
     sys: &mut System,
     session: &mut SessionState,
-) -> (
-    Vec<AgentInfo>,
-    interface::snapshot::AgentViewSnapshot,
-    bool,
-) {
+) -> (Vec<AgentInfo>, interface::snapshot::AgentViewSnapshot, bool) {
     sys.refresh_processes(ProcessesToUpdate::All, true);
     let now = Instant::now();
     let delta = now.duration_since(session.last_poll).as_secs();
     session.last_poll = now;
     let mut agents: Vec<AgentInfo> = Vec::new();
+    let mut process_facts = Vec::new();
+    let mut session_candidates = Vec::new();
     let mut stats_changed = false;
 
     for def in agent_defs() {
         let agent_name = &def.name;
+        let agent_id = if def.log_kind.is_empty() {
+            def.keyword.as_str()
+        } else {
+            def.log_kind.as_str()
+        };
         let processes = matching_processes(sys, &def.keyword);
-        let session_list = build_sessions(agent_name);
+        let observations: Vec<ProcessObservation> = processes
+            .iter()
+            .map(|process| ProcessObservation {
+                pid: process.pid().as_u32(),
+                project_path: process
+                    .cwd()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                started_at_ms: process.start_time().saturating_mul(1_000),
+            })
+            .collect();
+        let process_fact = process_fact_from_observations(agent_id, agent_name, &observations);
+        let process_cwd = process_fact.identity.project_path.clone();
+        process_facts.push(process_fact);
+
+        let mut session_scan = build_session_scan(agent_name);
+        let session_list = std::mem::take(&mut session_scan.legacy_sessions);
+        session_candidates.append(&mut session_scan.candidates);
         if processes.is_empty() {
             session.activity.remove(agent_name);
             session.runtime_start.remove(agent_name);
@@ -371,15 +478,7 @@ fn scan_agents(
             log_status: s.log_status.clone(),
             alert: s.alert.clone(),
         });
-        let cwd = main
-            .and_then(|p| p.cwd())
-            .map(|path| path.to_string_lossy().into_owned())
-            .or_else(|| {
-                processes
-                    .iter()
-                    .find_map(|p| p.cwd().map(|path| path.to_string_lossy().into_owned()))
-            })
-            .or_else(|| log.as_ref().and_then(|l| l.cwd.clone()));
+        let cwd = process_cwd;
 
         let entry = session
             .activity
@@ -480,7 +579,8 @@ fn scan_agents(
             usage: usage_for(agent_name),
         });
     }
-    let snapshot = snapshot_from_legacy_agents(epoch_millis(), &agents);
+    let snapshot =
+        interface::snapshot::build_snapshot(epoch_millis(), &process_facts, &session_candidates);
     apply_snapshot_projection(&mut agents, &snapshot);
     (agents, snapshot, stats_changed)
 }
@@ -514,11 +614,7 @@ fn apply_snapshot_projection(
     snapshot: &interface::snapshot::AgentViewSnapshot,
 ) {
     for agent in agents {
-        let Some(view) = snapshot
-            .agents
-            .iter()
-            .find(|view| view.name == agent.name)
-        else {
+        let Some(view) = snapshot.agents.iter().find(|view| view.name == agent.name) else {
             continue;
         };
         agent.status = legacy_status(view.display_status).into();
@@ -531,120 +627,6 @@ fn apply_snapshot_projection(
             .map(legacy_session)
             .into_iter()
             .collect();
-    }
-}
-
-fn snapshot_from_legacy_agents(
-    now_ms: u64,
-    agents: &[AgentInfo],
-) -> interface::snapshot::AgentViewSnapshot {
-    let mut process_facts = Vec::with_capacity(agents.len());
-    let mut session_candidates = Vec::new();
-
-    for agent in agents {
-        let agent_id = agent_defs()
-            .into_iter()
-            .find(|definition| definition.name == agent.name)
-            .map(|definition| {
-                if definition.log_kind.is_empty() {
-                    definition.keyword
-                } else {
-                    definition.log_kind
-                }
-            })
-            .unwrap_or_else(|| agent.name.to_lowercase().replace(' ', "-"));
-        let process_state = if agent.status == "stopped" {
-            domain::ProcessState::Stopped
-        } else {
-            domain::ProcessState::Running
-        };
-        process_facts.push(interface::snapshot::ProcessFact {
-            name: agent.name.clone(),
-            identity: domain::ProcessIdentity {
-                agent_id: agent_id.clone(),
-                project_path: agent.cwd.clone(),
-                process_ids: agent.pid.into_iter().collect(),
-                started_at_ms: now_ms.saturating_sub(
-                    agent.uptime.unwrap_or_default().saturating_mul(1_000),
-                ),
-            },
-            process_state,
-        });
-
-        for session in &agent.session_list {
-            let events = structured_session_events(&agent_id, session);
-            let session_events: Vec<&domain::DomainEvent> = events
-                .iter()
-                .filter(|event| event.session_id == session.id)
-                .collect();
-            let file_time_ms = session
-                .log_path
-                .as_deref()
-                .and_then(|path| fs::metadata(path).ok())
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_millis() as u64)
-                .unwrap_or(0);
-            let last_event_at_ms = session_events
-                .iter()
-                .map(|event| event.at_ms)
-                .max()
-                .unwrap_or(file_time_ms);
-            let started_at_ms = session_events
-                .iter()
-                .map(|event| event.at_ms)
-                .min()
-                .unwrap_or(last_event_at_ms);
-            let source = session_events
-                .last()
-                .map(|event| event.source)
-                .unwrap_or(domain::EventSource::Process);
-            let confidence = session_events
-                .last()
-                .map(|event| event.confidence)
-                .unwrap_or(domain::Confidence::Unknown);
-            session_candidates.push(interface::snapshot::SessionCandidate {
-                identity: domain::SessionIdentity {
-                    agent_id: agent_id.clone(),
-                    session_id: session.id.clone(),
-                    project_path: session.cwd.clone(),
-                    process_ids: Vec::new(),
-                    started_at_ms,
-                    last_event_at_ms,
-                    source,
-                    confidence,
-                    lifecycle: domain::SessionLifecycle::Historical,
-                },
-                view: interface::snapshot::SessionView {
-                    id: session.id.clone(),
-                    name: session.name.clone(),
-                    cwd: session.cwd.clone(),
-                    log_path: session.log_path.clone(),
-                    recent_output: session.recent_output.clone(),
-                    current_file: session.current_file.clone(),
-                    log_status: session.log_status.clone(),
-                    alert: session.alert.clone(),
-                    display_status: domain::DisplayStatus::Idle,
-                },
-                events,
-            });
-        }
-    }
-
-    interface::snapshot::build_snapshot(now_ms, &process_facts, &session_candidates)
-}
-
-fn structured_session_events(agent_id: &str, session: &AgentSession) -> Vec<domain::DomainEvent> {
-    let Some(path) = session.log_path.as_deref() else {
-        return Vec::new();
-    };
-    let text = read_tail(Path::new(path), 512 * 1024);
-    match agent_id {
-        "claude" => adapters::claude::ClaudeAdapter.parse(&text).events,
-        "codex" => adapters::codex::CodexAdapter.parse(&text).events,
-        "opencode" => adapters::opencode::OpenCodeAdapter.parse(&text).events,
-        "hermes" => adapters::hermes::HermesAdapter.parse(&text).events,
-        _ => Vec::new(),
     }
 }
 
@@ -775,7 +757,9 @@ fn extract_paths(text: &str) -> Vec<String> {
     for raw in text.split(|c: char| {
         c.is_whitespace() || matches!(c, '"' | '\'' | '`' | ',' | '(' | ')' | '[' | ']' | ';')
     }) {
-        let token = raw.trim_matches(|c: char| c == '"' || c == '\'' || c == '`' || c == ',' || c == ')' || c == ']');
+        let token = raw.trim_matches(|c: char| {
+            c == '"' || c == '\'' || c == '`' || c == ',' || c == ')' || c == ']'
+        });
         if token.is_empty() {
             continue;
         }
@@ -795,14 +779,42 @@ fn extract_paths(text: &str) -> Vec<String> {
 fn text_signal(text: &str) -> Option<(&'static str, &'static str)> {
     let lower = text.to_lowercase();
     const ERRORS: &[&str] = &[
-        "error:", "error occurred", "failed to", "exception", "panic", "traceback", "is_error",
-        "报错:", "报错：", "失败:", "失败：", "出错:", "出错：",
+        "error:",
+        "error occurred",
+        "failed to",
+        "exception",
+        "panic",
+        "traceback",
+        "is_error",
+        "报错:",
+        "报错：",
+        "失败:",
+        "失败：",
+        "出错:",
+        "出错：",
     ];
     const WAITING: &[&str] = &[
-        "waiting for", "awaiting", "permission required", "approval", "confirm", "确认", "是否继续", "y/n", "yes/no", "需要你", "请确认",
+        "waiting for",
+        "awaiting",
+        "permission required",
+        "approval",
+        "confirm",
+        "确认",
+        "是否继续",
+        "y/n",
+        "yes/no",
+        "需要你",
+        "请确认",
     ];
     const DONE: &[&str] = &[
-        "completed", "finished", "successfully", "success", "summary", "完成", "成功", "结束",
+        "completed",
+        "finished",
+        "successfully",
+        "success",
+        "summary",
+        "完成",
+        "成功",
+        "结束",
     ];
     if ERRORS.iter().any(|k| lower.contains(k)) {
         return Some(("error", "检测到报错"));
@@ -810,7 +822,10 @@ fn text_signal(text: &str) -> Option<(&'static str, &'static str)> {
     if WAITING.iter().any(|k| lower.contains(k)) {
         return Some(("waiting", "等待确认"));
     }
-    if DONE.iter().any(|k| lower.contains(k)) && !lower.contains("not done") && !lower.contains("undone") {
+    if DONE.iter().any(|k| lower.contains(k))
+        && !lower.contains("not done")
+        && !lower.contains("undone")
+    {
         return Some(("done", "已完成"));
     }
     None
@@ -1003,13 +1018,7 @@ fn codex_snapshot(path: &Path) -> Option<LogSnapshot> {
     })
 }
 
-fn read_opencode_log() -> Option<LogSnapshot> {
-    let root = home_dir()?.join(".local").join("share").join("opencode").join("log");
-    let path = root.join("opencode.log");
-    if !path.is_file() {
-        return None;
-    }
-    let text = read_tail(&path, 32 * 1024);
+fn opencode_snapshot_from_text(path: &Path, text: &str) -> LogSnapshot {
     let mut recent = Vec::new();
     let mut file = None;
     let mut cwd = None;
@@ -1021,7 +1030,11 @@ fn read_opencode_log() -> Option<LogSnapshot> {
             if let Some(idx) = line.find("directory=") {
                 let rest = line[idx + 10..].trim();
                 let val = if rest.starts_with('"') {
-                    rest.trim_start_matches('"').split('"').next().unwrap_or("").to_string()
+                    rest.trim_start_matches('"')
+                        .split('"')
+                        .next()
+                        .unwrap_or("")
+                        .to_string()
                 } else {
                     rest.split_whitespace().next().unwrap_or("").to_string()
                 };
@@ -1037,9 +1050,16 @@ fn read_opencode_log() -> Option<LogSnapshot> {
         }
         let msg = line.rsplit("message=").next().unwrap_or(line);
         let clean = clean_line(msg, 160);
-        let noisy = ["init", "cleanup", "formatter", "lsp", "watcher backend", "location services"]
-            .iter()
-            .any(|n| clean.to_lowercase().contains(n));
+        let noisy = [
+            "init",
+            "cleanup",
+            "formatter",
+            "lsp",
+            "watcher backend",
+            "location services",
+        ]
+        .iter()
+        .any(|n| clean.to_lowercase().contains(n));
         if !clean.is_empty() && !noisy && !recent.contains(&clean) {
             recent.push(clean);
         }
@@ -1059,14 +1079,14 @@ fn read_opencode_log() -> Option<LogSnapshot> {
     if recent.is_empty() {
         recent.push("暂无输出".to_string());
     }
-    Some(LogSnapshot {
+    LogSnapshot {
         path: path.display().to_string(),
         recent,
         file,
         cwd,
         log_status,
         alert,
-    })
+    }
 }
 
 fn list_newest_files(root: &Path, depth: usize, ext: &str, max: usize) -> Vec<PathBuf> {
@@ -1106,11 +1126,7 @@ fn session_name(cwd: Option<&str>, fallback: &str) -> String {
     fallback.chars().take(24).collect()
 }
 
-fn to_session(path: &Path, snap: LogSnapshot) -> AgentSession {
-    let id = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+fn to_session_with_id(snap: LogSnapshot, id: String) -> AgentSession {
     let name = session_name(snap.cwd.as_deref(), &id);
     AgentSession {
         id,
@@ -1124,42 +1140,189 @@ fn to_session(path: &Path, snap: LogSnapshot) -> AgentSession {
     }
 }
 
-fn claude_sessions() -> Vec<AgentSession> {
+fn session_scan_from_file(agent_id: &str, path: &Path) -> Option<SessionScan> {
+    let text = read_bounded_head_tail(path, 64 * 1024, 512 * 1024);
+    if text.is_empty() {
+        return None;
+    }
+    let (mut snapshot, report, metadata_id, metadata_cwd) = match agent_id {
+        "codex" => {
+            let (metadata_id, metadata_cwd) = codex_metadata(&text);
+            (
+                codex_snapshot(path)?,
+                adapters::codex::CodexAdapter.parse(&text),
+                metadata_id,
+                metadata_cwd,
+            )
+        }
+        "claude" => (
+            claude_snapshot(path)?,
+            adapters::claude::ClaudeAdapter.parse(&text),
+            None,
+            None,
+        ),
+        "opencode" => (
+            opencode_snapshot_from_text(path, &text),
+            adapters::opencode::OpenCodeAdapter.parse(&text),
+            Some("opencode".into()),
+            None,
+        ),
+        _ => return None,
+    };
+    if snapshot.cwd.is_none() {
+        snapshot.cwd = metadata_cwd;
+    }
+    let fallback_id = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let canonical_id = metadata_id
+        .or_else(|| report.events.last().map(|event| event.session_id.clone()))
+        .unwrap_or(fallback_id);
+    let events: Vec<domain::DomainEvent> = report
+        .events
+        .into_iter()
+        .filter(|event| event.session_id == canonical_id)
+        .collect();
+    let legacy = to_session_with_id(snapshot, canonical_id.clone());
+    let candidate = session_candidate_from_legacy(agent_id, &legacy, events);
+    Some(SessionScan {
+        legacy_sessions: vec![legacy],
+        candidates: vec![candidate],
+    })
+}
+
+fn codex_metadata(text: &str) -> (Option<String>, Option<String>) {
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        let id = value
+            .pointer("/payload/id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let cwd = value
+            .pointer("/payload/cwd")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        return (id, cwd);
+    }
+    (None, None)
+}
+
+fn session_candidate_from_legacy(
+    agent_id: &str,
+    session: &AgentSession,
+    events: Vec<domain::DomainEvent>,
+) -> interface::snapshot::SessionCandidate {
+    let session_events: Vec<&domain::DomainEvent> = events
+        .iter()
+        .filter(|event| event.session_id == session.id)
+        .collect();
+    let file_time_ms = session
+        .log_path
+        .as_deref()
+        .and_then(|path| fs::metadata(path).ok())
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let last_event_at_ms = session_events
+        .iter()
+        .map(|event| event.at_ms)
+        .max()
+        .unwrap_or(file_time_ms);
+    let started_at_ms = session_events
+        .iter()
+        .map(|event| event.at_ms)
+        .min()
+        .unwrap_or(last_event_at_ms);
+    let source = session_events
+        .last()
+        .map(|event| event.source)
+        .unwrap_or(domain::EventSource::Process);
+    let confidence = session_events
+        .last()
+        .map(|event| event.confidence)
+        .unwrap_or(domain::Confidence::Unknown);
+
+    interface::snapshot::SessionCandidate {
+        identity: domain::SessionIdentity {
+            agent_id: agent_id.into(),
+            session_id: session.id.clone(),
+            project_path: session.cwd.clone(),
+            process_ids: Vec::new(),
+            started_at_ms,
+            last_event_at_ms,
+            source,
+            confidence,
+            lifecycle: domain::SessionLifecycle::Historical,
+        },
+        view: interface::snapshot::SessionView {
+            id: session.id.clone(),
+            name: session.name.clone(),
+            cwd: session.cwd.clone(),
+            log_path: session.log_path.clone(),
+            recent_output: session.recent_output.clone(),
+            current_file: session.current_file.clone(),
+            log_status: session.log_status.clone(),
+            alert: session.alert.clone(),
+            display_status: domain::DisplayStatus::Idle,
+        },
+        events,
+    }
+}
+
+fn claude_session_scan() -> SessionScan {
     let Some(root) = home_dir().map(|h| h.join(".claude").join("projects")) else {
-        return Vec::new();
+        return SessionScan::default();
     };
-    list_newest_files(&root, 4, "jsonl", 3)
-        .into_iter()
-        .filter_map(|path| claude_snapshot(&path).map(|snap| to_session(&path, snap)))
-        .collect()
+    combine_session_scans(
+        list_newest_files(&root, 4, "jsonl", 3)
+            .into_iter()
+            .filter_map(|path| session_scan_from_file("claude", &path)),
+    )
 }
 
-fn codex_sessions() -> Vec<AgentSession> {
+fn codex_session_scan() -> SessionScan {
     let Some(root) = home_dir().map(|h| h.join(".codex").join("sessions")) else {
-        return Vec::new();
+        return SessionScan::default();
     };
-    list_newest_files(&root, 5, "jsonl", 3)
-        .into_iter()
-        .filter_map(|path| codex_snapshot(&path).map(|snap| to_session(&path, snap)))
-        .collect()
+    combine_session_scans(
+        list_newest_files(&root, 5, "jsonl", 3)
+            .into_iter()
+            .filter_map(|path| session_scan_from_file("codex", &path)),
+    )
 }
 
-fn opencode_sessions() -> Vec<AgentSession> {
-    read_opencode_log()
-        .map(|snap| {
-            let path = snap.path.clone();
-            to_session(Path::new(&path), snap)
-        })
-        .into_iter()
-        .collect()
+fn opencode_session_scan() -> SessionScan {
+    let Some(path) = home_dir().map(|home| {
+        home.join(".local")
+            .join("share")
+            .join("opencode")
+            .join("log")
+            .join("opencode.log")
+    }) else {
+        return SessionScan::default();
+    };
+    session_scan_from_file("opencode", &path).unwrap_or_default()
 }
 
-static HERMES_CACHE: OnceLock<Mutex<Option<(Instant, Vec<AgentSession>)>>> = OnceLock::new();
+fn combine_session_scans(scans: impl Iterator<Item = SessionScan>) -> SessionScan {
+    let mut combined = SessionScan::default();
+    for mut scan in scans {
+        combined.legacy_sessions.append(&mut scan.legacy_sessions);
+        combined.candidates.append(&mut scan.candidates);
+    }
+    combined
+}
 
-fn run_command_timeout(
-    command: &mut std::process::Command,
-    secs: u64,
-) -> Option<(bool, String)> {
+static HERMES_CACHE: OnceLock<Mutex<Option<(Instant, SessionScan)>>> = OnceLock::new();
+
+fn run_command_timeout(command: &mut std::process::Command, secs: u64) -> Option<(bool, String)> {
     use std::sync::mpsc;
     let token = format!(
         "agent-island-{}-{}",
@@ -1201,66 +1364,70 @@ fn run_command_timeout(
     result.map(|success| (success, text))
 }
 
-fn parse_hermes_sessions() -> Vec<AgentSession> {
-    let mut command = quiet_command("hermes");
-    command.args(["sessions", "list"]);
-    let Some((success, text)) = run_command_timeout(&mut command, 8) else {
-        return Vec::new();
-    };
-    if !success {
-        return Vec::new();
-    }
-    let mut sessions = Vec::new();
-    for line in text.lines().skip(2) {
-        let line = line.trim();
-        if line.is_empty()
-            || line.chars().all(|c| c == '─' || c == '-' || c == '—' || c == ' ')
-        {
-            continue;
-        }
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 2 {
-            continue;
-        }
-        let id = parts.last().unwrap_or(&"").to_string();
-        let name = parts[0].trim_matches('"').to_string();
-        if name.is_empty() || name == "—" || name == "-" {
-            continue;
-        }
-        sessions.push(AgentSession {
-            id,
-            name: name.clone(),
-            cwd: None,
+fn hermes_session_scan_from_text(text: &str) -> SessionScan {
+    let report = adapters::hermes::HermesAdapter.parse(text);
+    let mut scan = SessionScan::default();
+    for identity in report.sessions {
+        let name = session_name(identity.project_path.as_deref(), &identity.session_id);
+        let legacy = AgentSession {
+            id: identity.session_id.clone(),
+            name,
+            cwd: identity.project_path.clone(),
             log_path: None,
-            recent_output: vec![name.clone()],
+            recent_output: Vec::new(),
             current_file: None,
             log_status: None,
             alert: None,
+        };
+        scan.candidates.push(interface::snapshot::SessionCandidate {
+            identity,
+            view: interface::snapshot::SessionView {
+                id: legacy.id.clone(),
+                name: legacy.name.clone(),
+                cwd: legacy.cwd.clone(),
+                log_path: None,
+                recent_output: Vec::new(),
+                current_file: None,
+                log_status: None,
+                alert: None,
+                display_status: domain::DisplayStatus::Idle,
+            },
+            events: Vec::new(),
         });
-        if sessions.len() >= 10 {
-            break;
-        }
+        scan.legacy_sessions.push(legacy);
     }
-    sessions
+    scan
 }
 
-fn hermes_sessions() -> Vec<AgentSession> {
+fn parse_hermes_session_scan() -> SessionScan {
+    let mut command = quiet_command("hermes");
+    command.args(["sessions", "list"]);
+    let Some((success, text)) = run_command_timeout(&mut command, 8) else {
+        return SessionScan::default();
+    };
+    if !success {
+        return SessionScan::default();
+    }
+    hermes_session_scan_from_text(&text)
+}
+
+fn hermes_session_scan() -> SessionScan {
     let cache = HERMES_CACHE.get_or_init(|| Mutex::new(None));
     if let Ok(guard) = cache.lock() {
-        if let Some((at, sessions)) = guard.as_ref() {
+        if let Some((at, scan)) = guard.as_ref() {
             if at.elapsed().as_secs() < 60 {
-                return sessions.clone();
+                return scan.clone();
             }
         }
     }
-    let sessions = parse_hermes_sessions();
+    let scan = parse_hermes_session_scan();
     if let Ok(mut guard) = cache.lock() {
-        *guard = Some((Instant::now(), sessions.clone()));
+        *guard = Some((Instant::now(), scan.clone()));
     }
-    sessions
+    scan
 }
 
-fn build_sessions(name: &str) -> Vec<AgentSession> {
+fn build_session_scan(name: &str) -> SessionScan {
     let defs = agent_defs();
     let kind = defs
         .iter()
@@ -1268,12 +1435,16 @@ fn build_sessions(name: &str) -> Vec<AgentSession> {
         .map(|d| d.log_kind.as_str())
         .unwrap_or("");
     match kind {
-        "claude" => claude_sessions(),
-        "codex" => codex_sessions(),
-        "opencode" => opencode_sessions(),
-        "hermes" => hermes_sessions(),
-        _ => Vec::new(),
+        "claude" => claude_session_scan(),
+        "codex" => codex_session_scan(),
+        "opencode" => opencode_session_scan(),
+        "hermes" => hermes_session_scan(),
+        _ => SessionScan::default(),
     }
+}
+
+fn build_sessions(name: &str) -> Vec<AgentSession> {
+    build_session_scan(name).legacy_sessions
 }
 
 fn epoch_secs() -> u64 {
@@ -1281,6 +1452,48 @@ fn epoch_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn read_bounded_head_tail(path: &Path, head_bytes: u64, tail_bytes: u64) -> String {
+    let Ok(mut file) = File::open(path) else {
+        return String::new();
+    };
+    let Ok(metadata) = file.metadata() else {
+        return String::new();
+    };
+    let len = metadata.len();
+    if len <= head_bytes.saturating_add(tail_bytes) {
+        let mut bytes = Vec::with_capacity(len as usize);
+        return if file.read_to_end(&mut bytes).is_ok() {
+            String::from_utf8_lossy(&bytes).into_owned()
+        } else {
+            String::new()
+        };
+    }
+
+    let mut head = vec![0; head_bytes as usize];
+    let head_len = file.read(&mut head).unwrap_or(0);
+    head.truncate(head_len);
+    if let Some(last_newline) = head.iter().rposition(|byte| *byte == b'\n') {
+        head.truncate(last_newline + 1);
+    }
+
+    if file
+        .seek(SeekFrom::Start(len.saturating_sub(tail_bytes)))
+        .is_err()
+    {
+        return String::from_utf8_lossy(&head).into_owned();
+    }
+    let mut tail = Vec::with_capacity(tail_bytes as usize);
+    if file.read_to_end(&mut tail).is_err() {
+        return String::from_utf8_lossy(&head).into_owned();
+    }
+    if let Some(first_newline) = tail.iter().position(|byte| *byte == b'\n') {
+        tail.drain(..=first_newline);
+    }
+    head.push(b'\n');
+    head.extend(tail);
+    String::from_utf8_lossy(&head).into_owned()
 }
 
 fn epoch_millis() -> u64 {
@@ -1327,11 +1540,26 @@ struct ClaudePrice {
 fn claude_price(model: &str) -> Option<ClaudePrice> {
     let m = model.to_lowercase();
     let p = if m.contains("opus") {
-        ClaudePrice { input: 15.0, output: 75.0, cache_read: 1.5, cache_write: 18.75 }
+        ClaudePrice {
+            input: 15.0,
+            output: 75.0,
+            cache_read: 1.5,
+            cache_write: 18.75,
+        }
     } else if m.contains("sonnet") {
-        ClaudePrice { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 }
+        ClaudePrice {
+            input: 3.0,
+            output: 15.0,
+            cache_read: 0.3,
+            cache_write: 3.75,
+        }
     } else if m.contains("haiku") {
-        ClaudePrice { input: 1.0, output: 5.0, cache_read: 0.1, cache_write: 1.25 }
+        ClaudePrice {
+            input: 1.0,
+            output: 5.0,
+            cache_read: 0.1,
+            cache_write: 1.25,
+        }
     } else {
         return None;
     };
@@ -1371,13 +1599,23 @@ fn scan_claude_text(text: &str, window_start: u64) -> ClaudeScan {
                 break;
             }
         }
-        let Some(msg) = v.get("message") else { continue };
+        let Some(msg) = v.get("message") else {
+            continue;
+        };
         if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
             continue;
         }
-        let Some(usage) = msg.get("usage") else { continue };
-        let input = usage.get("input_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
-        let output = usage.get("output_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+        let Some(usage) = msg.get("usage") else {
+            continue;
+        };
+        let input = usage
+            .get("input_tokens")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0);
+        let output = usage
+            .get("output_tokens")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0);
         let cache_read = usage
             .get("cache_read_input_tokens")
             .and_then(|x| x.as_u64())
@@ -1459,11 +1697,15 @@ fn scan_codex_text(text: &str, now: u64) -> Option<UsageInfo> {
         if v.get("type").and_then(|t| t.as_str()) != Some("event_msg") {
             continue;
         }
-        let Some(payload) = v.get("payload") else { continue };
+        let Some(payload) = v.get("payload") else {
+            continue;
+        };
         if payload.get("type").and_then(|t| t.as_str()) != Some("token_count") {
             continue;
         }
-        let Some(info) = payload.get("info") else { continue };
+        let Some(info) = payload.get("info") else {
+            continue;
+        };
         let tokens_total = info
             .pointer("/total_token_usage/total_tokens")
             .and_then(|x| x.as_u64())
@@ -1478,7 +1720,9 @@ fn scan_codex_text(text: &str, now: u64) -> Option<UsageInfo> {
             .and_then(|p| p.get("used_percent"))
             .and_then(|x| x.as_f64())
             .map(|x| x as f32);
-        let resets_at = primary.and_then(|p| p.get("resets_at")).and_then(|x| x.as_u64());
+        let resets_at = primary
+            .and_then(|p| p.get("resets_at"))
+            .and_then(|x| x.as_u64());
         let window_minutes = primary
             .and_then(|p| p.get("window_minutes"))
             .and_then(|x| x.as_u64())
@@ -1492,7 +1736,9 @@ fn scan_codex_text(text: &str, now: u64) -> Option<UsageInfo> {
             .and_then(|c| c.get("unlimited"))
             .and_then(|x| x.as_bool())
             .unwrap_or(false);
-        let balance = credits.and_then(|c| c.get("balance")).and_then(|x| x.as_f64());
+        let balance = credits
+            .and_then(|c| c.get("balance"))
+            .and_then(|x| x.as_f64());
         let mut info_out = UsageInfo {
             tokens_total,
             tokens_output,
@@ -1663,7 +1909,8 @@ process.stdin.on("end", async () => {
 
 fn classify_command(command: &str) -> bool {
     let mut c = command.trim().to_lowercase();
-    if c.contains("&&") || c.contains("||") || c.contains(';') || c.contains('|') || c.contains('>') {
+    if c.contains("&&") || c.contains("||") || c.contains(';') || c.contains('|') || c.contains('>')
+    {
         return false;
     }
     c = c
@@ -1704,13 +1951,59 @@ fn classify_command(command: &str) -> bool {
         return true;
     }
     const SAFE_PREFIX: &[&str] = &[
-        "ls ", "dir ", "cat ", "type ", "get-content ", "gc ", "echo ", "pwd", "cd ",
-        "chdir ", "where ", "which ", "rg ", "grep ", "find ", "findstr ", "git status", "git log",
-        "git diff", "git branch", "git remote", "git show", "git --version", "git -v", "node --version",
-        "node -v", "npm --version", "npm -v", "python --version", "py --version", "pip --version",
-        "pip list", "cargo --version", "rustc --version", "code --version", "codex --version",
-        "claude --version", "date", "time ", "whoami", "hostname", "tasklist", "ver", "set ", "env",
-        "sort ", "head ", "tail ", "wc ", "touch ", "test -", "make -n", "nix --version",
+        "ls ",
+        "dir ",
+        "cat ",
+        "type ",
+        "get-content ",
+        "gc ",
+        "echo ",
+        "pwd",
+        "cd ",
+        "chdir ",
+        "where ",
+        "which ",
+        "rg ",
+        "grep ",
+        "find ",
+        "findstr ",
+        "git status",
+        "git log",
+        "git diff",
+        "git branch",
+        "git remote",
+        "git show",
+        "git --version",
+        "git -v",
+        "node --version",
+        "node -v",
+        "npm --version",
+        "npm -v",
+        "python --version",
+        "py --version",
+        "pip --version",
+        "pip list",
+        "cargo --version",
+        "rustc --version",
+        "code --version",
+        "codex --version",
+        "claude --version",
+        "date",
+        "time ",
+        "whoami",
+        "hostname",
+        "tasklist",
+        "ver",
+        "set ",
+        "env",
+        "sort ",
+        "head ",
+        "tail ",
+        "wc ",
+        "touch ",
+        "test -",
+        "make -n",
+        "nix --version",
     ];
     SAFE_PREFIX.iter().any(|p| c.starts_with(p))
 }
@@ -1739,36 +2032,37 @@ fn merge_hooks_settings(path: &Path, script_path: &Path) -> Result<(), String> {
         .as_object_mut()
         .ok_or_else(|| "hooks 不是对象".to_string())?;
 
-    let replace_entries = |obj: &mut serde_json::Map<String, Value>, key: &str, matcher: Option<&str>| {
-        let entries = obj
-            .entry(key.to_string())
-            .or_insert_with(|| serde_json::json!([]));
-        if let Some(list) = entries.as_array_mut() {
-            list.retain(|entry| {
-                let is_ours = entry
-                    .get("hooks")
-                    .and_then(|h| h.as_array())
-                    .and_then(|arr| arr.first())
-                    .and_then(|h| h.get("command"))
-                    .and_then(|c| c.as_array())
-                    .map(|c| {
-                        c.first().and_then(|x| x.as_str()) == Some("node")
-                            && c.get(1)
-                                .and_then(|x| x.as_str())
-                                .map(|s| s.contains("agent-island"))
-                                .unwrap_or(false)
-                    })
-                    .unwrap_or(false);
-                !is_ours
-            });
-            let mut wrapper = serde_json::Map::new();
-            if let Some(m) = matcher {
-                wrapper.insert("matcher".to_string(), serde_json::json!(m));
+    let replace_entries =
+        |obj: &mut serde_json::Map<String, Value>, key: &str, matcher: Option<&str>| {
+            let entries = obj
+                .entry(key.to_string())
+                .or_insert_with(|| serde_json::json!([]));
+            if let Some(list) = entries.as_array_mut() {
+                list.retain(|entry| {
+                    let is_ours = entry
+                        .get("hooks")
+                        .and_then(|h| h.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|h| h.get("command"))
+                        .and_then(|c| c.as_array())
+                        .map(|c| {
+                            c.first().and_then(|x| x.as_str()) == Some("node")
+                                && c.get(1)
+                                    .and_then(|x| x.as_str())
+                                    .map(|s| s.contains("agent-island"))
+                                    .unwrap_or(false)
+                        })
+                        .unwrap_or(false);
+                    !is_ours
+                });
+                let mut wrapper = serde_json::Map::new();
+                if let Some(m) = matcher {
+                    wrapper.insert("matcher".to_string(), serde_json::json!(m));
+                }
+                wrapper.insert("hooks".to_string(), serde_json::json!([hook_entry.clone()]));
+                list.push(serde_json::Value::Object(wrapper));
             }
-            wrapper.insert("hooks".to_string(), serde_json::json!([hook_entry.clone()]));
-            list.push(serde_json::Value::Object(wrapper));
-        }
-    };
+        };
 
     replace_entries(hooks_obj, "PreToolUse", Some("Bash"));
     replace_entries(hooks_obj, "Stop", None);
@@ -1838,7 +2132,11 @@ fn install_hooks(state: &AppState) -> Result<(), String> {
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     );
-    let cfg = HookConfigFile { port: HOOK_PORT, token: token.clone(), enabled: true };
+    let cfg = HookConfigFile {
+        port: HOOK_PORT,
+        token: token.clone(),
+        enabled: true,
+    };
     let cfg_data = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     fs::write(hook_config_path(), cfg_data).map_err(|e| e.to_string())?;
     fs::write(hook_script_path(), HOOK_BRIDGE_SCRIPT).map_err(|e| e.to_string())?;
@@ -1931,11 +2229,7 @@ fn read_http_request(stream: &mut std::net::TcpStream) -> Option<(String, String
     Some((uri, token, content_length))
 }
 
-fn write_http_json(
-    stream: &mut std::net::TcpStream,
-    status: &str,
-    body: &str,
-) {
+fn write_http_json(stream: &mut std::net::TcpStream, status: &str, body: &str) {
     use std::io::Write;
     let _ = write!(
         stream,
@@ -1982,9 +2276,17 @@ fn handle_hook_conn(mut stream: std::net::TcpStream, app: tauri::AppHandle) {
                     .and_then(|s| s.as_str())
                     .unwrap_or("")
                     .to_string(),
-                tool: event.get("tool").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+                tool: event
+                    .get("tool")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 command: command.clone(),
-                cwd: event.get("cwd").and_then(|c| c.as_str()).unwrap_or("").to_string(),
+                cwd: event
+                    .get("cwd")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 decision: None,
             };
             let payload = HookApprovalPayload {
@@ -2084,10 +2386,7 @@ fn get_hook_status(state: tauri::State<AppState>) -> bool {
 }
 
 #[tauri::command]
-fn set_hook_enabled(
-    enabled: bool,
-    state: tauri::State<AppState>,
-) -> Result<String, String> {
+fn set_hook_enabled(enabled: bool, state: tauri::State<AppState>) -> Result<String, String> {
     if enabled {
         install_hooks(&state)?;
         Ok("已接入 Claude hooks".to_string())
@@ -2200,8 +2499,13 @@ fn focus_agent_terminal(name: String, state: tauri::State<AppState>) -> Result<(
     }
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
-        let mut sys = state.sys.lock().map_err(|_| "state lock error".to_string())?;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetForegroundWindow, ShowWindow, SW_RESTORE,
+        };
+        let mut sys = state
+            .sys
+            .lock()
+            .map_err(|_| "state lock error".to_string())?;
         let pids = find_agent_pids(&mut sys, &name)?;
         if pids.is_empty() {
             return Err("agent is not running".into());
@@ -2229,26 +2533,48 @@ fn focus_agent_terminal(name: String, state: tauri::State<AppState>) -> Result<(
     }
 }
 
-fn collect_agent_data(
-    state: &AppState,
+fn collect_cached_with<Clock, Scan>(
+    cache: &mut AgentDataCache,
+    mut clock: Clock,
+    scan: Scan,
 ) -> (
     Vec<AgentInfo>,
     interface::snapshot::AgentViewSnapshot,
-) {
-    let mut sys = state.sys.lock().unwrap();
-    let mut session = state.session.lock().unwrap();
-    if let Some((cached_at, cached_agents, cached_snapshot)) = &session.cache {
-        if cached_at.elapsed().as_millis() < 500 {
-            return (cached_agents.clone(), cached_snapshot.clone());
+    Option<(bool, Instant)>,
+)
+where
+    Clock: FnMut() -> Instant,
+    Scan: FnOnce() -> (Vec<AgentInfo>, interface::snapshot::AgentViewSnapshot, bool),
+{
+    let checked_at = clock();
+    if let Some((cached_at, cached_agents, cached_snapshot)) = cache.as_ref() {
+        if checked_at.saturating_duration_since(*cached_at).as_millis() < 500 {
+            return (cached_agents.clone(), cached_snapshot.clone(), None);
         }
     }
-    let now = Instant::now();
-    let (agents, snapshot, changed) = scan_agents(&mut sys, &mut session);
-    session.cache = Some((now, agents.clone(), snapshot.clone()));
-    if changed || now.duration_since(session.last_save).as_secs() >= 30 {
-        let _ = save_stats(&session.stats, &state.stats_path);
-        let _ = save_daily(&session.daily, &state.daily_path);
-        session.last_save = now;
+
+    let (agents, snapshot, changed) = scan();
+    let completed_at = clock();
+    *cache = Some((completed_at, agents.clone(), snapshot.clone()));
+    (agents, snapshot, Some((changed, completed_at)))
+}
+
+fn collect_agent_data(
+    state: &AppState,
+) -> (Vec<AgentInfo>, interface::snapshot::AgentViewSnapshot) {
+    let mut sys = state.sys.lock().unwrap();
+    let mut session = state.session.lock().unwrap();
+    let mut cache = session.cache.take();
+    let (agents, snapshot, scan_result) = collect_cached_with(&mut cache, Instant::now, || {
+        scan_agents(&mut sys, &mut session)
+    });
+    session.cache = cache;
+    if let Some((changed, completed_at)) = scan_result {
+        if changed || completed_at.duration_since(session.last_save).as_secs() >= 30 {
+            let _ = save_stats(&session.stats, &state.stats_path);
+            let _ = save_daily(&session.daily, &state.daily_path);
+            session.last_save = completed_at;
+        }
     }
     (agents, snapshot)
 }
@@ -2259,9 +2585,7 @@ fn get_agents(state: tauri::State<AppState>) -> Vec<AgentInfo> {
 }
 
 #[tauri::command]
-fn get_agent_snapshot(
-    state: tauri::State<AppState>,
-) -> interface::snapshot::AgentViewSnapshot {
+fn get_agent_snapshot(state: tauri::State<AppState>) -> interface::snapshot::AgentViewSnapshot {
     collect_agent_data(&state).1
 }
 
@@ -2327,7 +2651,10 @@ fn find_agent_cwd(sys: &mut System, name: &str) -> Result<String, String> {
 
 #[tauri::command]
 fn open_project_dir(name: String, state: tauri::State<AppState>) -> Result<(), String> {
-    let mut sys = state.sys.lock().map_err(|_| "state lock error".to_string())?;
+    let mut sys = state
+        .sys
+        .lock()
+        .map_err(|_| "state lock error".to_string())?;
     let dir = find_agent_cwd(&mut sys, &name)?;
     #[cfg(target_os = "windows")]
     {
@@ -2367,7 +2694,10 @@ fn open_path(path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn open_terminal(name: String, state: tauri::State<AppState>) -> Result<(), String> {
-    let mut sys = state.sys.lock().map_err(|_| "state lock error".to_string())?;
+    let mut sys = state
+        .sys
+        .lock()
+        .map_err(|_| "state lock error".to_string())?;
     let dir = find_agent_cwd(&mut sys, &name)?;
     #[cfg(target_os = "windows")]
     {
@@ -2468,7 +2798,10 @@ fn spawn_command_in_dir(cmd: &[String], cwd: Option<&str>) -> Result<(), String>
         use std::os::windows::process::CommandExt;
         const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
         let mut builder = std::process::Command::new("cmd.exe");
-        builder.arg("/K").arg(&cmdline).creation_flags(CREATE_NEW_CONSOLE);
+        builder
+            .arg("/K")
+            .arg(&cmdline)
+            .creation_flags(CREATE_NEW_CONSOLE);
         if let Some(dir) = cwd {
             builder.current_dir(dir);
         }
@@ -2523,7 +2856,12 @@ fn send_command_for(
     if !is_builtin {
         if let Some(def) = agent_defs().iter().find(|d| d.name == name) {
             if !def.send_args.is_empty() {
-                return Ok(fill_template(&def.send_args, &exe, session_id, Some(prompt)));
+                return Ok(fill_template(
+                    &def.send_args,
+                    &exe,
+                    session_id,
+                    Some(prompt),
+                ));
             }
         }
     }
@@ -2572,7 +2910,11 @@ fn send_command_for(
     }
 }
 
-fn fallback_send_command(name: &str, session_id: &str, prompt: &str) -> Result<Vec<String>, String> {
+fn fallback_send_command(
+    name: &str,
+    session_id: &str,
+    prompt: &str,
+) -> Result<Vec<String>, String> {
     let cli = match name {
         "Claude Code" => "claude",
         "Codex CLI" => "codex",
@@ -2662,7 +3004,10 @@ fn clean_agent_base(name: &str, base: &[String]) -> Vec<String> {
 
 #[tauri::command]
 fn stop_agent(name: String, state: tauri::State<AppState>) -> Result<(), String> {
-    let mut sys = state.sys.lock().map_err(|_| "state lock error".to_string())?;
+    let mut sys = state
+        .sys
+        .lock()
+        .map_err(|_| "state lock error".to_string())?;
     let pids = find_agent_pids(&mut sys, &name)?;
     if pids.is_empty() {
         return Err("agent is not running".into());
@@ -2677,7 +3022,10 @@ fn stop_agent(name: String, state: tauri::State<AppState>) -> Result<(), String>
 
 #[tauri::command]
 fn restart_agent(name: String, state: tauri::State<AppState>) -> Result<(), String> {
-    let session = state.session.lock().map_err(|_| "state lock error".to_string())?;
+    let session = state
+        .session
+        .lock()
+        .map_err(|_| "state lock error".to_string())?;
     let command = session
         .commands
         .get(&name)
@@ -2700,7 +3048,10 @@ fn restart_agent(name: String, state: tauri::State<AppState>) -> Result<(), Stri
         use std::os::windows::process::CommandExt;
         const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
         let mut builder = std::process::Command::new("cmd.exe");
-        builder.arg("/K").arg(&cmdline).creation_flags(CREATE_NEW_CONSOLE);
+        builder
+            .arg("/K")
+            .arg(&cmdline)
+            .creation_flags(CREATE_NEW_CONSOLE);
         if let Some(cwd) = &command.cwd {
             builder.current_dir(cwd);
         }
@@ -2729,7 +3080,10 @@ fn restart_session(
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
     let dir = find_session_cwd(&name, &session_id)?;
-    let session = state.session.lock().map_err(|_| "state lock error".to_string())?;
+    let session = state
+        .session
+        .lock()
+        .map_err(|_| "state lock error".to_string())?;
     let command = session
         .commands
         .get(&name)
@@ -2751,7 +3105,10 @@ fn send_to_session(
         return Err("prompt is empty".into());
     }
     let (cmd, dir) = {
-        let session = state.session.lock().map_err(|_| "state lock error".to_string())?;
+        let session = state
+            .session
+            .lock()
+            .map_err(|_| "state lock error".to_string())?;
         let dir = if session_id.is_empty() {
             None
         } else {
@@ -2764,12 +3121,7 @@ fn send_to_session(
             }
             None => fallback_send_command(&name, &session_id, &prompt)?,
         };
-        let dir = dir.or_else(|| {
-            session
-                .commands
-                .get(&name)
-                .and_then(|c| c.cwd.clone())
-        });
+        let dir = dir.or_else(|| session.commands.get(&name).and_then(|c| c.cwd.clone()));
         (cmd, dir)
     };
     let cmd = if looks_like_shim(cmd.first().map(|s| s.as_str()).unwrap_or("")) {
@@ -2868,7 +3220,10 @@ fn stop_session(
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
     let dir = find_session_cwd(&name, &session_id)?;
-    let mut sys = state.sys.lock().map_err(|_| "state lock error".to_string())?;
+    let mut sys = state
+        .sys
+        .lock()
+        .map_err(|_| "state lock error".to_string())?;
     let keyword = keyword_for(&name).ok_or_else(|| format!("unknown agent: {name}"))?;
     sys.refresh_processes(ProcessesToUpdate::All, true);
     let pids: Vec<u32> = matching_processes(&sys, &keyword)
@@ -2921,7 +3276,15 @@ fn apply_autostart(enabled: bool) -> Result<(), String> {
         let value = format!("\"{}\"", exe.display());
         let status = quiet_command("reg.exe")
             .args([
-                "add", key, "/v", AUTOSTART_NAME, "/t", "REG_SZ", "/d", &value, "/f",
+                "add",
+                key,
+                "/v",
+                AUTOSTART_NAME,
+                "/t",
+                "REG_SZ",
+                "/d",
+                &value,
+                "/f",
             ])
             .status()
             .map_err(|e| e.to_string())?;
@@ -3044,6 +3407,196 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cache_timestamp_is_sampled_after_a_slow_scan() {
+        use std::cell::Cell;
+        use std::time::Duration;
+
+        let base = Instant::now();
+        let scans = Cell::new(0_u16);
+        let mut cache = None;
+        let mut first_clock = [base, base + Duration::from_secs(2)].into_iter();
+        let (_, first_snapshot, first_scan) = collect_cached_with(
+            &mut cache,
+            || first_clock.next().unwrap(),
+            || {
+                scans.set(scans.get() + 1);
+                (
+                    Vec::new(),
+                    interface::snapshot::AgentViewSnapshot {
+                        schema_version: 1,
+                        generated_at_ms: u64::from(scans.get()),
+                        agents: Vec::new(),
+                    },
+                    false,
+                )
+            },
+        );
+        let (_, second_snapshot, second_scan) = collect_cached_with(
+            &mut cache,
+            || base + Duration::from_millis(2_100),
+            || {
+                scans.set(scans.get() + 1);
+                (
+                    Vec::new(),
+                    interface::snapshot::AgentViewSnapshot {
+                        schema_version: 1,
+                        generated_at_ms: u64::from(scans.get()),
+                        agents: Vec::new(),
+                    },
+                    false,
+                )
+            },
+        );
+
+        assert!(first_scan.is_some());
+        assert!(second_scan.is_none());
+        assert_eq!(scans.get(), 1);
+        assert_eq!(
+            first_snapshot.generated_at_ms,
+            second_snapshot.generated_at_ms
+        );
+    }
+
+    #[test]
+    fn process_fact_does_not_borrow_a_session_cwd_when_process_cwd_is_missing() {
+        let fact = process_fact_from_observations(
+            "codex",
+            "Codex CLI",
+            &[ProcessObservation {
+                pid: 41,
+                project_path: None,
+                started_at_ms: 20_000,
+            }],
+        );
+
+        assert_eq!(fact.identity.process_ids, vec![41]);
+        assert_eq!(fact.identity.project_path, None);
+        assert_eq!(fact.identity.started_at_ms, 20_000);
+    }
+
+    #[test]
+    fn process_fact_keeps_all_pids_and_rejects_conflicting_process_cwds() {
+        let fact = process_fact_from_observations(
+            "codex",
+            "Codex CLI",
+            &[
+                ProcessObservation {
+                    pid: 41,
+                    project_path: Some(r"D:\work\one".into()),
+                    started_at_ms: 10_000,
+                },
+                ProcessObservation {
+                    pid: 42,
+                    project_path: Some(r"D:\work\two".into()),
+                    started_at_ms: 20_000,
+                },
+            ],
+        );
+
+        assert_eq!(fact.identity.process_ids, vec![41, 42]);
+        assert_eq!(fact.identity.project_path, None);
+        assert_eq!(fact.identity.started_at_ms, 20_000);
+        assert_eq!(fact.process_state, domain::ProcessState::Running);
+    }
+
+    #[test]
+    fn codex_file_scan_uses_metadata_id_instead_of_filename_stem() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex/current-turn.jsonl");
+
+        let scan = session_scan_from_file("codex", &fixture).unwrap();
+
+        assert_eq!(scan.legacy_sessions[0].id, "codex-session-real");
+        assert_eq!(scan.candidates[0].identity.session_id, "codex-session-real");
+        assert_eq!(scan.candidates[0].view.id, "codex-session-real");
+        assert!(scan.candidates[0]
+            .events
+            .iter()
+            .all(|event| event.session_id == "codex-session-real"));
+    }
+
+    #[test]
+    fn codex_long_file_keeps_head_metadata_and_tail_events_without_duplicates() {
+        let path = std::env::temp_dir().join(format!(
+            "agent-island-codex-{}-different-stem.jsonl",
+            std::process::id()
+        ));
+        let text = format!(
+            "{{\"timestamp\":\"2026-09-04T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"canonical-long\",\"cwd\":\"D:\\\\work\\\\active\"}}}}\n{}\n{{\"timestamp\":\"2026-09-04T10:01:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"tail-turn\"}}}}\n",
+            "x".repeat(600 * 1024)
+        );
+        fs::write(&path, text).unwrap();
+
+        let scan = session_scan_from_file("codex", &path).unwrap();
+
+        assert_eq!(scan.candidates[0].identity.session_id, "canonical-long");
+        assert_eq!(scan.candidates[0].events.len(), 1);
+        assert_eq!(scan.candidates[0].events[0].session_id, "canonical-long");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn claude_file_scan_uses_adapter_session_shape() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude/current-turn.jsonl");
+
+        let scan = session_scan_from_file("claude", &fixture).unwrap();
+
+        assert_eq!(scan.candidates[0].identity.agent_id, "claude");
+        assert_eq!(scan.candidates[0].identity.session_id, "claude-s2");
+        assert_eq!(scan.candidates[0].view.id, "claude-s2");
+        assert_eq!(scan.candidates[0].events.len(), 2);
+    }
+
+    #[test]
+    fn opencode_file_scan_uses_adapter_session_shape() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/opencode/text-error.log");
+
+        let scan = session_scan_from_file("opencode", &fixture).unwrap();
+
+        assert_eq!(scan.candidates[0].identity.agent_id, "opencode");
+        assert_eq!(scan.candidates[0].identity.session_id, "opencode");
+        assert_eq!(scan.candidates[0].view.id, "opencode");
+        assert!(matches!(
+            scan.candidates[0].events[0].kind,
+            domain::EventKind::DiagnosticHint { .. }
+        ));
+    }
+
+    #[test]
+    fn hermes_raw_table_builds_a_matchable_snapshot_candidate() {
+        let text = include_str!("../tests/fixtures/hermes/session-list.txt");
+
+        let scan = hermes_session_scan_from_text(text);
+        let candidate = &scan.candidates[0];
+        let process = process_fact_from_observations(
+            "hermes",
+            "Hermes",
+            &[ProcessObservation {
+                pid: 77,
+                project_path: Some("project-a".into()),
+                started_at_ms: candidate.identity.last_event_at_ms.saturating_sub(1_000),
+            }],
+        );
+        let snapshot = interface::snapshot::build_snapshot(
+            candidate.identity.last_event_at_ms,
+            &[process],
+            &scan.candidates,
+        );
+
+        assert_eq!(scan.legacy_sessions[0].id, "hermes-1");
+        assert_eq!(
+            candidate.identity.project_path.as_deref(),
+            Some("project-a")
+        );
+        assert_eq!(
+            snapshot.agents[0].active_session.as_ref().unwrap().id,
+            "hermes-1"
+        );
+    }
+
+    #[test]
     fn legacy_projection_keeps_only_active_in_session_list() {
         use crate::domain::{AgentState, AttentionState, DisplayStatus, TurnState};
         use crate::interface::snapshot::{
@@ -3128,52 +3681,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_scan_uses_structured_adapter_events_for_snapshot_status() {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/codex/current-turn.jsonl");
-        let agent = AgentInfo {
-            name: "Codex CLI".into(),
-            status: "error".into(),
-            display_status: domain::DisplayStatus::Error,
-            pid: Some(42),
-            cpu: Some(1.0),
-            memory: Some(2.0),
-            uptime: Some(7),
-            cwd: Some("<project>".into()),
-            sessions: 1,
-            last_active_secs: Some(0),
-            log_path: Some(fixture.display().to_string()),
-            recent_output: Vec::new(),
-            current_file: None,
-            log_status: Some("error".into()),
-            alert: None,
-            can_restart: true,
-            stats: None,
-            session_count: 1,
-            session_list: vec![AgentSession {
-                id: "codex-session-real".into(),
-                name: "project".into(),
-                cwd: Some("<project>".into()),
-                log_path: Some(fixture.display().to_string()),
-                recent_output: Vec::new(),
-                current_file: None,
-                log_status: Some("error".into()),
-                alert: None,
-            }],
-            active_session: None,
-            history_sessions: None,
-            usage: None,
-        };
-
-        let snapshot = snapshot_from_legacy_agents(1_788_516_006_500, &[agent]);
-
-        let view = &snapshot.agents[0];
-        assert_eq!(view.active_session.as_ref().unwrap().id, "codex-session-real");
-        assert_eq!(view.display_status, domain::DisplayStatus::Done);
-        assert!(view.history_sessions.is_empty());
-    }
-
-    #[test]
     fn default_defs_cover_core_agents() {
         let defs = default_agent_defs();
         for name in ["Claude Code", "Codex CLI", "OpenCode", "Hermes"] {
@@ -3245,7 +3752,9 @@ mod tests {
         assert!(classify_command("git status"));
         assert!(classify_command("rg -n TODO src"));
         assert!(classify_command("node --version"));
-        assert!(classify_command("\"C:\\Program Files\\Git\\bin\\git.exe\" status"));
+        assert!(classify_command(
+            "\"C:\\Program Files\\Git\\bin\\git.exe\" status"
+        ));
     }
 
     #[test]
