@@ -1,6 +1,7 @@
 mod adapters;
 mod application;
 mod domain;
+pub mod interface;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -16,11 +17,13 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 use serde_json::Value;
+use adapters::AgentAdapter;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentInfo {
     pub name: String,
     pub status: String,
+    pub display_status: domain::DisplayStatus,
     pub pid: Option<u32>,
     pub cpu: Option<f32>,
     pub memory: Option<f32>,
@@ -37,6 +40,8 @@ pub struct AgentInfo {
     pub stats: Option<AgentStats>,
     pub session_count: usize,
     pub session_list: Vec<AgentSession>,
+    pub active_session: Option<interface::snapshot::SessionView>,
+    pub history_sessions: Option<Vec<interface::snapshot::SessionSummary>>,
     pub usage: Option<UsageInfo>,
 }
 
@@ -208,7 +213,11 @@ struct SessionState {
     daily: HashMap<String, HashMap<String, AgentStats>>,
     runtime_start: HashMap<String, Instant>,
     last_poll: Instant,
-    cache: Option<(Instant, Vec<AgentInfo>)>,
+    cache: Option<(
+        Instant,
+        Vec<AgentInfo>,
+        interface::snapshot::AgentViewSnapshot,
+    )>,
     last_save: Instant,
 }
 
@@ -286,7 +295,14 @@ fn matching_processes<'a>(sys: &'a System, keyword: &str) -> Vec<&'a sysinfo::Pr
         .collect()
 }
 
-fn scan_agents(sys: &mut System, session: &mut SessionState) -> (Vec<AgentInfo>, bool) {
+fn scan_agents(
+    sys: &mut System,
+    session: &mut SessionState,
+) -> (
+    Vec<AgentInfo>,
+    interface::snapshot::AgentViewSnapshot,
+    bool,
+) {
     sys.refresh_processes(ProcessesToUpdate::All, true);
     let now = Instant::now();
     let delta = now.duration_since(session.last_poll).as_secs();
@@ -305,6 +321,7 @@ fn scan_agents(sys: &mut System, session: &mut SessionState) -> (Vec<AgentInfo>,
             agents.push(AgentInfo {
                 name: agent_name.clone(),
                 status: "stopped".to_string(),
+                display_status: domain::DisplayStatus::Stopped,
                 pid: None,
                 cpu: None,
                 memory: None,
@@ -321,6 +338,8 @@ fn scan_agents(sys: &mut System, session: &mut SessionState) -> (Vec<AgentInfo>,
                 stats: session.stats.get(agent_name).cloned(),
                 session_count: session_list.len(),
                 session_list,
+                active_session: None,
+                history_sessions: None,
                 usage: usage_for(agent_name),
             });
             continue;
@@ -439,6 +458,7 @@ fn scan_agents(sys: &mut System, session: &mut SessionState) -> (Vec<AgentInfo>,
         agents.push(AgentInfo {
             name: agent_name.clone(),
             status: status.to_string(),
+            display_status: domain::DisplayStatus::Idle,
             pid: main.map(|p| p.pid().as_u32()),
             cpu: Some(total_cpu),
             memory: Some(total_mem_mb),
@@ -455,10 +475,177 @@ fn scan_agents(sys: &mut System, session: &mut SessionState) -> (Vec<AgentInfo>,
             stats: Some(stats_snapshot),
             session_count: session_list.len(),
             session_list,
+            active_session: None,
+            history_sessions: None,
             usage: usage_for(agent_name),
         });
     }
-    (agents, stats_changed)
+    let snapshot = snapshot_from_legacy_agents(epoch_millis(), &agents);
+    apply_snapshot_projection(&mut agents, &snapshot);
+    (agents, snapshot, stats_changed)
+}
+
+fn legacy_status(display_status: domain::DisplayStatus) -> &'static str {
+    match display_status {
+        domain::DisplayStatus::Stopped => "stopped",
+        domain::DisplayStatus::Idle => "idle",
+        domain::DisplayStatus::Working => "working",
+        domain::DisplayStatus::Done => "done",
+        domain::DisplayStatus::Error => "error",
+        domain::DisplayStatus::Waiting => "waiting",
+    }
+}
+
+fn legacy_session(session: &interface::snapshot::SessionView) -> AgentSession {
+    AgentSession {
+        id: session.id.clone(),
+        name: session.name.clone(),
+        cwd: session.cwd.clone(),
+        log_path: session.log_path.clone(),
+        recent_output: session.recent_output.clone(),
+        current_file: session.current_file.clone(),
+        log_status: session.log_status.clone(),
+        alert: session.alert.clone(),
+    }
+}
+
+fn apply_snapshot_projection(
+    agents: &mut [AgentInfo],
+    snapshot: &interface::snapshot::AgentViewSnapshot,
+) {
+    for agent in agents {
+        let Some(view) = snapshot
+            .agents
+            .iter()
+            .find(|view| view.name == agent.name)
+        else {
+            continue;
+        };
+        agent.status = legacy_status(view.display_status).into();
+        agent.display_status = view.display_status;
+        agent.active_session = view.active_session.clone();
+        agent.history_sessions = Some(view.history_sessions.clone());
+        agent.session_list = view
+            .active_session
+            .as_ref()
+            .map(legacy_session)
+            .into_iter()
+            .collect();
+    }
+}
+
+fn snapshot_from_legacy_agents(
+    now_ms: u64,
+    agents: &[AgentInfo],
+) -> interface::snapshot::AgentViewSnapshot {
+    let mut process_facts = Vec::with_capacity(agents.len());
+    let mut session_candidates = Vec::new();
+
+    for agent in agents {
+        let agent_id = agent_defs()
+            .into_iter()
+            .find(|definition| definition.name == agent.name)
+            .map(|definition| {
+                if definition.log_kind.is_empty() {
+                    definition.keyword
+                } else {
+                    definition.log_kind
+                }
+            })
+            .unwrap_or_else(|| agent.name.to_lowercase().replace(' ', "-"));
+        let process_state = if agent.status == "stopped" {
+            domain::ProcessState::Stopped
+        } else {
+            domain::ProcessState::Running
+        };
+        process_facts.push(interface::snapshot::ProcessFact {
+            name: agent.name.clone(),
+            identity: domain::ProcessIdentity {
+                agent_id: agent_id.clone(),
+                project_path: agent.cwd.clone(),
+                process_ids: agent.pid.into_iter().collect(),
+                started_at_ms: now_ms.saturating_sub(
+                    agent.uptime.unwrap_or_default().saturating_mul(1_000),
+                ),
+            },
+            process_state,
+        });
+
+        for session in &agent.session_list {
+            let events = structured_session_events(&agent_id, session);
+            let session_events: Vec<&domain::DomainEvent> = events
+                .iter()
+                .filter(|event| event.session_id == session.id)
+                .collect();
+            let file_time_ms = session
+                .log_path
+                .as_deref()
+                .and_then(|path| fs::metadata(path).ok())
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as u64)
+                .unwrap_or(0);
+            let last_event_at_ms = session_events
+                .iter()
+                .map(|event| event.at_ms)
+                .max()
+                .unwrap_or(file_time_ms);
+            let started_at_ms = session_events
+                .iter()
+                .map(|event| event.at_ms)
+                .min()
+                .unwrap_or(last_event_at_ms);
+            let source = session_events
+                .last()
+                .map(|event| event.source)
+                .unwrap_or(domain::EventSource::Process);
+            let confidence = session_events
+                .last()
+                .map(|event| event.confidence)
+                .unwrap_or(domain::Confidence::Unknown);
+            session_candidates.push(interface::snapshot::SessionCandidate {
+                identity: domain::SessionIdentity {
+                    agent_id: agent_id.clone(),
+                    session_id: session.id.clone(),
+                    project_path: session.cwd.clone(),
+                    process_ids: Vec::new(),
+                    started_at_ms,
+                    last_event_at_ms,
+                    source,
+                    confidence,
+                    lifecycle: domain::SessionLifecycle::Historical,
+                },
+                view: interface::snapshot::SessionView {
+                    id: session.id.clone(),
+                    name: session.name.clone(),
+                    cwd: session.cwd.clone(),
+                    log_path: session.log_path.clone(),
+                    recent_output: session.recent_output.clone(),
+                    current_file: session.current_file.clone(),
+                    log_status: session.log_status.clone(),
+                    alert: session.alert.clone(),
+                    display_status: domain::DisplayStatus::Idle,
+                },
+                events,
+            });
+        }
+    }
+
+    interface::snapshot::build_snapshot(now_ms, &process_facts, &session_candidates)
+}
+
+fn structured_session_events(agent_id: &str, session: &AgentSession) -> Vec<domain::DomainEvent> {
+    let Some(path) = session.log_path.as_deref() else {
+        return Vec::new();
+    };
+    let text = read_tail(Path::new(path), 512 * 1024);
+    match agent_id {
+        "claude" => adapters::claude::ClaudeAdapter.parse(&text).events,
+        "codex" => adapters::codex::CodexAdapter.parse(&text).events,
+        "opencode" => adapters::opencode::OpenCodeAdapter.parse(&text).events,
+        "hermes" => adapters::hermes::HermesAdapter.parse(&text).events,
+        _ => Vec::new(),
+    }
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -1093,6 +1280,13 @@ fn epoch_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn epoch_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
 }
 
@@ -2035,24 +2229,40 @@ fn focus_agent_terminal(name: String, state: tauri::State<AppState>) -> Result<(
     }
 }
 
-#[tauri::command]
-fn get_agents(state: tauri::State<AppState>) -> Vec<AgentInfo> {
+fn collect_agent_data(
+    state: &AppState,
+) -> (
+    Vec<AgentInfo>,
+    interface::snapshot::AgentViewSnapshot,
+) {
     let mut sys = state.sys.lock().unwrap();
     let mut session = state.session.lock().unwrap();
-    if let Some((cached_at, cached)) = &session.cache {
+    if let Some((cached_at, cached_agents, cached_snapshot)) = &session.cache {
         if cached_at.elapsed().as_millis() < 500 {
-            return cached.clone();
+            return (cached_agents.clone(), cached_snapshot.clone());
         }
     }
     let now = Instant::now();
-    let (agents, changed) = scan_agents(&mut sys, &mut session);
-    session.cache = Some((now, agents.clone()));
+    let (agents, snapshot, changed) = scan_agents(&mut sys, &mut session);
+    session.cache = Some((now, agents.clone(), snapshot.clone()));
     if changed || now.duration_since(session.last_save).as_secs() >= 30 {
         let _ = save_stats(&session.stats, &state.stats_path);
         let _ = save_daily(&session.daily, &state.daily_path);
         session.last_save = now;
     }
-    agents
+    (agents, snapshot)
+}
+
+#[tauri::command]
+fn get_agents(state: tauri::State<AppState>) -> Vec<AgentInfo> {
+    collect_agent_data(&state).0
+}
+
+#[tauri::command]
+fn get_agent_snapshot(
+    state: tauri::State<AppState>,
+) -> interface::snapshot::AgentViewSnapshot {
+    collect_agent_data(&state).1
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2834,6 +3044,136 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_projection_keeps_only_active_in_session_list() {
+        use crate::domain::{AgentState, AttentionState, DisplayStatus, TurnState};
+        use crate::interface::snapshot::{
+            AgentView, AgentViewSnapshot, SessionSummary, SessionView,
+        };
+
+        let legacy_session = |id: &str| AgentSession {
+            id: id.into(),
+            name: id.into(),
+            cwd: Some(format!(r"D:\work\{id}")),
+            log_path: None,
+            recent_output: Vec::new(),
+            current_file: None,
+            log_status: None,
+            alert: None,
+        };
+        let mut agents = vec![AgentInfo {
+            name: "Codex CLI".into(),
+            status: "working".into(),
+            display_status: DisplayStatus::Idle,
+            pid: Some(42),
+            cpu: Some(1.0),
+            memory: Some(2.0),
+            uptime: Some(3),
+            cwd: Some(r"D:\work\active".into()),
+            sessions: 1,
+            last_active_secs: Some(0),
+            log_path: None,
+            recent_output: Vec::new(),
+            current_file: None,
+            log_status: Some("working".into()),
+            alert: None,
+            can_restart: true,
+            stats: None,
+            session_count: 2,
+            session_list: vec![legacy_session("matching-active"), legacy_session("older")],
+            active_session: None,
+            history_sessions: None,
+            usage: None,
+        }];
+        let active_session = SessionView {
+            id: "matching-active".into(),
+            name: "matching-active".into(),
+            cwd: Some(r"D:\work\active".into()),
+            log_path: None,
+            recent_output: Vec::new(),
+            current_file: None,
+            log_status: None,
+            alert: None,
+            display_status: DisplayStatus::Working,
+        };
+        let snapshot = AgentViewSnapshot {
+            schema_version: 1,
+            generated_at_ms: 10,
+            agents: vec![AgentView {
+                id: "codex".into(),
+                name: "Codex CLI".into(),
+                state: AgentState::running(TurnState::Executing, AttentionState::None),
+                display_status: DisplayStatus::Working,
+                active_session: Some(active_session),
+                history_sessions: vec![SessionSummary {
+                    id: "older".into(),
+                    name: "older".into(),
+                    cwd: Some(r"D:\work\older".into()),
+                    display_status: DisplayStatus::Done,
+                }],
+                diagnostic: None,
+            }],
+        };
+
+        apply_snapshot_projection(&mut agents, &snapshot);
+
+        let json = serde_json::to_value(&agents[0]).unwrap();
+        assert_eq!(json["name"], "Codex CLI");
+        assert_eq!(json["status"], "working");
+        assert_eq!(json["display_status"], "working");
+        assert_eq!(json["session_list"].as_array().unwrap().len(), 1);
+        assert_eq!(json["session_list"][0]["id"], "matching-active");
+        assert_eq!(json["active_session"]["id"], "matching-active");
+        assert_eq!(json["history_sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(json["history_sessions"][0]["id"], "older");
+    }
+
+    #[test]
+    fn legacy_scan_uses_structured_adapter_events_for_snapshot_status() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/codex/current-turn.jsonl");
+        let agent = AgentInfo {
+            name: "Codex CLI".into(),
+            status: "error".into(),
+            display_status: domain::DisplayStatus::Error,
+            pid: Some(42),
+            cpu: Some(1.0),
+            memory: Some(2.0),
+            uptime: Some(7),
+            cwd: Some("<project>".into()),
+            sessions: 1,
+            last_active_secs: Some(0),
+            log_path: Some(fixture.display().to_string()),
+            recent_output: Vec::new(),
+            current_file: None,
+            log_status: Some("error".into()),
+            alert: None,
+            can_restart: true,
+            stats: None,
+            session_count: 1,
+            session_list: vec![AgentSession {
+                id: "codex-session-real".into(),
+                name: "project".into(),
+                cwd: Some("<project>".into()),
+                log_path: Some(fixture.display().to_string()),
+                recent_output: Vec::new(),
+                current_file: None,
+                log_status: Some("error".into()),
+                alert: None,
+            }],
+            active_session: None,
+            history_sessions: None,
+            usage: None,
+        };
+
+        let snapshot = snapshot_from_legacy_agents(1_788_516_006_500, &[agent]);
+
+        let view = &snapshot.agents[0];
+        assert_eq!(view.active_session.as_ref().unwrap().id, "codex-session-real");
+        assert_eq!(view.display_status, domain::DisplayStatus::Done);
+        assert!(view.history_sessions.is_empty());
+    }
+
+    #[test]
     fn default_defs_cover_core_agents() {
         let defs = default_agent_defs();
         for name in ["Claude Code", "Codex CLI", "OpenCode", "Hermes"] {
@@ -2975,6 +3315,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_agents,
+            get_agent_snapshot,
             get_stats_report,
             reload_agent_defs,
             open_project_dir,
