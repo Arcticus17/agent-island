@@ -1,4 +1,5 @@
 const owns = (value, key) => Object.prototype.hasOwnProperty.call(value ?? {}, key);
+const RETAINED_SNAPSHOT_MAX_AGE_MS = 6_000;
 
 export function agentKey(agent, index = 0) {
   const id = String(agent?.id ?? "").trim();
@@ -9,6 +10,29 @@ export function sessionKey(agent, session, agentIndex = 0) {
   return `${agentKey(agent, agentIndex)}::${session?.id || "no-active"}`;
 }
 
+export function notificationGroupKey(agent, session, agentIndex = 0) {
+  return sessionKey(agent, session, agentIndex);
+}
+
+export function isSnapshotFresh(
+  agent,
+  now = Date.now(),
+  maxAgeMs = RETAINED_SNAPSHOT_MAX_AGE_MS,
+) {
+  const freshness = agent?.freshness;
+  if (!freshness) return true;
+  if (freshness.stale === true) return false;
+  const observedAt = Number(freshness.observed_at_ms);
+  return !Number.isFinite(observedAt) || now - observedAt <= maxAgeMs;
+}
+
+export function markRetainedAgentsStale(agents) {
+  return (agents ?? []).map((agent) => ({
+    ...agent,
+    freshness: { ...agent?.freshness, stale: true },
+  }));
+}
+
 export function restoreAgentIndex(agents, key, fallbackIndex = 0) {
   const index = (agents ?? []).findIndex((agent, agentIndex) => agentKey(agent, agentIndex) === key);
   if (index >= 0) return index;
@@ -16,10 +40,34 @@ export function restoreAgentIndex(agents, key, fallbackIndex = 0) {
   return Math.min(Math.max(fallbackIndex, 0), agents.length - 1);
 }
 
-export function freshErrorIndex(agents) {
+export function freshErrorIndex(agents, now = Date.now()) {
   return (agents ?? []).findIndex(
-    (agent) => agent?.status === "error" && agent?.freshness?.stale !== true,
+    (agent) => agent?.status === "error" && isSnapshotFresh(agent, now),
   );
+}
+
+export function agentIndexesFor(agents, {
+  focusMode = "off",
+  pinnedKeys = [],
+  orderKeys = [],
+  now = Date.now(),
+} = {}) {
+  let list = (agents ?? []).map((agent, index) => [agent, index]);
+  if (focusMode === "errors") {
+    list = list.filter(([agent]) => agent?.status === "error" && isSnapshotFresh(agent, now));
+  }
+  if (focusMode === "pinned" && pinnedKeys.length) {
+    list = list.filter(([agent, index]) => pinnedKeys.includes(agentKey(agent, index)));
+  }
+  if (orderKeys.length) {
+    list.sort((left, right) => {
+      const leftOrder = orderKeys.indexOf(agentKey(left[0], left[1]));
+      const rightOrder = orderKeys.indexOf(agentKey(right[0], right[1]));
+      return (leftOrder < 0 ? Number.MAX_SAFE_INTEGER : leftOrder)
+        - (rightOrder < 0 ? Number.MAX_SAFE_INTEGER : rightOrder);
+    });
+  }
+  return list.map(([, index]) => index);
 }
 
 export function islandSession(agent) {
@@ -43,8 +91,8 @@ function notificationKind(previousStatus, nextStatus) {
   return null;
 }
 
-export function snapshotTransitionDecision(agent, previousStatus, nextStatus) {
-  if (agent?.freshness?.stale === true) {
+export function snapshotTransitionDecision(agent, previousStatus, nextStatus, now = Date.now()) {
+  if (!isSnapshotFresh(agent, now)) {
     return {
       recordStatus: false,
       notificationKind: null,

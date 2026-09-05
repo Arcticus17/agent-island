@@ -12,8 +12,11 @@ import {
 import { clampIslandX, getSafeIslandHeight, getSafeIslandWidth } from "./layout.js";
 import {
   agentKey,
+  agentIndexesFor,
   freshErrorIndex,
   islandSession,
+  markRetainedAgentsStale,
+  notificationGroupKey,
   restoreAgentIndex,
   sessionKey,
   snapshotTransitionDecision,
@@ -397,6 +400,7 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", setTheme);
 
 // Render
 function refresh() {
+  const now = Date.now();
   const activeStatuses = new Set(["working", "idle", "high_load", "error", "waiting", "done", "running"]);
   const hasActive = agents.some((agent) => activeStatuses.has(statusFor(agent, islandSession(agent))));
   const a = agents[cur] || null;
@@ -411,7 +415,7 @@ function refresh() {
     compactIcon.style.display = "none";
     compactIcon.removeAttribute("src");
   } else {
-    navArrow.style.display = agentIndexes().length > 1 ? "inline-block" : "none";
+    navArrow.style.display = agentIndexes(now).length > 1 ? "inline-block" : "none";
     updateDot(viewStatus);
     agentNameEl.textContent = a.name;
     if (agents.length > 1) {
@@ -538,12 +542,12 @@ function refresh() {
 
   const statusKey = sessionKey(a, sess, cur);
   const prev = prevStatus[statusKey];
-  const transition = snapshotTransitionDecision(a, prev, viewStatus);
+  const transition = snapshotTransitionDecision(a, prev, viewStatus, now);
   if (transition.recordStatus) prevStatus[statusKey] = viewStatus;
   if (transition.notificationKind && !switching && !quietActive()) {
     const kind = transition.notificationKind;
     if (kind) {
-      pushNotify(a, kind, sess);
+      pushNotify(a, kind, sess, cur);
       if (transition.autoJump) {
         const idx = restoreAgentIndex(agents, agentKey(a, cur), cur);
         if (idx >= 0 && idx !== cur) {
@@ -712,7 +716,7 @@ function updateAgentStrip() {
       }
     });
     chip.addEventListener("dragstart", (e) => {
-      e.dataTransfer.setData("text/plain", agent.name);
+      e.dataTransfer.setData("text/plain", key);
       chip.classList.add("dragging");
       cardPreviewEl.classList.add("hidden");
     });
@@ -729,12 +733,13 @@ function updateAgentStrip() {
       e.stopPropagation();
       chip.classList.remove("drag-over");
       const dragged = e.dataTransfer.getData("text/plain");
-      if (!dragged || dragged === agent.name) return;
+      if (!dragged || dragged === key) return;
       const order = agentOrder.filter((n) => n !== dragged);
-      const targetIdx = order.indexOf(agent.name);
+      const targetIdx = order.indexOf(key);
       order.splice(targetIdx < 0 ? order.length : targetIdx, 0, dragged);
-      for (const a of agents) {
-        if (!order.includes(a.name)) order.push(a.name);
+      for (const [agentIndex, listedAgent] of agents.entries()) {
+        const listedKey = agentKey(listedAgent, agentIndex);
+        if (!order.includes(listedKey)) order.push(listedKey);
       }
       agentOrder = order;
       localStorage.setItem("agent-island-order", JSON.stringify(agentOrder));
@@ -830,8 +835,8 @@ function applyFields() {
   syncFieldsPop();
 }
 
-function canNotify(agent, kind) {
-  const key = `${agent.name}:${kind}`;
+function canNotify(agent, kind, sess, agentIndex) {
+  const key = `${notificationGroupKey(agent, sess, agentIndex)}:${kind}`;
   const now = Date.now();
   if (notifyCooldown[key] && now - notifyCooldown[key] < 20000) return false;
   notifyCooldown[key] = now;
@@ -840,23 +845,26 @@ function canNotify(agent, kind) {
 
 const NOTIFY_LABEL = { error: "报错", done: "已完成", waiting: "等待确认" };
 
-function pushNotify(agent, kind, sess) {
+function pushNotify(agent, kind, sess, agentIndex) {
   if (quietActive()) return;
   if (focusMode === "errors" && kind !== "error") return;
-  if (!canNotify(agent, kind)) return;
+  if (!canNotify(agent, kind, sess, agentIndex)) return;
   island.classList.remove("notify-attention");
   void island.offsetWidth;
   island.classList.add("notify-attention");
   const label = NOTIFY_LABEL[kind] || kind;
-  let group = notifyGroups.get(agent.name);
+  const groupKey = notificationGroupKey(agent, sess, agentIndex);
+  let group = notifyGroups.get(groupKey);
   if (!group) {
-    group = { agent, items: [], timer: null, open: false };
-    notifyGroups.set(agent.name, group);
+    group = { agent, name: agent.name, items: [], timer: null, open: false };
+    notifyGroups.set(groupKey, group);
   }
+  group.agent = agent;
+  group.name = agent.name;
   group.items.push({ kind, label, sessName: sess?.name || "" });
   if (group.items.length > 8) group.items.shift();
   clearTimeout(group.timer);
-  group.timer = setTimeout(() => dismissNotifyGroup(agent.name), 6500);
+  group.timer = setTimeout(() => dismissNotifyGroup(groupKey), 6500);
   while (notifyGroups.size > 3) {
     dismissNotifyGroup(notifyGroups.keys().next().value);
   }
@@ -870,11 +878,11 @@ function pushNotify(agent, kind, sess) {
   renderNotifyGroups();
 }
 
-function dismissNotifyGroup(name) {
-  const group = notifyGroups.get(name);
+function dismissNotifyGroup(groupKey) {
+  const group = notifyGroups.get(groupKey);
   if (!group) return;
   clearTimeout(group.timer);
-  notifyGroups.delete(name);
+  notifyGroups.delete(groupKey);
   renderNotifyGroups();
   if (!notifyGroups.size && !island.matches(":hover")) {
     setExpanded(false);
@@ -883,7 +891,8 @@ function dismissNotifyGroup(name) {
 
 function renderNotifyGroups() {
   notifyStackEl.innerHTML = "";
-  for (const [name, group] of notifyGroups) {
+  for (const [groupKey, group] of notifyGroups) {
+    const name = group.name || group.agent?.name || "";
     const card = document.createElement("div");
     card.className = "notify-group" + (group.open ? " open" : "");
     const icon = ICON_PATHS[name] || "";
@@ -924,7 +933,7 @@ function renderNotifyGroups() {
     });
     card.querySelector(".notify-close").addEventListener("click", (e) => {
       e.stopPropagation();
-      dismissNotifyGroup(name);
+      dismissNotifyGroup(groupKey);
     });
     notifyStackEl.appendChild(card);
   }
@@ -1004,7 +1013,7 @@ async function initHookEvents() {
       poll();
     } else if (ev.kind === "notification" && ev.message) {
       const agent = agents.find((x) => x.name === "Claude Code");
-      if (agent) pushNotify(agent, "waiting", null);
+      if (agent) pushNotify(agent, "waiting", null, agents.indexOf(agent));
     }
   }).catch(() => {});
 }
@@ -1092,28 +1101,20 @@ function cycleFocus() {
 function togglePin(index) {
   const a = agents[index];
   if (!a) return;
-  const i = pinnedAgents.indexOf(a.name);
+  const key = agentKey(a, index);
+  const i = pinnedAgents.indexOf(key);
   if (i >= 0) pinnedAgents.splice(i, 1);
-  else pinnedAgents.push(a.name);
+  else pinnedAgents.push(key);
   localStorage.setItem("agent-island-pinned", JSON.stringify(pinnedAgents));
 }
 
-function agentIndexes() {
-  let list = agents.map((a, i) => [a, i]);
-  if (focusMode === "errors") {
-    list = list.filter(([a]) => a.status === "error");
-  }
-  if (focusMode === "pinned" && pinnedAgents.length) {
-    list = list.filter(([a]) => pinnedAgents.includes(a.name));
-  }
-  if (agentOrder.length) {
-    list.sort((x, y) => {
-      const ix = agentOrder.indexOf(x[0].name);
-      const iy = agentOrder.indexOf(y[0].name);
-      return (ix < 0 ? 999 : ix) - (iy < 0 ? 999 : iy);
-    });
-  }
-  return list.map(([, i]) => i);
+function agentIndexes(now = Date.now()) {
+  return agentIndexesFor(agents, {
+    focusMode,
+    pinnedKeys: pinnedAgents,
+    orderKeys: agentOrder,
+    now,
+  });
 }
 
 function jumpToAgentByKey(key) {
@@ -1386,7 +1387,9 @@ async function poll() {
   const previousKey = agents[cur] ? agentKey(agents[cur], cur) : null;
   try {
     agents = inTauri ? await invoke("get_agents") : demoAgents;
-  } catch (_) {}
+  } catch (_) {
+    agents = markRetainedAgentsStale(agents);
+  }
   const rank = { error: 0, high_load: 0, waiting: 0, working: 1, running: 1, done: 2, idle: 2, stopped: 3 };
   agents.sort((x, y) => (rank[x.status] ?? 3) - (rank[y.status] ?? 3));
   if (previousKey) {
@@ -1399,11 +1402,16 @@ async function poll() {
     simulateDemoEvents();
   }
   if (focusMode === "errors") {
-    const err = freshErrorIndex(agents);
+    const err = freshErrorIndex(agents, Date.now());
     if (err >= 0) cur = err;
   }
   if (focusMode === "pinned" && pinnedAgents.length) {
-    const pi = agents.findIndex((x) => pinnedAgents.includes(x.name));
+    const pi = agentIndexesFor(agents, {
+      focusMode: "pinned",
+      pinnedKeys: pinnedAgents,
+      orderKeys: agentOrder,
+      now: Date.now(),
+    })[0];
     if (pi >= 0) cur = pi;
   }
   if (inTauri) {

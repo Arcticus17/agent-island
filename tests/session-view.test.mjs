@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 
 import {
   agentKey,
+  agentIndexesFor,
   freshErrorIndex,
   islandSession,
+  markRetainedAgentsStale,
+  notificationGroupKey,
   overviewRows,
   restoreAgentIndex,
   sessionKey,
@@ -27,7 +30,7 @@ test("error focus selects a fresh error", () => {
     { status: "error", freshness: { observed_at_ms: 20, stale: false } },
   ];
 
-  assert.equal(freshErrorIndex(agents), 1);
+  assert.equal(freshErrorIndex(agents, 21), 1);
 });
 
 test("island never falls back to historical or legacy sessions", () => {
@@ -178,6 +181,7 @@ test("fresh snapshot retains legacy transition behavior", () => {
     { freshness: { observed_at_ms: 20, stale: false } },
     "working",
     "waiting",
+    21,
   );
 
   assert.deepEqual(decision, {
@@ -190,5 +194,75 @@ test("fresh snapshot retains legacy transition behavior", () => {
   assert.equal(
     snapshotTransitionDecision({}, "working", "done").notificationKind,
     "done",
+  );
+});
+
+test("an expired retained error cannot notify, auto-jump, focus, or replace its baseline", () => {
+  const retained = {
+    id: "codex",
+    status: "error",
+    freshness: { observed_at_ms: 1_000, stale: false },
+  };
+
+  assert.equal(freshErrorIndex([retained], 8_001), -1);
+  assert.deepEqual(
+    snapshotTransitionDecision(retained, "working", "error", 8_001),
+    {
+      recordStatus: false,
+      notificationKind: null,
+      statusFlash: false,
+      errorFlash: false,
+      autoJump: false,
+    },
+  );
+});
+
+test("a failed poll marks retained records stale before transition and focus paths run", () => {
+  const retained = markRetainedAgentsStale([{
+    id: "claude",
+    status: "error",
+    freshness: { observed_at_ms: 7_000, stale: false },
+  }]);
+
+  assert.equal(retained[0].freshness.stale, true);
+  assert.equal(freshErrorIndex(retained, 7_001), -1);
+  assert.equal(
+    snapshotTransitionDecision(retained[0], "working", "error", 7_001).recordStatus,
+    false,
+  );
+});
+
+test("notification groups and preference indexes remain isolated across duplicate labels and rename", () => {
+  const before = [
+    { id: "claude", name: "Assistant", status: "working" },
+    { id: "codex", name: "Assistant", status: "error" },
+  ];
+  const claudeGroup = notificationGroupKey(before[0], { id: "turn-a" }, 0);
+  const codexGroup = notificationGroupKey(before[1], { id: "turn-a" }, 1);
+  const after = [
+    { id: "codex", name: "Renamed Codex", status: "error" },
+    { id: "claude", name: "Assistant", status: "working" },
+  ];
+
+  assert.notEqual(claudeGroup, codexGroup);
+  assert.equal(
+    notificationGroupKey(after[0], { id: "turn-a" }, 0),
+    codexGroup,
+  );
+  assert.deepEqual(
+    agentIndexesFor(after, {
+      focusMode: "pinned",
+      pinnedKeys: ["codex"],
+      orderKeys: ["claude", "codex"],
+      now: 1_000,
+    }),
+    [0],
+  );
+  assert.deepEqual(
+    agentIndexesFor(after, {
+      orderKeys: ["claude", "codex"],
+      now: 1_000,
+    }),
+    [1, 0],
   );
 });
