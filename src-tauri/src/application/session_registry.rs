@@ -10,45 +10,117 @@ pub enum SessionMatch {
     Unknown,
 }
 
+#[derive(Debug)]
+struct SessionEvidence {
+    session_id: String,
+    process_ids: Vec<u32>,
+    has_matching_project: bool,
+    has_missing_project: bool,
+    has_nonmatching_project: bool,
+}
+
+impl SessionEvidence {
+    fn has_project_conflict(&self) -> bool {
+        self.has_matching_project && self.has_nonmatching_project
+    }
+}
+
 pub fn match_active_session(
     process: &ProcessIdentity,
     candidates: &[SessionIdentity],
 ) -> SessionMatch {
     let earliest_event_at_ms = process.started_at_ms.saturating_sub(PROCESS_START_GRACE_MS);
-    let matching: Vec<&SessionIdentity> = candidates
+    let process_path = present_project_path(process.project_path.as_deref());
+    let mut identities: Vec<SessionEvidence> = Vec::new();
+
+    for candidate in candidates.iter().filter(|candidate| {
+        candidate.agent_id == process.agent_id && candidate.last_event_at_ms >= earliest_event_at_ms
+    }) {
+        let candidate_path = present_project_path(candidate.project_path.as_deref());
+        let (has_matching_project, has_nonmatching_project) = match (process_path, candidate_path) {
+            (Some(process_path), Some(candidate_path))
+                if projects_match(process_path, candidate_path) =>
+            {
+                (true, false)
+            }
+            (Some(_), Some(_)) => (false, true),
+            _ => (false, false),
+        };
+        let has_missing_project = candidate_path.is_none();
+
+        if let Some(identity) = identities
+            .iter_mut()
+            .find(|identity| identity.session_id == candidate.session_id)
+        {
+            identity
+                .process_ids
+                .extend_from_slice(&candidate.process_ids);
+            identity.has_matching_project |= has_matching_project;
+            identity.has_missing_project |= has_missing_project;
+            identity.has_nonmatching_project |= has_nonmatching_project;
+        } else {
+            identities.push(SessionEvidence {
+                session_id: candidate.session_id.clone(),
+                process_ids: candidate.process_ids.clone(),
+                has_matching_project,
+                has_missing_project,
+                has_nonmatching_project,
+            });
+        }
+    }
+
+    let confirmed: Vec<&SessionEvidence> = identities
         .iter()
-        .filter(|candidate| {
-            candidate.agent_id == process.agent_id
-                && projects_match(
-                    process.project_path.as_deref(),
-                    candidate.project_path.as_deref(),
-                )
-                && candidate.last_event_at_ms >= earliest_event_at_ms
+        .filter(|identity| shares_process_id(process, &identity.process_ids))
+        .collect();
+    match confirmed.as_slice() {
+        [] => {}
+        [identity] if !identity.has_project_conflict() => {
+            return SessionMatch::Confirmed(identity.session_id.clone())
+        }
+        identities => return SessionMatch::Ambiguous(session_ids(identities.iter().copied())),
+    }
+
+    if process_path.is_none() {
+        return match identities.as_slice() {
+            [] => SessionMatch::Unknown,
+            identities => SessionMatch::Ambiguous(session_ids(identities.iter())),
+        };
+    }
+
+    let probable: Vec<&SessionEvidence> = identities
+        .iter()
+        .filter(|identity| {
+            identity.has_matching_project
+                || identity.has_missing_project
+                || identity.has_project_conflict()
         })
         .collect();
-
-    match matching.as_slice() {
+    match probable.as_slice() {
         [] => SessionMatch::Unknown,
-        [candidate] if shares_process_id(process, candidate) => {
-            SessionMatch::Confirmed(candidate.session_id.clone())
+        [identity]
+            if identity.has_matching_project
+                && !identity.has_missing_project
+                && !identity.has_project_conflict() =>
+        {
+            SessionMatch::Probable(identity.session_id.clone())
         }
-        [candidate] => SessionMatch::Probable(candidate.session_id.clone()),
-        candidates => SessionMatch::Ambiguous(
-            candidates
-                .iter()
-                .map(|candidate| candidate.session_id.clone())
-                .collect(),
-        ),
+        identities => SessionMatch::Ambiguous(session_ids(identities.iter().copied())),
     }
 }
 
-fn projects_match(process_path: Option<&str>, candidate_path: Option<&str>) -> bool {
-    match (process_path, candidate_path) {
-        (Some(process_path), Some(candidate_path)) => {
-            normalize_windows_path(process_path) == normalize_windows_path(candidate_path)
-        }
-        _ => false,
-    }
+fn session_ids<'a>(identities: impl Iterator<Item = &'a SessionEvidence>) -> Vec<String> {
+    identities
+        .map(|identity| identity.session_id.clone())
+        .collect()
+}
+
+fn present_project_path(path: Option<&str>) -> Option<&str> {
+    path.filter(|path| !path.trim().is_empty())
+}
+
+fn projects_match(process_path: &str, candidate_path: &str) -> bool {
+    normalize_windows_path(process_path) == normalize_windows_path(candidate_path)
 }
 
 fn normalize_windows_path(path: &str) -> String {
@@ -64,9 +136,8 @@ fn is_drive_root(path: &str) -> bool {
     bytes.len() == 3 && bytes[1] == b':' && bytes[2] == b'\\'
 }
 
-fn shares_process_id(process: &ProcessIdentity, candidate: &SessionIdentity) -> bool {
-    candidate
-        .process_ids
+fn shares_process_id(process: &ProcessIdentity, candidate_process_ids: &[u32]) -> bool {
+    candidate_process_ids
         .iter()
         .any(|candidate_id| process.process_ids.contains(candidate_id))
 }
@@ -179,14 +250,14 @@ mod tests {
     }
 
     #[test]
-    fn keeps_ambiguity_when_only_one_of_multiple_candidates_shares_a_process_id() {
+    fn confirms_process_id_evidence_over_an_unlinked_probable_candidate() {
         let process = process(Some(r"D:\work\app"), vec![10], 20_000);
         let linked = session("codex", "linked", Some(r"D:\work\app"), vec![10], 21_000);
         let unlinked = session("codex", "unlinked", Some(r"D:\work\app"), vec![], 21_000);
 
         assert_eq!(
             match_active_session(&process, &[linked, unlinked]),
-            SessionMatch::Ambiguous(vec!["linked".into(), "unlinked".into()])
+            SessionMatch::Confirmed("linked".into())
         );
     }
 
@@ -202,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_candidates_with_a_different_agent_or_missing_project_path() {
+    fn rejects_candidates_with_a_different_agent() {
         let process = process(Some(r"D:\work\app"), vec![10], 20_000);
         let other_agent = session(
             "claude",
@@ -211,11 +282,138 @@ mod tests {
             vec![],
             21_000,
         );
-        let missing_project = session("codex", "missing-project", None, vec![], 21_000);
 
         assert_eq!(
-            match_active_session(&process, &[other_agent, missing_project]),
+            match_active_session(&process, &[other_agent]),
             SessionMatch::Unknown
+        );
+    }
+
+    #[test]
+    fn merges_process_id_evidence_across_duplicate_session_records() {
+        let process = process(Some(r"D:\work\app"), vec![10], 20_000);
+        let path_record = session("codex", "same", Some(r"D:\work\app"), vec![], 21_000);
+        let pid_record = session("codex", "same", Some(r"d:/WORK/app/"), vec![10], 21_000);
+
+        assert_eq!(
+            match_active_session(&process, &[path_record, pid_record]),
+            SessionMatch::Confirmed("same".into())
+        );
+    }
+
+    #[test]
+    fn keeps_multiple_confirmed_session_ids_ambiguous() {
+        let process = process(Some(r"D:\work\app"), vec![10], 20_000);
+        let first = session("codex", "first", Some(r"D:\one"), vec![10], 21_000);
+        let second = session("codex", "second", Some(r"D:\two"), vec![10], 21_000);
+
+        assert_eq!(
+            match_active_session(&process, &[first, second]),
+            SessionMatch::Ambiguous(vec!["first".into(), "second".into()])
+        );
+    }
+
+    #[test]
+    fn treats_a_candidate_without_a_project_path_as_ambiguous() {
+        let process = process(Some(r"D:\work\app"), vec![10], 20_000);
+        let missing = session("codex", "missing", None, vec![], 21_000);
+        let matching = session("codex", "matching", Some(r"D:\work\app"), vec![], 21_000);
+
+        assert_eq!(
+            match_active_session(&process, &[missing, matching]),
+            SessionMatch::Ambiguous(vec!["missing".into(), "matching".into()])
+        );
+    }
+
+    #[test]
+    fn treats_a_missing_process_project_path_as_ambiguous() {
+        let process = process(None, vec![10], 20_000);
+        let candidate = session("codex", "candidate", Some(r"D:\work\app"), vec![], 21_000);
+
+        assert_eq!(
+            match_active_session(&process, &[candidate]),
+            SessionMatch::Ambiguous(vec!["candidate".into()])
+        );
+    }
+
+    #[test]
+    fn treats_an_empty_or_whitespace_project_path_as_missing() {
+        let process = process(Some(r"D:\work\app"), vec![10], 20_000);
+        let empty = session("codex", "empty", Some(""), vec![], 21_000);
+        let whitespace = session("codex", "whitespace", Some(" \t"), vec![], 21_000);
+
+        assert_eq!(
+            match_active_session(&process, &[empty, whitespace]),
+            SessionMatch::Ambiguous(vec!["empty".into(), "whitespace".into()])
+        );
+    }
+
+    #[test]
+    fn treats_a_whitespace_process_project_path_as_missing() {
+        let process = process(Some(" \t"), vec![10], 20_000);
+        let candidate = session("codex", "candidate", Some(r"D:\work\app"), vec![], 21_000);
+
+        assert_eq!(
+            match_active_session(&process, &[candidate]),
+            SessionMatch::Ambiguous(vec!["candidate".into()])
+        );
+    }
+
+    #[test]
+    fn rejects_nonempty_different_project_paths() {
+        let process = process(Some(r"D:\work\app"), vec![10], 20_000);
+        let candidate = session("codex", "other", Some(r"D:\work\other"), vec![], 21_000);
+
+        assert_eq!(
+            match_active_session(&process, &[candidate]),
+            SessionMatch::Unknown
+        );
+    }
+
+    #[test]
+    fn normalizes_unc_share_roots_with_mixed_separators() {
+        let process = process(Some(r"\\server\share\"), vec![10], 20_000);
+        let candidate = session("codex", "share", Some("//SERVER/share//"), vec![], 21_000);
+
+        assert_eq!(
+            match_active_session(&process, &[candidate]),
+            SessionMatch::Probable("share".into())
+        );
+    }
+
+    #[test]
+    fn deduplicates_repeated_session_ids_for_probable_matches() {
+        let process = process(Some(r"D:\work\app"), vec![10], 20_000);
+        let first = session("codex", "same", Some(r"D:\work\app"), vec![], 21_000);
+        let duplicate = session("codex", "same", Some(r"d:/WORK/app/"), vec![], 22_000);
+
+        assert_eq!(
+            match_active_session(&process, &[first, duplicate]),
+            SessionMatch::Probable("same".into())
+        );
+    }
+
+    #[test]
+    fn keeps_duplicate_session_records_with_conflicting_project_paths_ambiguous() {
+        let process = process(Some(r"D:\work\app"), vec![10], 20_000);
+        let matching = session("codex", "same", Some(r"D:\work\app"), vec![], 21_000);
+        let conflicting = session("codex", "same", Some(r"D:\other"), vec![], 21_000);
+
+        assert_eq!(
+            match_active_session(&process, &[matching, conflicting]),
+            SessionMatch::Ambiguous(vec!["same".into()])
+        );
+    }
+
+    #[test]
+    fn does_not_confirm_process_id_evidence_for_conflicting_duplicate_project_paths() {
+        let process = process(Some(r"D:\work\app"), vec![10], 20_000);
+        let matching = session("codex", "same", Some(r"D:\work\app"), vec![], 21_000);
+        let conflicting = session("codex", "same", Some(r"D:\other"), vec![10], 21_000);
+
+        assert_eq!(
+            match_active_session(&process, &[matching, conflicting]),
+            SessionMatch::Ambiguous(vec!["same".into()])
         );
     }
 }
