@@ -1,7 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { islandSession, overviewRows, statusFor } from "../src/session-view.js";
+import {
+  agentKey,
+  islandSession,
+  overviewRows,
+  restoreAgentIndex,
+  sessionKey,
+  statusFor,
+} from "../src/session-view.js";
 
 test("island never falls back to historical or legacy sessions", () => {
   const agent = {
@@ -35,7 +42,7 @@ test("overview includes active and history once per agent and session", () => {
     },
     {
       id: "claude",
-      name: "Claude Code",
+      name: "Codex CLI",
       active_session: null,
       history_sessions: [{ id: "same", name: "Other agent", display_status: "idle" }],
     },
@@ -95,4 +102,37 @@ test("historical rows do not borrow current agent output or paths", () => {
   assert.equal(row.output, "暂无输出");
   assert.equal(row.cwd, null);
   assert.equal(row.file, null);
+});
+
+test("stable session keys isolate duplicate names and session ids", () => {
+  const session = { id: "current" };
+  const first = { id: "claude", name: "Assistant" };
+  const second = { id: "codex", name: "Assistant" };
+
+  assert.equal(agentKey(first, 0), "claude");
+  assert.equal(agentKey(second, 1), "codex");
+  assert.equal(sessionKey(first, session, 0), "claude::current");
+  assert.equal(sessionKey(second, session, 1), "codex::current");
+});
+
+test("legacy duplicate names remain distinct by stable position", () => {
+  const first = { name: "Assistant" };
+  const second = { name: "Assistant" };
+
+  assert.equal(agentKey(first, 0), "legacy:0:Assistant");
+  assert.equal(agentKey(second, 1), "legacy:1:Assistant");
+});
+
+test("poll selection follows a stable id across rename and reorder", () => {
+  const before = [
+    { id: "claude", name: "Assistant" },
+    { id: "codex", name: "Assistant" },
+  ];
+  const selectedKey = agentKey(before[1], 1);
+  const after = [
+    { id: "codex", name: "Renamed Codex" },
+    { id: "claude", name: "Assistant" },
+  ];
+
+  assert.equal(restoreAgentIndex(after, selectedKey, 1), 0);
 });

@@ -39,3 +39,30 @@ Implemented session-consistent selectors for the legacy island and overview UI.
 - Historical summaries contain no output or current-file fields in the new schema, so the overview truthfully shows no output/path rather than displaying the current agent's data.
 - Task 8 remains responsible for stale snapshot gating.
 - The two pre-existing generated schema files remain modified but were not edited, staged, or committed by this task.
+
+## Review Remediation Round 1
+
+- Added stable `id` to the production `AgentInfo` legacy DTO, populated it from the scanner's existing `agent_id`, and matched snapshot projections by ID rather than mutable display name.
+- Added `agentKey`, `sessionKey`, and `restoreAgentIndex` selectors. New payloads use stable IDs; old ID-less payloads use a name plus stable-position compatibility key that keeps duplicate names distinct.
+- Changed poll restoration to retain the selected agent by ID across sorting and display-name changes.
+- Changed output cache and notification transition keys to combine stable agent identity with active session ID, preventing collisions between equal display names and equal session IDs.
+- Changed notification alert lookup and agent-strip active/click targeting to stable identity. Existing name-based pinned and ordering preferences remain unchanged for compatibility.
+- Confirmed overview row IDs remain isolated by stable agent ID and session ID even when display names and session IDs are duplicated.
+
+### Remediation TDD Evidence
+
+- RED: importing `agentKey`, `sessionKey`, and `restoreAgentIndex` failed because those selectors did not exist.
+- GREEN: focused frontend selector tests passed 9/9 after adding stable keys and poll restoration.
+- RED: the legacy projection serialization test returned `null` for `id` before the production DTO exposed it.
+- RED: after adding the field, a snapshot with the same ID but renamed display name remained `idle`, proving projection still matched by name.
+- GREEN: the focused Rust projection test passed after matching by stable ID and serialized `id` as `codex`.
+
+### Fresh Remediation Verification
+
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`: passed.
+- `npm test`: frontend 10 passed and Rust library 68 passed, 0 failed.
+- `npm run build`: Vite production build passed; 15 modules transformed.
+- `node --check src/main.js` and `node --check src/overview.js`: passed.
+- `git diff --check`: passed with only existing line-ending/config warnings.
+
+The two pre-existing generated schema differences remain unstaged. Task 8 stale gating and name-based pinned/ordering preference migration remain outside this repair.

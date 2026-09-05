@@ -21,6 +21,7 @@ use tauri::Manager;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentInfo {
+    pub id: String,
     pub name: String,
     pub status: String,
     pub display_status: domain::DisplayStatus,
@@ -426,6 +427,7 @@ fn scan_agents(
             session.runtime_start.remove(agent_name);
             let first = session_list.first();
             agents.push(AgentInfo {
+                id: agent_id.to_string(),
                 name: agent_name.clone(),
                 status: "stopped".to_string(),
                 display_status: domain::DisplayStatus::Stopped,
@@ -555,6 +557,7 @@ fn scan_agents(
         let stats_snapshot = stats.clone();
 
         agents.push(AgentInfo {
+            id: agent_id.to_string(),
             name: agent_name.clone(),
             status: status.to_string(),
             display_status: domain::DisplayStatus::Idle,
@@ -614,9 +617,10 @@ fn apply_snapshot_projection(
     snapshot: &interface::snapshot::AgentViewSnapshot,
 ) {
     for agent in agents {
-        let Some(view) = snapshot.agents.iter().find(|view| view.name == agent.name) else {
+        let Some(view) = snapshot.agents.iter().find(|view| view.id == agent.id) else {
             continue;
         };
+        agent.id = view.id.clone();
         agent.status = legacy_status(view.display_status).into();
         agent.display_status = view.display_status;
         agent.active_session = view.active_session.clone();
@@ -3614,6 +3618,7 @@ mod tests {
             alert: None,
         };
         let mut agents = vec![AgentInfo {
+            id: "codex".into(),
             name: "Codex CLI".into(),
             status: "working".into(),
             display_status: DisplayStatus::Idle,
@@ -3653,7 +3658,7 @@ mod tests {
             generated_at_ms: 10,
             agents: vec![AgentView {
                 id: "codex".into(),
-                name: "Codex CLI".into(),
+                name: "Renamed Codex".into(),
                 state: AgentState::running(TurnState::Executing, AttentionState::None),
                 display_status: DisplayStatus::Working,
                 active_session: Some(active_session),
@@ -3670,6 +3675,7 @@ mod tests {
         apply_snapshot_projection(&mut agents, &snapshot);
 
         let json = serde_json::to_value(&agents[0]).unwrap();
+        assert_eq!(json["id"], "codex");
         assert_eq!(json["name"], "Codex CLI");
         assert_eq!(json["status"], "working");
         assert_eq!(json["display_status"], "working");

@@ -10,7 +10,13 @@ import {
   LogicalSize,
 } from "@tauri-apps/api/window";
 import { clampIslandX, getSafeIslandHeight, getSafeIslandWidth } from "./layout.js";
-import { islandSession, statusFor } from "./session-view.js";
+import {
+  agentKey,
+  islandSession,
+  restoreAgentIndex,
+  sessionKey,
+  statusFor,
+} from "./session-view.js";
 
 const inTauri = "__TAURI_INTERNALS__" in window;
 const tauriWin = inTauri ? getCurrentWindow() : null;
@@ -488,7 +494,7 @@ function refresh() {
   expFile.textContent = sess?.current_file || "-";
   expFile.title = sess?.current_file || "";
   const recentLines = sess?.recent_output || [];
-  renderOutput(recentLines, `${a.name}|${sess?.id || ""}`);
+  renderOutput(recentLines, sessionKey(a, sess, cur));
   expStats.textContent = a.stats
     ? `${fmtUptime(a.stats.total_seconds)} · 报错${a.stats.error_count} · 完成${a.stats.done_count}`
     : "-";
@@ -528,7 +534,7 @@ function refresh() {
     confirmAgent = null;
   }
 
-  const statusKey = `${a.name}:${sess?.id || "no-active"}`;
+  const statusKey = sessionKey(a, sess, cur);
   const prev = prevStatus[statusKey];
   prevStatus[statusKey] = viewStatus;
   if (prev !== undefined && prev !== viewStatus && !switching && !quietActive()) {
@@ -536,7 +542,7 @@ function refresh() {
     if (kind) {
       pushNotify(a, kind, sess);
       if (kind === "error" || kind === "waiting") {
-        const idx = agents.findIndex((x) => x.name === a.name);
+        const idx = restoreAgentIndex(agents, agentKey(a, cur), cur);
         if (idx >= 0 && idx !== cur) {
           setTimeout(() => { cur = idx; refresh(); }, 60);
         }
@@ -677,15 +683,17 @@ function updateIconStack() {
 
 function updateAgentStrip() {
   const idxs = agentIndexes();
-  const list = idxs.map((i) => agents[i]).filter(Boolean);
   agentStripEl.innerHTML = "";
-  for (const agent of list) {
+  for (const index of idxs) {
+    const agent = agents[index];
+    if (!agent) continue;
+    const key = agentKey(agent, index);
     const chip = document.createElement("button");
     chip.type = "button";
-    chip.draggable = list.length > 1;
-    chip.className = "agent-chip" + (agent.name === agents[cur]?.name ? " active" : "");
+    chip.draggable = idxs.length > 1;
+    chip.className = "agent-chip" + (index === cur ? " active" : "");
     chip.title = agent.name;
-    chip.dataset.name = agent.name;
+    chip.dataset.agentKey = key;
     const src = ICON_PATHS[agent.name] || "";
     chip.innerHTML = (src
       ? `<img class="agent-chip-icon" alt="" src="${src}">`
@@ -693,7 +701,7 @@ function updateAgentStrip() {
     ) + `<span class="agent-chip-name">${escapeHtml(agent.name)}</span><span class="agent-chip-dot ${dotClass(statusFor(agent, islandSession(agent)))}"></span><span class="agent-chip-handle" title="拖拽排序">⋮⋮</span>`;
     chip.addEventListener("click", (e) => {
       e.stopPropagation();
-      const idx = agents.findIndex((x) => x.name === agent.name);
+      const idx = restoreAgentIndex(agents, key, index);
       if (idx >= 0 && idx !== cur) {
         cur = idx;
         animateSwitch();
@@ -1380,15 +1388,14 @@ function simulateDemoEvents() {
 }
 
 async function poll() {
-  const prevName = agents[cur]?.name;
+  const previousKey = agents[cur] ? agentKey(agents[cur], cur) : null;
   try {
     agents = inTauri ? await invoke("get_agents") : demoAgents;
   } catch (_) {}
   const rank = { error: 0, high_load: 0, waiting: 0, working: 1, running: 1, done: 2, idle: 2, stopped: 3 };
   agents.sort((x, y) => (rank[x.status] ?? 3) - (rank[y.status] ?? 3));
-  if (prevName) {
-    const idx = agents.findIndex((x) => x.name === prevName);
-    cur = idx >= 0 ? idx : Math.min(cur, agents.length - 1);
+  if (previousKey) {
+    cur = restoreAgentIndex(agents, previousKey, cur);
   } else if (agents.length) {
     const active = agents.findIndex((x) => x.status !== "stopped");
     cur = active === -1 ? 0 : active;
