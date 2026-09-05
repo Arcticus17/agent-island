@@ -706,6 +706,7 @@ version = "1.8.2"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
  "sysinfo",
  "tauri",
  "tauri-build",

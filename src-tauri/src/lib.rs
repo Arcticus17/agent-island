@@ -43,6 +43,7 @@ pub struct AgentInfo {
     pub session_list: Vec<AgentSession>,
     pub active_session: Option<interface::snapshot::SessionView>,
     pub history_sessions: Option<Vec<interface::snapshot::SessionSummary>>,
+    pub freshness: domain::Freshness,
     pub usage: Option<UsageInfo>,
 }
 
@@ -83,6 +84,7 @@ pub struct AgentSession {
 struct SessionScan {
     legacy_sessions: Vec<AgentSession>,
     candidates: Vec<interface::snapshot::SessionCandidate>,
+    diagnostics: Vec<interface::diagnostics::DiagnosticRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -252,6 +254,7 @@ type AgentDataCache = Option<(
     Instant,
     Vec<AgentInfo>,
     interface::snapshot::AgentViewSnapshot,
+    interface::diagnostics::DiagnosticSnapshot,
 )>;
 
 struct SendTask {
@@ -387,7 +390,12 @@ fn normalize_process_path(path: &str) -> String {
 fn scan_agents(
     sys: &mut System,
     session: &mut SessionState,
-) -> (Vec<AgentInfo>, interface::snapshot::AgentViewSnapshot, bool) {
+) -> (
+    Vec<AgentInfo>,
+    interface::snapshot::AgentViewSnapshot,
+    interface::diagnostics::DiagnosticSnapshot,
+    bool,
+) {
     sys.refresh_processes(ProcessesToUpdate::All, true);
     let now = Instant::now();
     let delta = now.duration_since(session.last_poll).as_secs();
@@ -395,6 +403,7 @@ fn scan_agents(
     let mut agents: Vec<AgentInfo> = Vec::new();
     let mut process_facts = Vec::new();
     let mut session_candidates = Vec::new();
+    let mut diagnostic_records = Vec::new();
     let mut stats_changed = false;
 
     for def in agent_defs() {
@@ -422,6 +431,7 @@ fn scan_agents(
         let mut session_scan = build_session_scan(agent_name);
         let session_list = std::mem::take(&mut session_scan.legacy_sessions);
         session_candidates.append(&mut session_scan.candidates);
+        diagnostic_records.append(&mut session_scan.diagnostics);
         if processes.is_empty() {
             session.activity.remove(agent_name);
             session.runtime_start.remove(agent_name);
@@ -449,6 +459,10 @@ fn scan_agents(
                 session_list,
                 active_session: None,
                 history_sessions: None,
+                freshness: domain::Freshness {
+                    observed_at_ms: epoch_millis(),
+                    stale: false,
+                },
                 usage: usage_for(agent_name),
             });
             continue;
@@ -579,13 +593,35 @@ fn scan_agents(
             session_list,
             active_session: None,
             history_sessions: None,
+            freshness: domain::Freshness {
+                observed_at_ms: epoch_millis(),
+                stale: false,
+            },
             usage: usage_for(agent_name),
         });
     }
+    let generated_at_ms = epoch_millis();
     let snapshot =
-        interface::snapshot::build_snapshot(epoch_millis(), &process_facts, &session_candidates);
+        interface::snapshot::build_snapshot(generated_at_ms, &process_facts, &session_candidates);
+    for agent in &snapshot.agents {
+        if let Some(view) = &agent.diagnostic {
+            diagnostic_records.push(interface::diagnostics::DiagnosticRecord {
+                view: view.clone(),
+                session_id: None,
+                project_path: process_facts
+                    .iter()
+                    .find(|fact| fact.identity.agent_id == agent.id)
+                    .and_then(|fact| fact.identity.project_path.clone()),
+                message_length: 0,
+            });
+        }
+    }
+    let diagnostics = interface::diagnostics::DiagnosticSnapshot {
+        generated_at_ms,
+        records: diagnostic_records,
+    };
     apply_snapshot_projection(&mut agents, &snapshot);
-    (agents, snapshot, stats_changed)
+    (agents, snapshot, diagnostics, stats_changed)
 }
 
 fn legacy_status(display_status: domain::DisplayStatus) -> &'static str {
@@ -625,6 +661,7 @@ fn apply_snapshot_projection(
         agent.display_status = view.display_status;
         agent.active_session = view.active_session.clone();
         agent.history_sessions = Some(view.history_sessions.clone());
+        agent.freshness = view.freshness;
         agent.session_list = view
             .active_session
             .as_ref()
@@ -1176,6 +1213,26 @@ fn session_scan_from_file(agent_id: &str, path: &Path) -> Option<SessionScan> {
     if snapshot.cwd.is_none() {
         snapshot.cwd = metadata_cwd;
     }
+    let event_count = report.events.len();
+    let message_count = report.messages.len();
+    let message_length = report
+        .messages
+        .iter()
+        .map(|message| message.text.len())
+        .sum();
+    let event_type = report.events.last().map(|event| {
+        match event.kind {
+            domain::EventKind::TurnStarted => "turn_started",
+            domain::EventKind::ToolStarted => "tool_started",
+            domain::EventKind::ToolFinished { .. } => "tool_finished",
+            domain::EventKind::AttentionRequested { .. } => "attention_requested",
+            domain::EventKind::TurnSucceeded => "turn_succeeded",
+            domain::EventKind::TurnFailed => "turn_failed",
+            domain::EventKind::DiagnosticHint { .. } => "diagnostic_hint",
+        }
+        .to_string()
+    });
+    let issue = domain::parse_issue(event_count, report.skipped_lines);
     let fallback_id = path
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
@@ -1190,9 +1247,30 @@ fn session_scan_from_file(agent_id: &str, path: &Path) -> Option<SessionScan> {
         .collect();
     let legacy = to_session_with_id(snapshot, canonical_id.clone());
     let candidate = session_candidate_from_legacy(agent_id, &legacy, events);
+    let diagnostics = issue
+        .map(|issue| interface::diagnostics::DiagnosticRecord {
+            view: interface::diagnostics::DiagnosticView::new(
+                agent_id,
+                issue,
+                domain::freshness_for_adapter(
+                    agent_id,
+                    candidate.identity.last_event_at_ms,
+                    epoch_millis(),
+                ),
+                event_type,
+                event_count,
+                message_count,
+            ),
+            session_id: Some(canonical_id),
+            project_path: candidate.identity.project_path.clone(),
+            message_length,
+        })
+        .into_iter()
+        .collect();
     Some(SessionScan {
         legacy_sessions: vec![legacy],
         candidates: vec![candidate],
+        diagnostics,
     })
 }
 
@@ -1320,6 +1398,7 @@ fn combine_session_scans(scans: impl Iterator<Item = SessionScan>) -> SessionSca
     for mut scan in scans {
         combined.legacy_sessions.append(&mut scan.legacy_sessions);
         combined.candidates.append(&mut scan.candidates);
+        combined.diagnostics.append(&mut scan.diagnostics);
     }
     combined
 }
@@ -1370,6 +1449,8 @@ fn run_command_timeout(command: &mut std::process::Command, secs: u64) -> Option
 
 fn hermes_session_scan_from_text(text: &str) -> SessionScan {
     let report = adapters::hermes::HermesAdapter.parse(text);
+    let session_count = report.sessions.len();
+    let issue = domain::parse_issue(session_count, report.skipped_lines);
     let mut scan = SessionScan::default();
     for identity in report.sessions {
         let name = session_name(identity.project_path.as_deref(), &identity.session_id);
@@ -1399,6 +1480,22 @@ fn hermes_session_scan_from_text(text: &str) -> SessionScan {
             events: Vec::new(),
         });
         scan.legacy_sessions.push(legacy);
+    }
+    if let Some(issue) = issue {
+        scan.diagnostics
+            .push(interface::diagnostics::DiagnosticRecord {
+                view: interface::diagnostics::DiagnosticView::new(
+                    "hermes",
+                    issue,
+                    domain::freshness_for_adapter("hermes", epoch_millis(), epoch_millis()),
+                    None,
+                    0,
+                    0,
+                ),
+                session_id: None,
+                project_path: None,
+                message_length: 0,
+            });
     }
     scan
 }
@@ -2544,23 +2641,39 @@ fn collect_cached_with<Clock, Scan>(
 ) -> (
     Vec<AgentInfo>,
     interface::snapshot::AgentViewSnapshot,
+    interface::diagnostics::DiagnosticSnapshot,
     Option<(bool, Instant)>,
 )
 where
     Clock: FnMut() -> Instant,
-    Scan: FnOnce() -> (Vec<AgentInfo>, interface::snapshot::AgentViewSnapshot, bool),
+    Scan: FnOnce() -> (
+        Vec<AgentInfo>,
+        interface::snapshot::AgentViewSnapshot,
+        interface::diagnostics::DiagnosticSnapshot,
+        bool,
+    ),
 {
     let checked_at = clock();
-    if let Some((cached_at, cached_agents, cached_snapshot)) = cache.as_ref() {
+    if let Some((cached_at, cached_agents, cached_snapshot, cached_diagnostics)) = cache.as_ref() {
         if checked_at.saturating_duration_since(*cached_at).as_millis() < 500 {
-            return (cached_agents.clone(), cached_snapshot.clone(), None);
+            return (
+                cached_agents.clone(),
+                cached_snapshot.clone(),
+                cached_diagnostics.clone(),
+                None,
+            );
         }
     }
 
-    let (agents, snapshot, changed) = scan();
+    let (agents, snapshot, diagnostics, changed) = scan();
     let completed_at = clock();
-    *cache = Some((completed_at, agents.clone(), snapshot.clone()));
-    (agents, snapshot, Some((changed, completed_at)))
+    *cache = Some((
+        completed_at,
+        agents.clone(),
+        snapshot.clone(),
+        diagnostics.clone(),
+    ));
+    (agents, snapshot, diagnostics, Some((changed, completed_at)))
 }
 
 fn collect_agent_data(
@@ -2569,9 +2682,10 @@ fn collect_agent_data(
     let mut sys = state.sys.lock().unwrap();
     let mut session = state.session.lock().unwrap();
     let mut cache = session.cache.take();
-    let (agents, snapshot, scan_result) = collect_cached_with(&mut cache, Instant::now, || {
-        scan_agents(&mut sys, &mut session)
-    });
+    let (agents, snapshot, _diagnostics, scan_result) =
+        collect_cached_with(&mut cache, Instant::now, || {
+            scan_agents(&mut sys, &mut session)
+        });
     session.cache = cache;
     if let Some((changed, completed_at)) = scan_result {
         if changed || completed_at.duration_since(session.last_save).as_secs() >= 30 {
@@ -2591,6 +2705,48 @@ fn get_agents(state: tauri::State<AppState>) -> Vec<AgentInfo> {
 #[tauri::command]
 fn get_agent_snapshot(state: tauri::State<AppState>) -> interface::snapshot::AgentViewSnapshot {
     collect_agent_data(&state).1
+}
+
+fn diagnostics_from_cache(cache: &AgentDataCache) -> interface::diagnostics::DiagnosticsResponse {
+    cache
+        .as_ref()
+        .map(|(_, _, _, diagnostics)| diagnostics.into())
+        .unwrap_or_else(|| interface::diagnostics::DiagnosticsResponse {
+            generated_at_ms: 0,
+            issues: Vec::new(),
+        })
+}
+
+fn export_diagnostics_snapshot(
+    destination: &Path,
+    snapshot: &interface::diagnostics::DiagnosticSnapshot,
+) -> Result<(), String> {
+    let os_version = System::long_os_version().unwrap_or_else(|| "unknown".into());
+    interface::diagnostics::write_export_report(
+        destination,
+        snapshot,
+        env!("CARGO_PKG_VERSION"),
+        &os_version,
+    )
+}
+
+#[tauri::command]
+fn get_diagnostics(state: tauri::State<AppState>) -> interface::diagnostics::DiagnosticsResponse {
+    let session = state.session.lock().unwrap();
+    diagnostics_from_cache(&session.cache)
+}
+
+#[tauri::command]
+fn export_diagnostics(destination: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let snapshot = {
+        let session = state.session.lock().unwrap();
+        session
+            .cache
+            .as_ref()
+            .map(|(_, _, _, diagnostics)| diagnostics.clone())
+            .unwrap_or_default()
+    };
+    export_diagnostics_snapshot(Path::new(&destination), &snapshot)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3411,6 +3567,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn diagnostics_reads_the_current_cache_generation_without_scanning() {
+        let generated_at_ms = 77;
+        let cache = Some((
+            Instant::now(),
+            Vec::new(),
+            interface::snapshot::AgentViewSnapshot {
+                schema_version: 1,
+                generated_at_ms,
+                agents: Vec::new(),
+            },
+            interface::diagnostics::DiagnosticSnapshot {
+                generated_at_ms,
+                records: Vec::new(),
+            },
+        ));
+
+        let diagnostics = diagnostics_from_cache(&cache);
+
+        assert_eq!(diagnostics.generated_at_ms, generated_at_ms);
+        assert!(diagnostics.issues.is_empty());
+    }
+
+    #[test]
+    fn diagnostics_export_writes_exact_caller_selected_path() {
+        let destination = std::env::temp_dir().join(format!(
+            "agent-island-diagnostics-{}-selected.json",
+            std::process::id()
+        ));
+        let snapshot = interface::diagnostics::DiagnosticSnapshot {
+            generated_at_ms: 77,
+            records: Vec::new(),
+        };
+
+        export_diagnostics_snapshot(&destination, &snapshot).unwrap();
+
+        let value: Value =
+            serde_json::from_str(&fs::read_to_string(&destination).unwrap()).unwrap();
+        assert_eq!(value["generated_at_ms"], 77);
+        assert!(destination.exists());
+        fs::remove_file(destination).unwrap();
+    }
+
+    #[test]
+    fn file_scan_with_no_valid_events_keeps_adapter_isolated_and_reports_parse_failure() {
+        let path =
+            std::env::temp_dir().join(format!("agent-island-invalid-{}.jsonl", std::process::id()));
+        fs::write(&path, "not-json\n{\"type\":\"unknown\"}\n").unwrap();
+
+        let scan = session_scan_from_file("claude", &path).unwrap();
+
+        assert_eq!(scan.legacy_sessions.len(), 1);
+        assert_eq!(scan.candidates.len(), 1);
+        assert_eq!(scan.diagnostics.len(), 1);
+        assert_eq!(scan.diagnostics[0].view.code, "parse_failed");
+        assert_eq!(scan.diagnostics[0].view.skipped_lines, Some(1));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn cache_timestamp_is_sampled_after_a_slow_scan() {
         use std::cell::Cell;
         use std::time::Duration;
@@ -3419,7 +3634,7 @@ mod tests {
         let scans = Cell::new(0_u16);
         let mut cache = None;
         let mut first_clock = [base, base + Duration::from_secs(2)].into_iter();
-        let (_, first_snapshot, first_scan) = collect_cached_with(
+        let (_, first_snapshot, first_diagnostics, first_scan) = collect_cached_with(
             &mut cache,
             || first_clock.next().unwrap(),
             || {
@@ -3431,11 +3646,15 @@ mod tests {
                         generated_at_ms: u64::from(scans.get()),
                         agents: Vec::new(),
                     },
+                    interface::diagnostics::DiagnosticSnapshot {
+                        generated_at_ms: u64::from(scans.get()),
+                        records: Vec::new(),
+                    },
                     false,
                 )
             },
         );
-        let (_, second_snapshot, second_scan) = collect_cached_with(
+        let (_, second_snapshot, second_diagnostics, second_scan) = collect_cached_with(
             &mut cache,
             || base + Duration::from_millis(2_100),
             || {
@@ -3446,6 +3665,10 @@ mod tests {
                         schema_version: 1,
                         generated_at_ms: u64::from(scans.get()),
                         agents: Vec::new(),
+                    },
+                    interface::diagnostics::DiagnosticSnapshot {
+                        generated_at_ms: u64::from(scans.get()),
+                        records: Vec::new(),
                     },
                     false,
                 )
@@ -3458,6 +3681,10 @@ mod tests {
         assert_eq!(
             first_snapshot.generated_at_ms,
             second_snapshot.generated_at_ms
+        );
+        assert_eq!(
+            first_diagnostics.generated_at_ms,
+            second_diagnostics.generated_at_ms
         );
     }
 
@@ -3640,6 +3867,10 @@ mod tests {
             session_list: vec![legacy_session("matching-active"), legacy_session("older")],
             active_session: None,
             history_sessions: None,
+            freshness: domain::Freshness {
+                observed_at_ms: 10,
+                stale: false,
+            },
             usage: None,
         }];
         let active_session = SessionView {
@@ -3669,6 +3900,10 @@ mod tests {
                     display_status: DisplayStatus::Done,
                 }],
                 diagnostic: None,
+                freshness: domain::Freshness {
+                    observed_at_ms: 10,
+                    stale: false,
+                },
             }],
         };
 
@@ -3831,6 +4066,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_agents,
             get_agent_snapshot,
+            get_diagnostics,
+            export_diagnostics,
             get_stats_report,
             reload_agent_defs,
             open_project_dir,

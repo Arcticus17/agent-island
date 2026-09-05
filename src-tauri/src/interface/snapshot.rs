@@ -2,9 +2,11 @@ use serde::Serialize;
 
 use crate::application::session_registry::{match_active_session, SessionMatch};
 use crate::domain::{
-    derive_display_status, AgentState, AttentionState, DisplayStatus, DomainEvent, EventKind,
-    ProcessIdentity, ProcessState, SessionIdentity, TurnState,
+    derive_display_status, freshness_for_adapter, AgentState, AttentionState, DataIssue,
+    DisplayStatus, DomainEvent, EventKind, Freshness, ProcessIdentity, ProcessState,
+    SessionIdentity, TurnState,
 };
+use crate::interface::diagnostics::DiagnosticView;
 
 #[derive(Debug, Clone)]
 pub struct ProcessFact {
@@ -36,6 +38,7 @@ pub struct AgentView {
     pub active_session: Option<SessionView>,
     pub history_sessions: Vec<SessionSummary>,
     pub diagnostic: Option<DiagnosticView>,
+    pub freshness: Freshness,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,11 +71,6 @@ impl From<&SessionView> for SessionSummary {
             display_status: session.display_status,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DiagnosticView {
-    pub code: String,
 }
 
 pub fn build_snapshot(
@@ -110,18 +108,36 @@ fn build_agent_view(
     } else {
         SessionMatch::Unknown
     };
-    let (active_session_id, diagnostic) = match session_match {
+    let (active_session_id, diagnostic_issue) = match session_match {
         SessionMatch::Confirmed(session_id) | SessionMatch::Probable(session_id) => {
             (Some(session_id), None)
         }
-        SessionMatch::Ambiguous(_) => (
+        SessionMatch::Ambiguous(candidate_ids) => (
             None,
-            Some(DiagnosticView {
-                code: "session_ambiguous".into(),
+            Some(DataIssue::SessionAmbiguous {
+                candidate_count: candidate_ids.len(),
             }),
         ),
         SessionMatch::Unknown => (None, None),
     };
+    let observed_at_ms = active_session_id
+        .as_deref()
+        .and_then(|session_id| {
+            agent_candidates
+                .iter()
+                .find(|candidate| candidate.identity.session_id == session_id)
+                .map(|candidate| candidate.identity.last_event_at_ms)
+        })
+        .or_else(|| {
+            agent_candidates
+                .iter()
+                .map(|candidate| candidate.identity.last_event_at_ms)
+                .max()
+        })
+        .unwrap_or(now_ms);
+    let freshness = freshness_for_adapter(&process.identity.agent_id, observed_at_ms, now_ms);
+    let diagnostic = diagnostic_issue
+        .map(|issue| DiagnosticView::new(&process.identity.agent_id, issue, freshness, None, 0, 0));
     let active_session = active_session_id.as_deref().and_then(|session_id| {
         agent_candidates
             .iter()
@@ -155,6 +171,7 @@ fn build_agent_view(
         active_session,
         history_sessions,
         diagnostic,
+        freshness,
     }
 }
 
@@ -322,6 +339,7 @@ mod tests {
         assert_eq!(agent.state.turn, TurnState::Executing);
         assert_eq!(agent.state.attention, AttentionState::None);
         assert_eq!(agent.display_status, DisplayStatus::Working);
+        assert_eq!(agent.freshness.observed_at_ms, 21_000);
         assert_eq!(
             agent.history_sessions[0].display_status,
             DisplayStatus::Idle
@@ -360,6 +378,7 @@ mod tests {
         let agent = &snapshot.agents[0];
         assert!(agent.active_session.is_none());
         assert_eq!(agent.diagnostic.as_ref().unwrap().code, "session_ambiguous");
+        assert_eq!(agent.diagnostic.as_ref().unwrap().candidate_count, Some(2));
         assert_eq!(agent.state.turn, TurnState::Idle);
         assert_eq!(agent.display_status, DisplayStatus::Idle);
         assert_eq!(agent.history_sessions.len(), 2);
@@ -367,5 +386,31 @@ mod tests {
             .history_sessions
             .iter()
             .all(|session| session.display_status == DisplayStatus::Idle));
+    }
+
+    #[test]
+    fn retained_old_codex_snapshot_is_stale_after_its_adapter_window() {
+        let process = ProcessFact {
+            name: "Codex CLI".into(),
+            identity: ProcessIdentity {
+                agent_id: "codex".into(),
+                project_path: Some(r"D:\work\active".into()),
+                process_ids: vec![42],
+                started_at_ms: 10_000,
+            },
+            process_state: ProcessState::Running,
+        };
+        let retained = session_candidate(
+            "retained",
+            r"D:\work\active",
+            20_000,
+            SessionLifecycle::Active,
+            EventKind::TurnFailed,
+        );
+
+        let snapshot = build_snapshot(50_001, &[process], &[retained]);
+
+        assert_eq!(snapshot.agents[0].freshness.observed_at_ms, 20_000);
+        assert!(snapshot.agents[0].freshness.stale);
     }
 }

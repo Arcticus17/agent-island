@@ -15,6 +15,7 @@ import {
   islandSession,
   restoreAgentIndex,
   sessionKey,
+  snapshotTransitionDecision,
   statusFor,
 } from "./session-view.js";
 
@@ -536,12 +537,13 @@ function refresh() {
 
   const statusKey = sessionKey(a, sess, cur);
   const prev = prevStatus[statusKey];
-  prevStatus[statusKey] = viewStatus;
-  if (prev !== undefined && prev !== viewStatus && !switching && !quietActive()) {
-    const kind = eventKind(prev, viewStatus);
+  const transition = snapshotTransitionDecision(a, prev, viewStatus);
+  if (transition.recordStatus) prevStatus[statusKey] = viewStatus;
+  if (transition.notificationKind && !switching && !quietActive()) {
+    const kind = transition.notificationKind;
     if (kind) {
       pushNotify(a, kind, sess);
-      if (kind === "error" || kind === "waiting") {
+      if (transition.autoJump) {
         const idx = restoreAgentIndex(agents, agentKey(a, cur), cur);
         if (idx >= 0 && idx !== cur) {
           setTimeout(() => { cur = idx; refresh(); }, 60);
@@ -549,7 +551,7 @@ function refresh() {
       }
     }
   }
-  if (prev !== viewStatus && !switching && !quietActive()) {
+  if (transition.statusFlash && !switching && !quietActive()) {
     expStatus.classList.remove("status-flash");
     void expStatus.offsetWidth;
     expStatus.classList.add("status-flash");
@@ -574,7 +576,7 @@ function refresh() {
     void expName.offsetWidth;
     expName.classList.add("fade-swap");
   }
-  if (viewStatus === "error" && prev !== "error" && !quietActive()) {
+  if (transition.errorFlash && !quietActive()) {
     island.classList.add("flash-error");
     clearTimeout(flashTimer);
     flashTimer = setTimeout(() => island.classList.remove("flash-error"), 2400);
@@ -825,14 +827,6 @@ function applyFields() {
     label.classList.toggle("hidden", !anyVisible);
   }
   syncFieldsPop();
-}
-
-function eventKind(prev, status) {
-  if (status === "error") return "error";
-  if (status === "waiting") return "waiting";
-  const activeBefore = ["working", "high_load", "waiting", "idle", "running"].includes(prev);
-  if (status === "done" && activeBefore) return "done";
-  return null;
 }
 
 function canNotify(agent, kind) {

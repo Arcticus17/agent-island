@@ -7,6 +7,7 @@ import {
   overviewRows,
   restoreAgentIndex,
   sessionKey,
+  snapshotTransitionDecision,
   statusFor,
 } from "../src/session-view.js";
 
@@ -135,4 +136,40 @@ test("poll selection follows a stable id across rename and reorder", () => {
   ];
 
   assert.equal(restoreAgentIndex(after, selectedKey, 1), 0);
+});
+
+test("stale snapshot cannot notify flash auto-jump or replace transition baseline", () => {
+  const decision = snapshotTransitionDecision(
+    { freshness: { observed_at_ms: 10, stale: true } },
+    "working",
+    "error",
+  );
+
+  assert.deepEqual(decision, {
+    recordStatus: false,
+    notificationKind: null,
+    statusFlash: false,
+    errorFlash: false,
+    autoJump: false,
+  });
+});
+
+test("fresh snapshot retains legacy transition behavior", () => {
+  const decision = snapshotTransitionDecision(
+    { freshness: { observed_at_ms: 20, stale: false } },
+    "working",
+    "waiting",
+  );
+
+  assert.deepEqual(decision, {
+    recordStatus: true,
+    notificationKind: "waiting",
+    statusFlash: true,
+    errorFlash: false,
+    autoJump: true,
+  });
+  assert.equal(
+    snapshotTransitionDecision({}, "working", "done").notificationKind,
+    "done",
+  );
 });

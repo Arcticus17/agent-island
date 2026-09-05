@@ -28,6 +28,39 @@ export function statusFor(agent, session) {
     ?? "idle";
 }
 
+function notificationKind(previousStatus, nextStatus) {
+  if (nextStatus === "error") return "error";
+  if (nextStatus === "waiting") return "waiting";
+  const activeBefore = ["working", "high_load", "waiting", "idle", "running"]
+    .includes(previousStatus);
+  if (nextStatus === "done" && activeBefore) return "done";
+  return null;
+}
+
+export function snapshotTransitionDecision(agent, previousStatus, nextStatus) {
+  if (agent?.freshness?.stale === true) {
+    return {
+      recordStatus: false,
+      notificationKind: null,
+      statusFlash: false,
+      errorFlash: false,
+      autoJump: false,
+    };
+  }
+
+  const changed = previousStatus !== nextStatus;
+  const kind = previousStatus === undefined || !changed
+    ? null
+    : notificationKind(previousStatus, nextStatus);
+  return {
+    recordStatus: true,
+    notificationKind: kind,
+    statusFlash: changed,
+    errorFlash: nextStatus === "error" && previousStatus !== "error",
+    autoJump: kind === "error" || kind === "waiting",
+  };
+}
+
 export function overviewRows(agents) {
   const rows = [];
   const seen = new Set();
