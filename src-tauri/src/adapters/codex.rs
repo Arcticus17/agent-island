@@ -177,11 +177,7 @@ impl AgentAdapter for CodexAdapter {
                     .push(event(&session_id, &turn_id, at_ms, EventKind::TurnStarted));
                 continue;
             }
-            if matches!(payload_type, "task_complete") {
-                if let Some(explicit_turn_id) = turn_id_field(&record, payload) {
-                    turn_id = explicit_turn_id;
-                }
-            }
+            let event_turn_id = turn_id_field(&record, payload).unwrap_or_else(|| turn_id.clone());
 
             if is_response_message {
                 let Some(role) = payload.get("role").and_then(Value::as_str) else {
@@ -235,7 +231,7 @@ impl AgentAdapter for CodexAdapter {
                 }
                 let identity = ToolCallIdentity {
                     session_id: session_id.clone(),
-                    turn_id: turn_id.clone(),
+                    turn_id: event_turn_id.clone(),
                     call_id: call_id.to_owned(),
                 };
                 if outstanding_calls.contains_key(&identity) {
@@ -255,7 +251,7 @@ impl AgentAdapter for CodexAdapter {
                 };
                 let identity = ToolCallIdentity {
                     session_id: session_id.clone(),
-                    turn_id: turn_id.clone(),
+                    turn_id: event_turn_id.clone(),
                     call_id: call_id.to_owned(),
                 };
                 if payload.get("output").is_none()
@@ -287,7 +283,7 @@ impl AgentAdapter for CodexAdapter {
             };
             report
                 .events
-                .push(event(&session_id, &turn_id, at_ms, kind));
+                .push(event(&session_id, &event_turn_id, at_ms, kind));
         }
 
         report
@@ -594,6 +590,34 @@ mod tests {
                 &EventKind::AttentionRequested { approval: false },
                 &EventKind::TurnFailed,
             ]
+        );
+    }
+
+    #[test]
+    fn explicit_old_task_complete_does_not_rewind_active_turn_context() {
+        let input = concat!(
+            r#"{"timestamp":"2026-09-04T10:00:00Z","type":"session_meta","payload":{"id":"s"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-a"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-b"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-a"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:03Z","type":"response_item","payload":{"type":"function_call","call_id":"b-call","name":"tool","arguments":"{}"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:04Z","type":"response_item","payload":{"type":"function_call_output","call_id":"b-call","output":"Process exited with code 0"}}"#,
+        );
+
+        let report = CodexAdapter.parse(input);
+
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .map(|event| event.turn_id.as_str())
+                .collect::<Vec<_>>(),
+            ["turn-a", "turn-b", "turn-a", "turn-b", "turn-b"]
         );
     }
 

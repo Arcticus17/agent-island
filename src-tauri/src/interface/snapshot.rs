@@ -205,8 +205,17 @@ fn reduce_agent_state(
         .filter(|event| event.session_id == active_session_id)
         .collect();
     events.sort_by_key(|event| event.at_ms);
+    let active_turn_id = events
+        .iter()
+        .rev()
+        .find(|event| matches!(event.kind, EventKind::TurnStarted))
+        .or_else(|| events.last())
+        .map(|event| event.turn_id.as_str());
 
-    for event in events {
+    for event in events
+        .into_iter()
+        .filter(|event| Some(event.turn_id.as_str()) == active_turn_id)
+    {
         match event.kind {
             EventKind::TurnStarted | EventKind::ToolStarted | EventKind::ToolFinished { .. } => {
                 state.turn = TurnState::Executing;
@@ -239,6 +248,8 @@ fn reduce_agent_state(
 #[cfg(test)]
 mod tests {
     use super::{build_snapshot, ProcessFact, SessionCandidate, SessionView};
+    use crate::adapters::codex::CodexAdapter;
+    use crate::adapters::AgentAdapter;
     use crate::domain::{
         AttentionState, Confidence, DisplayStatus, DomainEvent, EventKind, EventSource,
         ProcessIdentity, ProcessState, SessionIdentity, SessionLifecycle, TurnState,
@@ -468,5 +479,67 @@ mod tests {
 
         assert_eq!(snapshot.agents[0].freshness.observed_at_ms, 20_000);
         assert!(snapshot.agents[0].freshness.stale);
+    }
+
+    #[test]
+    fn adapter_events_from_an_old_turn_do_not_override_the_newer_turn_snapshot() {
+        let report = CodexAdapter.parse(concat!(
+            r#"{"timestamp":"2026-09-04T10:00:00Z","type":"session_meta","payload":{"id":"s"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-a"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-b"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-b"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-a"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:04Z","type":"event_msg","payload":{"type":"exec_approval_request","turn_id":"turn-a"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:05Z","type":"response_item","payload":{"type":"function_call","turn_id":"turn-a","call_id":"a-call","name":"tool","arguments":"{}"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-09-04T10:00:06Z","type":"response_item","payload":{"type":"function_call_output","turn_id":"turn-a","call_id":"a-call","output":"Process exited with code 0"}}"#,
+        ));
+        let process = ProcessFact {
+            name: "Codex CLI".into(),
+            identity: ProcessIdentity {
+                agent_id: "codex".into(),
+                project_path: Some(r"D:\work\active".into()),
+                process_ids: vec![42],
+                started_at_ms: 0,
+            },
+            process_state: ProcessState::Running,
+        };
+        let candidate = SessionCandidate {
+            identity: SessionIdentity {
+                agent_id: "codex".into(),
+                session_id: "s".into(),
+                project_path: Some(r"D:\work\active".into()),
+                process_ids: vec![42],
+                started_at_ms: 0,
+                last_event_at_ms: 6_000,
+                source: EventSource::CodexLog,
+                confidence: Confidence::Confirmed,
+                lifecycle: SessionLifecycle::Active,
+            },
+            view: SessionView {
+                id: "s".into(),
+                name: "s".into(),
+                cwd: Some(r"D:\work\active".into()),
+                log_path: None,
+                recent_output: Vec::new(),
+                current_file: None,
+                log_status: None,
+                alert: None,
+                display_status: DisplayStatus::Idle,
+            },
+            events: report.events,
+        };
+
+        let snapshot = build_snapshot(7_000, &[process], &[candidate]);
+
+        assert_eq!(snapshot.agents[0].state.turn, TurnState::Succeeded);
+        assert_eq!(snapshot.agents[0].state.attention, AttentionState::None);
+        assert_eq!(snapshot.agents[0].display_status, DisplayStatus::Done);
     }
 }
