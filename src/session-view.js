@@ -16,6 +16,12 @@ export function restoreAgentIndex(agents, key, fallbackIndex = 0) {
   return Math.min(Math.max(fallbackIndex, 0), agents.length - 1);
 }
 
+export function freshErrorIndex(agents) {
+  return (agents ?? []).findIndex(
+    (agent) => agent?.status === "error" && agent?.freshness?.stale !== true,
+  );
+}
+
 export function islandSession(agent) {
   return agent?.active_session ?? null;
 }

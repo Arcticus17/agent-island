@@ -1232,7 +1232,10 @@ fn session_scan_from_file(agent_id: &str, path: &Path) -> Option<SessionScan> {
         }
         .to_string()
     });
-    let issue = domain::parse_issue(event_count, report.skipped_lines);
+    let issue = domain::parse_issue(
+        event_count > 0 || message_count > 0 || !report.sessions.is_empty(),
+        report.skipped_lines,
+    );
     let fallback_id = path
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
@@ -1450,7 +1453,10 @@ fn run_command_timeout(command: &mut std::process::Command, secs: u64) -> Option
 fn hermes_session_scan_from_text(text: &str) -> SessionScan {
     let report = adapters::hermes::HermesAdapter.parse(text);
     let session_count = report.sessions.len();
-    let issue = domain::parse_issue(session_count, report.skipped_lines);
+    let issue = domain::parse_issue(
+        !report.events.is_empty() || !report.messages.is_empty() || session_count > 0,
+        report.skipped_lines,
+    );
     let mut scan = SessionScan::default();
     for identity in report.sessions {
         let name = session_name(identity.project_path.as_deref(), &identity.session_id);
@@ -3622,6 +3628,49 @@ mod tests {
         assert_eq!(scan.diagnostics.len(), 1);
         assert_eq!(scan.diagnostics[0].view.code, "parse_failed");
         assert_eq!(scan.diagnostics[0].view.skipped_lines, Some(1));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn claude_message_only_scan_with_malformed_neighbor_is_not_parse_failed() {
+        let path = std::env::temp_dir().join(format!(
+            "agent-island-claude-message-only-{}.jsonl",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"claude-message-only\",\"uuid\":\"message-1\",\"timestamp\":\"2026-09-04T10:00:00Z\",\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}],\"stop_reason\":null}}\n",
+                "not-json\n",
+            ),
+        )
+        .unwrap();
+
+        let scan = session_scan_from_file("claude", &path).unwrap();
+
+        assert!(scan.diagnostics.is_empty());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn codex_message_only_scan_with_malformed_neighbor_is_not_parse_failed() {
+        let path = std::env::temp_dir().join(format!(
+            "agent-island-codex-message-only-{}.jsonl",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            concat!(
+                "{\"timestamp\":\"2026-09-04T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"codex-message-only\",\"cwd\":\"D:\\\\work\\\\app\"}}\n",
+                "{\"timestamp\":\"2026-09-04T10:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}}\n",
+                "not-json\n",
+            ),
+        )
+        .unwrap();
+
+        let scan = session_scan_from_file("codex", &path).unwrap();
+
+        assert!(scan.diagnostics.is_empty());
         fs::remove_file(path).unwrap();
     }
 

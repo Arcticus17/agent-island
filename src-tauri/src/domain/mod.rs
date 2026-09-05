@@ -49,7 +49,15 @@ mod error_contract_tests {
 
         assert_eq!(report.events.len(), 1);
         assert_eq!(report.skipped_lines, 1);
-        assert_eq!(parse_issue(report.events.len(), report.skipped_lines), None);
+        assert_eq!(
+            parse_issue(
+                !report.events.is_empty()
+                    || !report.messages.is_empty()
+                    || !report.sessions.is_empty(),
+                report.skipped_lines,
+            ),
+            None
+        );
     }
 
     #[test]
@@ -58,7 +66,12 @@ mod error_contract_tests {
 
         assert!(report.events.is_empty());
         assert_eq!(
-            parse_issue(report.events.len(), report.skipped_lines),
+            parse_issue(
+                !report.events.is_empty()
+                    || !report.messages.is_empty()
+                    || !report.sessions.is_empty(),
+                report.skipped_lines,
+            ),
             Some(DataIssue::ParseFailed {
                 skipped_lines: report.skipped_lines,
             })

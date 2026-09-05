@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   agentKey,
+  freshErrorIndex,
   islandSession,
   overviewRows,
   restoreAgentIndex,
@@ -10,6 +11,24 @@ import {
   snapshotTransitionDecision,
   statusFor,
 } from "../src/session-view.js";
+
+test("error focus ignores stale errors", () => {
+  const agents = [
+    { status: "error", freshness: { observed_at_ms: 10, stale: true } },
+    { status: "working", freshness: { observed_at_ms: 20, stale: false } },
+  ];
+
+  assert.equal(freshErrorIndex(agents), -1);
+});
+
+test("error focus selects a fresh error", () => {
+  const agents = [
+    { status: "error", freshness: { observed_at_ms: 10, stale: true } },
+    { status: "error", freshness: { observed_at_ms: 20, stale: false } },
+  ];
+
+  assert.equal(freshErrorIndex(agents), 1);
+});
 
 test("island never falls back to historical or legacy sessions", () => {
   const agent = {

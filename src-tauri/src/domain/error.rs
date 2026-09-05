@@ -57,7 +57,7 @@ pub fn freshness_for_adapter(adapter: &str, observed_at_ms: u64, now_ms: u64) ->
     }
 }
 
-pub fn parse_issue(valid_event_count: usize, skipped_lines: usize) -> Option<DataIssue> {
-    (valid_event_count == 0 && skipped_lines > 0)
+pub fn parse_issue(has_valid_structured_items: bool, skipped_lines: usize) -> Option<DataIssue> {
+    (!has_valid_structured_items && skipped_lines > 0)
         .then_some(DataIssue::ParseFailed { skipped_lines })
 }

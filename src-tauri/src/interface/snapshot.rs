@@ -128,12 +128,6 @@ fn build_agent_view(
                 .find(|candidate| candidate.identity.session_id == session_id)
                 .map(|candidate| candidate.identity.last_event_at_ms)
         })
-        .or_else(|| {
-            agent_candidates
-                .iter()
-                .map(|candidate| candidate.identity.last_event_at_ms)
-                .max()
-        })
         .unwrap_or(now_ms);
     let freshness = freshness_for_adapter(&process.identity.agent_id, observed_at_ms, now_ms);
     let diagnostic = diagnostic_issue
@@ -386,6 +380,68 @@ mod tests {
             .history_sessions
             .iter()
             .all(|session| session.display_status == DisplayStatus::Idle));
+        assert_eq!(agent.freshness.observed_at_ms, 23_000);
+        assert_eq!(
+            agent.diagnostic.as_ref().unwrap().freshness.observed_at_ms,
+            23_000
+        );
+    }
+
+    #[test]
+    fn unknown_running_session_uses_process_observation_not_unrelated_history() {
+        let process = ProcessFact {
+            name: "Codex CLI".into(),
+            identity: ProcessIdentity {
+                agent_id: "codex".into(),
+                project_path: Some(r"D:\work\active".into()),
+                process_ids: vec![42],
+                started_at_ms: 20_000,
+            },
+            process_state: ProcessState::Running,
+        };
+        let unrelated = session_candidate(
+            "unrelated-history",
+            r"D:\work\other",
+            99_000,
+            SessionLifecycle::Historical,
+            EventKind::TurnFailed,
+        );
+
+        let snapshot = build_snapshot(100_000, &[process], &[unrelated]);
+
+        let agent = &snapshot.agents[0];
+        assert!(agent.active_session.is_none());
+        assert_eq!(agent.freshness.observed_at_ms, 100_000);
+        assert!(!agent.freshness.stale);
+    }
+
+    #[test]
+    fn stopped_process_uses_current_observation_not_old_history() {
+        let process = ProcessFact {
+            name: "Codex CLI".into(),
+            identity: ProcessIdentity {
+                agent_id: "codex".into(),
+                project_path: Some(r"D:\work\active".into()),
+                process_ids: Vec::new(),
+                started_at_ms: 20_000,
+            },
+            process_state: ProcessState::Stopped,
+        };
+        let old_history = session_candidate(
+            "old-history",
+            r"D:\work\active",
+            20_000,
+            SessionLifecycle::Historical,
+            EventKind::TurnFailed,
+        );
+
+        let snapshot = build_snapshot(100_000, &[process], &[old_history]);
+
+        let agent = &snapshot.agents[0];
+        assert!(agent.active_session.is_none());
+        assert_eq!(agent.display_status, DisplayStatus::Stopped);
+        assert_eq!(agent.freshness.observed_at_ms, 100_000);
+        assert!(!agent.freshness.stale);
     }
 
     #[test]

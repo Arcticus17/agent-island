@@ -12,6 +12,7 @@ import {
 import { clampIslandX, getSafeIslandHeight, getSafeIslandWidth } from "./layout.js";
 import {
   agentKey,
+  freshErrorIndex,
   islandSession,
   restoreAgentIndex,
   sessionKey,
@@ -1398,7 +1399,7 @@ async function poll() {
     simulateDemoEvents();
   }
   if (focusMode === "errors") {
-    const err = agents.findIndex((x) => x.status === "error");
+    const err = freshErrorIndex(agents);
     if (err >= 0) cur = err;
   }
   if (focusMode === "pinned" && pinnedAgents.length) {
