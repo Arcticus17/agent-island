@@ -10,6 +10,7 @@ import {
   LogicalSize,
 } from "@tauri-apps/api/window";
 import { clampIslandX, getSafeIslandHeight, getSafeIslandWidth } from "./layout.js";
+import { islandSession, statusFor } from "./session-view.js";
 
 const inTauri = "__TAURI_INTERNALS__" in window;
 const tauriWin = inTauri ? getCurrentWindow() : null;
@@ -20,7 +21,6 @@ const POS_KEY = "agent-island-x";
 
 let agents = [];
 let cur = 0;
-let sessionIdx = 0;
 let expanded = false;
 let collapseTimer = null;
 let scale = 1;
@@ -390,11 +390,10 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", setTheme);
 // Render
 function refresh() {
   const activeStatuses = new Set(["working", "idle", "high_load", "error", "waiting", "done", "running"]);
-  const hasActive = agents.some((a) => activeStatuses.has(a.status));
+  const hasActive = agents.some((agent) => activeStatuses.has(statusFor(agent, islandSession(agent))));
   const a = agents[cur] || null;
-  if (a && sessionIdx >= (a.session_list?.length || 1)) sessionIdx = 0;
-  const sess = a?.session_list?.[sessionIdx] || null;
-  const multiSession = Boolean(a?.session_list?.length > 1);
+  const sess = islandSession(a);
+  const viewStatus = statusFor(a, sess);
 
   if (!a || !hasActive) {
     updateDot("gray");
@@ -405,7 +404,7 @@ function refresh() {
     compactIcon.removeAttribute("src");
   } else {
     navArrow.style.display = agentIndexes().length > 1 ? "inline-block" : "none";
-    updateDot(a.status);
+    updateDot(viewStatus);
     agentNameEl.textContent = a.name;
     if (agents.length > 1) {
       pageIndicator.style.display = "inline-block";
@@ -471,22 +470,24 @@ function refresh() {
     expIcon.style.display = "none";
     expIcon.removeAttribute("src");
   }
-  expName.textContent = multiSession && sess ? `${a.name} · ${sess.name}` : a.name;
-  expStatus.textContent = { working: "工作中", idle: "等待中", high_load: "高负载", stopped: "已停止", error: "报错", waiting: "等待确认", done: "已完成" }[a.status] || "无状态";
-  expStatus.dataset.status = a.status || "";
+  expName.textContent = sess
+    ? `${a.name} · ${sess.name || sess.id}`
+    : `${a.name} · 无法确认当前会话`;
+  expStatus.textContent = { working: "工作中", idle: "等待中", high_load: "高负载", stopped: "已停止", error: "报错", waiting: "等待确认", done: "已完成" }[viewStatus] || "无状态";
+  expStatus.dataset.status = viewStatus || "";
   const pidText = a.pid != null ? String(a.pid) : "";
   const procText = a.sessions ? `${a.sessions} 进程` : "";
   expPid.textContent = [pidText, procText].filter(Boolean).join(" · ") || "-";
   expCpu.textContent = a.cpu != null ? `${a.cpu.toFixed(1)}%` : "-";
   expMem.textContent = a.memory != null ? `${a.memory.toFixed(0)} MB` : "-";
   expUptime.textContent = fmtUptime(a.uptime || 0);
-  const useCwd = sess?.cwd || a.cwd;
+  const useCwd = sess?.cwd || "";
   expCwd.textContent = useCwd || "-";
   expCwd.title = useCwd || "";
-  expLastActive.textContent = a.status === "stopped" ? "-" : fmtAgo(a.last_active_secs ?? 0);
-  expFile.textContent = sess?.current_file || a.current_file || "-";
-  expFile.title = sess?.current_file || a.current_file || "";
-  const recentLines = sess?.recent_output?.length ? sess.recent_output : a.recent_output;
+  expLastActive.textContent = viewStatus === "stopped" ? "-" : fmtAgo(a.last_active_secs ?? 0);
+  expFile.textContent = sess?.current_file || "-";
+  expFile.title = sess?.current_file || "";
+  const recentLines = sess?.recent_output || [];
   renderOutput(recentLines, `${a.name}|${sess?.id || ""}`);
   expStats.textContent = a.stats
     ? `${fmtUptime(a.stats.total_seconds)} · 报错${a.stats.error_count} · 完成${a.stats.done_count}`
@@ -505,15 +506,14 @@ function refresh() {
       usageBar.title = "";
     }
   }
-  const sessionCount = a.session_list?.length || 0;
-  expPage.textContent = sessionCount > 1 ? `会话 ${sessionIdx + 1}/${sessionCount}` : "单一会话";
-  btnPrev.disabled = sessionCount <= 1 || sessionIdx === 0;
-  btnNext.disabled = sessionCount <= 1 || sessionIdx >= sessionCount - 1;
-  const hasCwd = Boolean(useCwd && a.status !== "stopped");
+  expPage.textContent = sess ? "当前会话" : "无法确认当前会话";
+  btnPrev.disabled = true;
+  btnNext.disabled = true;
+  const hasCwd = Boolean(useCwd && viewStatus !== "stopped");
   btnDir.disabled = !hasCwd;
   btnTerm.disabled = !hasCwd;
-  btnJump.disabled = !hasCwd;
-  btnStop.disabled = a.status === "stopped";
+  btnJump.disabled = !sess || viewStatus === "stopped";
+  btnStop.disabled = viewStatus === "stopped";
   btnRestart.disabled = !a.can_restart;
   if (confirmingStop && confirmAgent !== a.name) {
     confirmingStop = false;
@@ -521,28 +521,29 @@ function refresh() {
     btnStop.textContent = "停止";
     confirmAgent = null;
   }
-  if (a.status === "stopped" && confirmingStop) {
+  if (viewStatus === "stopped" && confirmingStop) {
     confirmingStop = false;
     clearTimeout(confirmStopTimer);
     btnStop.textContent = "停止";
     confirmAgent = null;
   }
 
-  const prev = prevStatus[a.name];
-  prevStatus[a.name] = a.status;
-  if (prev !== undefined && prev !== a.status && !switching && !quietActive()) {
-    const kind = eventKind(prev, a.status);
+  const statusKey = `${a.name}:${sess?.id || "no-active"}`;
+  const prev = prevStatus[statusKey];
+  prevStatus[statusKey] = viewStatus;
+  if (prev !== undefined && prev !== viewStatus && !switching && !quietActive()) {
+    const kind = eventKind(prev, viewStatus);
     if (kind) {
       pushNotify(a, kind, sess);
       if (kind === "error" || kind === "waiting") {
         const idx = agents.findIndex((x) => x.name === a.name);
         if (idx >= 0 && idx !== cur) {
-          setTimeout(() => { cur = idx; sessionIdx = 0; refresh(); }, 60);
+          setTimeout(() => { cur = idx; refresh(); }, 60);
         }
       }
     }
   }
-  if (prev !== a.status && !switching && !quietActive()) {
+  if (prev !== viewStatus && !switching && !quietActive()) {
     expStatus.classList.remove("status-flash");
     void expStatus.offsetWidth;
     expStatus.classList.add("status-flash");
@@ -550,11 +551,11 @@ function refresh() {
     void statusDot.offsetWidth;
     statusDot.classList.add("ping");
   }
-  island.classList.toggle("alert-error", a.status === "error");
-  island.classList.toggle("working-glow", a.status === "working");
-  island.classList.toggle("status-waiting", a.status === "waiting");
-  island.classList.toggle("status-done", a.status === "done");
-  statusDot.classList.toggle("pulse", a.status === "working");
+  island.classList.toggle("alert-error", viewStatus === "error");
+  island.classList.toggle("working-glow", viewStatus === "working");
+  island.classList.toggle("status-waiting", viewStatus === "waiting");
+  island.classList.toggle("status-done", viewStatus === "done");
+  statusDot.classList.toggle("pulse", viewStatus === "working");
   updateIconStack();
   updateAgentStrip();
   const shownName = agentNameEl.textContent;
@@ -567,7 +568,7 @@ function refresh() {
     void expName.offsetWidth;
     expName.classList.add("fade-swap");
   }
-  if (a.status === "error" && prev !== "error" && !quietActive()) {
+  if (viewStatus === "error" && prev !== "error" && !quietActive()) {
     island.classList.add("flash-error");
     clearTimeout(flashTimer);
     flashTimer = setTimeout(() => island.classList.remove("flash-error"), 2400);
@@ -689,13 +690,12 @@ function updateAgentStrip() {
     chip.innerHTML = (src
       ? `<img class="agent-chip-icon" alt="" src="${src}">`
       : `<span class="agent-chip-letter">${escapeHtml((agent.name || "?")[0])}</span>`
-    ) + `<span class="agent-chip-name">${escapeHtml(agent.name)}</span><span class="agent-chip-dot ${dotClass(agent.status)}"></span><span class="agent-chip-handle" title="拖拽排序">⋮⋮</span>`;
+    ) + `<span class="agent-chip-name">${escapeHtml(agent.name)}</span><span class="agent-chip-dot ${dotClass(statusFor(agent, islandSession(agent)))}"></span><span class="agent-chip-handle" title="拖拽排序">⋮⋮</span>`;
     chip.addEventListener("click", (e) => {
       e.stopPropagation();
       const idx = agents.findIndex((x) => x.name === agent.name);
       if (idx >= 0 && idx !== cur) {
         cur = idx;
-        sessionIdx = 0;
         animateSwitch();
         refresh();
       }
@@ -737,7 +737,7 @@ function updateAgentStrip() {
     chip.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
       previewTimer = setTimeout(() => {
-        const lines = (agent.recent_output || []).slice(-3).join("\n") || "暂无日志";
+        const lines = (islandSession(agent)?.recent_output || []).slice(-3).join("\n") || "暂无日志";
         cardPreviewEl.textContent = lines;
         const rect = chip.getBoundingClientRect();
         const previewWidth = Math.min(300, Math.max(180, effectiveIslandWidth - 16));
@@ -1118,7 +1118,6 @@ function jumpToAgentByKey(key) {
   const target = idxs[Number(key) - 1];
   if (target === undefined || target === cur) return;
   cur = target;
-  sessionIdx = 0;
   animateSwitch();
   refresh();
 }
@@ -1137,7 +1136,6 @@ function nextAgent() {
   const next = idxs[(pos + 1) % idxs.length];
   if (next === undefined || next === cur) return;
   cur = next;
-  sessionIdx = 0;
   animateSwitch();
   refresh();
 }
@@ -1148,50 +1146,33 @@ function prevAgent() {
   const next = idxs[(pos - 1 + idxs.length) % idxs.length];
   if (next === undefined || next === cur) return;
   cur = next;
-  sessionIdx = 0;
   animateSwitch();
   refresh();
 }
-function nextSession() {
-  const a = agents[cur];
-  if (a?.session_list?.length > 1 && sessionIdx < a.session_list.length - 1) {
-    sessionIdx += 1;
-    animateSwitch();
-    refresh();
-  }
-}
-function prevSession() {
-  const a = agents[cur];
-  if (a?.session_list?.length > 1 && sessionIdx > 0) {
-    sessionIdx -= 1;
-    animateSwitch();
-    refresh();
-  }
-}
 navArrow.addEventListener("click", (e) => { e.stopPropagation(); nextAgent(); });
-btnPrev.addEventListener("click", (e) => { e.stopPropagation(); prevSession(); });
-btnNext.addEventListener("click", (e) => { e.stopPropagation(); nextSession(); });
 
 async function openDir() {
   const a = agents[cur];
   if (!a) return;
-  const path = a.session_list?.[sessionIdx]?.cwd || a.cwd;
-  if (!path || a.status === "stopped") return;
+  const sess = islandSession(a);
+  const path = sess?.cwd;
+  if (!path || statusFor(a, sess) === "stopped") return;
   try { await invoke("open_path", { path }); } catch (_) {}
 }
 
 async function openFile() {
   const a = agents[cur];
   if (!a) return;
-  const path = a.session_list?.[sessionIdx]?.current_file || a.current_file;
+  const path = islandSession(a)?.current_file;
   if (!path) return;
   try { await invoke("open_path", { path }); } catch (_) {}
 }
 
 async function openTerm() {
   const a = agents[cur];
-  if (!a || !a.cwd) return;
-  try { await invoke("open_terminal", { name: a.name }); } catch (_) {}
+  const sess = islandSession(a);
+  if (!a || !sess?.id || !sess.cwd) return;
+  try { await invoke("open_session_terminal", { name: a.name, sessionId: sess.id }); } catch (_) {}
 }
 
 btnDir.addEventListener("click", (e) => { e.stopPropagation(); openDir(); });
@@ -1344,8 +1325,6 @@ window.addEventListener("keydown", (e) => {
   if (e.key >= "1" && e.key <= "9") { jumpToAgentByKey(e.key); return; }
   if (e.key === "ArrowRight") { nextAgent(); return; }
   if (e.key === "ArrowLeft") { prevAgent(); return; }
-  if (e.key === "ArrowDown") { nextSession(); return; }
-  if (e.key === "ArrowUp") { prevSession(); return; }
   if (e.key === "p" || e.key === "P") { togglePrivacy(); return; }
   if (e.key === "f" || e.key === "F") { cycleFocus(); return; }
   if (e.key === "q" || e.key === "Q") {
@@ -1363,32 +1342,28 @@ window.addEventListener("keydown", (e) => {
 // Poll
 const demoAgents = [
   {
-    name: "Claude Code", status: "working", pid: 12345, cpu: 2.3, memory: 156, uptime: 1423,
+    id: "claude", name: "Claude Code", status: "working", display_status: "working", pid: 12345, cpu: 2.3, memory: 156, uptime: 1423,
     cwd: "D:\\demo\\project-a", sessions: 2, last_active_secs: 0, log_path: "demo",
     log_status: "working", alert: "正在执行", can_restart: true,
     stats: { total_seconds: 3600, error_count: 2, done_count: 5 },
     session_count: 2,
-    session_list: [
-      { id: "s1", name: "project-a", cwd: "D:\\demo\\project-a", log_path: "demo", recent_output: ["完成了 provider 预设列表", "新增 datalist 建议"], current_file: "D:\\demo\\project-a\\src\\main.ts", log_status: "working", alert: "正在执行" },
-      { id: "s2", name: "project-c", cwd: "D:\\demo\\project-c", log_path: "demo", recent_output: ["修复了登录超时问题"], current_file: "D:\\demo\\project-c\\src\\auth.ts", log_status: "done", alert: "已完成" },
-    ],
+    active_session: { id: "s1", name: "project-a", cwd: "D:\\demo\\project-a", log_path: "demo", recent_output: ["完成了 provider 预设列表", "新增 datalist 建议"], current_file: "D:\\demo\\project-a\\src\\main.ts", log_status: "working", alert: "正在执行", display_status: "working" },
+    history_sessions: [{ id: "s2", name: "project-c", cwd: "D:\\demo\\project-c", display_status: "done" }],
   },
   {
-    name: "Codex CLI", status: "done", pid: 12346, cpu: 0.8, memory: 89, uptime: 3420,
+    id: "codex", name: "Codex CLI", status: "done", display_status: "done", pid: 12346, cpu: 0.8, memory: 89, uptime: 3420,
     cwd: "D:\\demo\\project-b", sessions: 1, last_active_secs: 18, log_path: "demo",
     log_status: "done", alert: "已完成", can_restart: true,
     stats: { total_seconds: 7200, error_count: 1, done_count: 8 },
     session_count: 2,
-    session_list: [
-      { id: "c1", name: "project-b", cwd: "D:\\demo\\project-b", log_path: "demo", recent_output: ["执行: Get-Content README.md", "执行: rg -n TODO"], current_file: "D:\\demo\\project-b\\README.md", log_status: "done", alert: "已完成" },
-      { id: "c2", name: "n-blog", cwd: "D:\\测试\\n-blog", log_path: "demo", recent_output: ["执行: npm run build"], current_file: "D:\\测试\\n-blog\\package.json", log_status: "idle", alert: null },
-    ],
+    active_session: { id: "c1", name: "project-b", cwd: "D:\\demo\\project-b", log_path: "demo", recent_output: ["执行: Get-Content README.md", "执行: rg -n TODO"], current_file: "D:\\demo\\project-b\\README.md", log_status: "done", alert: "已完成", display_status: "done" },
+    history_sessions: [{ id: "c2", name: "n-blog", cwd: "D:\\测试\\n-blog", display_status: "idle" }],
   },
   {
-    name: "Hermes", status: "stopped", pid: null, cpu: null, memory: null, uptime: 0,
+    id: "hermes", name: "Hermes", status: "stopped", display_status: "stopped", pid: null, cpu: null, memory: null, uptime: 0,
     cwd: null, sessions: 0, last_active_secs: null, log_path: null, log_status: null, alert: null,
     can_restart: false, stats: { total_seconds: 0, error_count: 0, done_count: 0 },
-    session_count: 0, session_list: [],
+    session_count: 0, active_session: null, history_sessions: [],
   },
 ];
 
@@ -1399,12 +1374,13 @@ function simulateDemoEvents() {
   const cycle = ["working", "done", "error", "working"];
   demoStep = (demoStep + 1) % cycle.length;
   claude.status = cycle[demoStep];
+  claude.display_status = claude.status;
+  if (claude.active_session) claude.active_session.display_status = claude.status;
   claude.alert = claude.status === "error" ? "报错" : claude.status === "done" ? "已完成" : "正在执行";
 }
 
 async function poll() {
   const prevName = agents[cur]?.name;
-  const prevSessionId = agents[cur]?.session_list?.[sessionIdx]?.id;
   try {
     agents = inTauri ? await invoke("get_agents") : demoAgents;
   } catch (_) {}
@@ -1413,28 +1389,20 @@ async function poll() {
   if (prevName) {
     const idx = agents.findIndex((x) => x.name === prevName);
     cur = idx >= 0 ? idx : Math.min(cur, agents.length - 1);
-    const agent = agents[cur];
-    if (prevSessionId && agent?.session_list) {
-      const si = agent.session_list.findIndex((s) => s.id === prevSessionId);
-      sessionIdx = si >= 0 ? si : 0;
-    } else {
-      sessionIdx = 0;
-    }
   } else if (agents.length) {
     const active = agents.findIndex((x) => x.status !== "stopped");
     cur = active === -1 ? 0 : active;
-    sessionIdx = 0;
   }
   if (!inTauri && new URLSearchParams(window.location.search).has("demo")) {
     simulateDemoEvents();
   }
   if (focusMode === "errors") {
     const err = agents.findIndex((x) => x.status === "error");
-    if (err >= 0) { cur = err; sessionIdx = 0; }
+    if (err >= 0) cur = err;
   }
   if (focusMode === "pinned" && pinnedAgents.length) {
     const pi = agents.findIndex((x) => pinnedAgents.includes(x.name));
-    if (pi >= 0) { cur = pi; sessionIdx = 0; }
+    if (pi >= 0) cur = pi;
   }
   if (inTauri) {
     try { privacyAuto = await invoke("privacy_active"); } catch (_) {}

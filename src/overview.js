@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { overviewRows } from "./session-view.js";
 
 const listEl = document.getElementById("session-list");
 const detailEl = document.getElementById("detail");
@@ -49,35 +50,30 @@ const CHAT_KEY = "agent-island-chat";
 
 const DEMO_AGENTS = [
   {
-    name: "Claude Code", status: "working", pid: 12345, cpu: 2.3, memory: 156, uptime: 1423,
+    id: "claude", name: "Claude Code", status: "working", display_status: "working", pid: 12345, cpu: 2.3, memory: 156, uptime: 1423,
     cwd: "D:\\demo\\project-a", sessions: 2, last_active_secs: 0, log_status: "working",
     alert: "正在执行", can_restart: true,
     stats: { total_seconds: 3600, error_count: 2, done_count: 5 },
     session_count: 2,
-    session_list: [
-      { id: "s1", name: "project-a", cwd: "D:\\demo\\project-a", log_path: "demo", recent_output: ["完成了 provider 预设列表", "新增 datalist 建议"], current_file: "D:\\demo\\project-a\\src\\main.ts", log_status: "working", alert: "正在执行" },
-      { id: "s2", name: "project-c", cwd: "D:\\demo\\project-c", log_path: "demo", recent_output: ["修复了登录超时问题"], current_file: "D:\\demo\\project-c\\src\\auth.ts", log_status: "done", alert: "已完成" },
-    ],
+    active_session: { id: "s1", name: "project-a", cwd: "D:\\demo\\project-a", log_path: "demo", recent_output: ["完成了 provider 预设列表", "新增 datalist 建议"], current_file: "D:\\demo\\project-a\\src\\main.ts", log_status: "working", alert: "正在执行", display_status: "working" },
+    history_sessions: [{ id: "s2", name: "project-c", cwd: "D:\\demo\\project-c", display_status: "done" }],
   },
   {
-    name: "Codex CLI", status: "done", pid: 12346, cpu: 0.8, memory: 89, uptime: 3420,
+    id: "codex", name: "Codex CLI", status: "done", display_status: "done", pid: 12346, cpu: 0.8, memory: 89, uptime: 3420,
     cwd: "D:\\demo\\project-b", sessions: 1, last_active_secs: 18, log_status: "done",
     alert: "已完成", can_restart: true,
     stats: { total_seconds: 7200, error_count: 1, done_count: 8 },
     session_count: 2,
-    session_list: [
-      { id: "c1", name: "project-b", cwd: "D:\\demo\\project-b", log_path: "demo", recent_output: ["执行: Get-Content README.md", "执行: rg -n TODO"], current_file: "D:\\demo\\project-b\\README.md", log_status: "done", alert: "已完成" },
-      { id: "c2", name: "n-blog", cwd: "D:\\测试\\n-blog", log_path: "demo", recent_output: ["执行: npm run build"], current_file: "D:\\测试\\n-blog\\package.json", log_status: "idle", alert: null },
-    ],
+    active_session: { id: "c1", name: "project-b", cwd: "D:\\demo\\project-b", log_path: "demo", recent_output: ["执行: Get-Content README.md", "执行: rg -n TODO"], current_file: "D:\\demo\\project-b\\README.md", log_status: "done", alert: "已完成", display_status: "done" },
+    history_sessions: [{ id: "c2", name: "n-blog", cwd: "D:\\测试\\n-blog", display_status: "idle" }],
   },
   {
-    name: "Hermes", status: "stopped", pid: null, cpu: null, memory: null, uptime: 0,
+    id: "hermes", name: "Hermes", status: "stopped", display_status: "stopped", pid: null, cpu: null, memory: null, uptime: 0,
     cwd: null, sessions: 0, last_active_secs: null, log_status: null, alert: null,
     can_restart: false, stats: { total_seconds: 0, error_count: 0, done_count: 0 },
     session_count: 1,
-    session_list: [
-      { id: "h1", name: "灵动岛讨论", cwd: null, log_path: null, recent_output: ["你知道 MAC 笔记本的灵动岛吗"], current_file: null, log_status: null, alert: null },
-    ],
+    active_session: null,
+    history_sessions: [{ id: "h1", name: "灵动岛讨论", cwd: null, display_status: "idle" }],
   },
 ];
 
@@ -125,34 +121,8 @@ function fmtAgo(secs) {
   return `${Math.floor(secs / 3600)}小时前`;
 }
 
-function statusOf(agent, session) {
-  if (session?.log_status) return session.log_status;
-  return agent.status || "idle";
-}
-
 function rows() {
-  const out = [];
-  for (const agent of agents) {
-    let sessions = (agent.session_list || []).filter(
-      (s) => s.name && s.name !== "—" && s.name !== "-"
-    );
-    if (!sessions.length) sessions = [null];
-    for (const session of sessions) {
-      out.push({
-        agent,
-        session,
-        id: `${agent.name}::${session?.id || agent.name}`,
-        name: session?.name || agent.name,
-        status: statusOf(agent, session),
-        output: session?.recent_output?.length
-          ? session.recent_output.join("\n")
-          : (agent.recent_output || []).join("\n") || "暂无输出",
-        cwd: session?.cwd || agent.cwd,
-        file: session?.current_file || agent.current_file,
-      });
-    }
-  }
-  return out;
+  return overviewRows(agents);
 }
 
 const rowEls = {};
