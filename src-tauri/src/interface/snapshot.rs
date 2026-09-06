@@ -28,7 +28,7 @@ const ACTIVITY_FRESHNESS_MS: u64 = 5_000;
 
 impl ProcessActivity {
     fn is_busy_at(self, now_ms: u64) -> bool {
-        matches!(self, Self::Busy { observed_at_ms } if now_ms.saturating_sub(observed_at_ms) <= ACTIVITY_FRESHNESS_MS)
+        matches!(self, Self::Busy { observed_at_ms } if observed_at_ms <= now_ms && now_ms - observed_at_ms <= ACTIVITY_FRESHNESS_MS)
     }
 }
 
@@ -810,6 +810,18 @@ mod tests {
         let idle = build_snapshot(10_002, &[process], &[candidate]);
         assert_eq!(idle.agents[0].state.turn, TurnState::Idle);
         assert_eq!(idle.agents[0].display_status, DisplayStatus::Idle);
+    }
+
+    #[test]
+    fn activity_freshness_accepts_exactly_five_seconds_but_rejects_expired_and_future_observations()
+    {
+        let activity = ProcessActivity::Busy {
+            observed_at_ms: 10_000,
+        };
+
+        assert!(activity.is_busy_at(15_000));
+        assert!(!activity.is_busy_at(15_001));
+        assert!(!activity.is_busy_at(9_999));
     }
 
     #[test]

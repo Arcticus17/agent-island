@@ -6,6 +6,7 @@ pub mod interface;
 use adapters::AgentAdapter;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
@@ -67,7 +68,7 @@ pub struct AgentStats {
     pub done_count: u32,
     pub last_status: Option<String>,
     #[serde(default)]
-    pub last_transition_key: Option<String>,
+    pub recent_terminal_hashes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -790,8 +791,13 @@ fn update_terminal_statistics_from_snapshot(
             "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{result_at_ms}",
             agent.id, turn.session_id, turn.turn_id, status,
         );
+        let transition_hash = terminal_key_hash(&transition_key);
         let agent_stats = stats.entry(agent.name.clone()).or_default();
-        if agent_stats.last_transition_key.as_deref() == Some(transition_key.as_str()) {
+        if agent_stats
+            .recent_terminal_hashes
+            .iter()
+            .any(|hash| hash == &transition_hash)
+        {
             continue;
         }
         let day_stats = daily
@@ -811,10 +817,39 @@ fn update_terminal_statistics_from_snapshot(
             _ => unreachable!(),
         }
         agent_stats.last_status = Some(status.into());
-        agent_stats.last_transition_key = Some(transition_key);
+        remember_terminal_hash(agent_stats, transition_hash);
         changed = true;
     }
     changed
+}
+
+const RECENT_TERMINAL_HASH_CAPACITY: usize = 128;
+
+fn terminal_key_hash(transition_key: &str) -> String {
+    format!("{:x}", Sha256::digest(transition_key.as_bytes()))
+}
+
+fn remember_terminal_hash(stats: &mut AgentStats, transition_hash: String) {
+    stats.recent_terminal_hashes.push(transition_hash);
+    if stats.recent_terminal_hashes.len() > RECENT_TERMINAL_HASH_CAPACITY {
+        stats.recent_terminal_hashes.remove(0);
+    }
+}
+
+fn normalize_terminal_hashes(hashes: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for hash in hashes {
+        if hash.len() == 64
+            && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && !normalized.iter().any(|existing| existing == &hash)
+        {
+            normalized.push(hash);
+        }
+    }
+    if normalized.len() > RECENT_TERMINAL_HASH_CAPACITY {
+        normalized.drain(..normalized.len() - RECENT_TERMINAL_HASH_CAPACITY);
+    }
+    normalized
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -830,10 +865,47 @@ fn stats_path() -> PathBuf {
         .join("stats.json")
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct StoredAgentStats {
+    total_seconds: u64,
+    error_count: u32,
+    done_count: u32,
+    last_status: Option<String>,
+    recent_terminal_hashes: Vec<String>,
+    last_transition_key: Option<String>,
+}
+
+impl From<StoredAgentStats> for AgentStats {
+    fn from(stored: StoredAgentStats) -> Self {
+        let legacy_hash = stored
+            .last_transition_key
+            .map(|key| terminal_key_hash(&key));
+        let hashes = stored
+            .recent_terminal_hashes
+            .into_iter()
+            .chain(legacy_hash)
+            .collect::<Vec<_>>();
+        Self {
+            total_seconds: stored.total_seconds,
+            error_count: stored.error_count,
+            done_count: stored.done_count,
+            last_status: stored.last_status,
+            recent_terminal_hashes: normalize_terminal_hashes(hashes),
+        }
+    }
+}
+
 fn load_stats(path: &Path) -> HashMap<String, AgentStats> {
     fs::read_to_string(path)
         .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
+        .and_then(|s| serde_json::from_str::<HashMap<String, StoredAgentStats>>(&s).ok())
+        .map(|stored| {
+            stored
+                .into_iter()
+                .map(|(agent, stats)| (agent, stats.into()))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -4170,6 +4242,152 @@ mod tests {
         ));
         assert_eq!(stats["Codex CLI"].done_count, 2);
         assert_eq!(daily["2026-09-06"]["Codex CLI"].done_count, 2);
+    }
+
+    #[test]
+    fn terminal_statistics_never_recount_a_recent_terminal_after_a_session_revisit_or_reload() {
+        let mut stats = HashMap::new();
+        let mut daily = HashMap::new();
+        let mut first = terminal_snapshot(
+            "turn-a",
+            domain::TurnState::Succeeded,
+            1_000,
+            false,
+            domain::ProcessState::Running,
+            "matched-session",
+        );
+        let mut second = terminal_snapshot(
+            "turn-b",
+            domain::TurnState::Succeeded,
+            2_000,
+            false,
+            domain::ProcessState::Running,
+            "matched-session",
+        );
+        first.agents[0].active_session.as_mut().unwrap().id = "session-a".into();
+        first.agents[0].active_turn.as_mut().unwrap().session_id = "session-a".into();
+        second.agents[0].active_session.as_mut().unwrap().id = "session-b".into();
+        second.agents[0].active_turn.as_mut().unwrap().session_id = "session-b".into();
+
+        assert!(update_terminal_statistics_from_snapshot(
+            &mut stats,
+            &mut daily,
+            "2026-09-06",
+            &first,
+        ));
+        assert!(update_terminal_statistics_from_snapshot(
+            &mut stats,
+            &mut daily,
+            "2026-09-06",
+            &second,
+        ));
+        assert!(!update_terminal_statistics_from_snapshot(
+            &mut stats,
+            &mut daily,
+            "2026-09-06",
+            &first,
+        ));
+
+        let path = std::env::temp_dir().join(format!(
+            "agent-island-stats-revisit-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        save_stats(&stats, &path).unwrap();
+        let mut reloaded = load_stats(&path);
+        let _ = fs::remove_file(&path);
+        assert!(!update_terminal_statistics_from_snapshot(
+            &mut reloaded,
+            &mut HashMap::new(),
+            "2026-09-06",
+            &first,
+        ));
+        assert_eq!(reloaded["Codex CLI"].done_count, 2);
+    }
+
+    #[test]
+    fn terminal_statistics_serialize_only_opaque_hashes_and_migrate_legacy_raw_keys() {
+        let mut stats = HashMap::new();
+        let mut daily = HashMap::new();
+        let first = terminal_snapshot(
+            "turn-private",
+            domain::TurnState::Succeeded,
+            1_000,
+            false,
+            domain::ProcessState::Running,
+            "matched-session",
+        );
+        assert!(update_terminal_statistics_from_snapshot(
+            &mut stats,
+            &mut daily,
+            "2026-09-06",
+            &first,
+        ));
+        let frontend_json = serde_json::to_string(&stats["Codex CLI"]).unwrap();
+        assert!(frontend_json.contains("recent_terminal_hashes"));
+        for identifier in ["codex", "matched-session", "turn-private"] {
+            assert!(!frontend_json.contains(identifier));
+        }
+
+        let legacy_key = "codex\u{1f}matched-session\u{1f}turn-private\u{1f}done\u{1f}1000";
+        let path = std::env::temp_dir().join(format!(
+            "agent-island-stats-legacy-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        fs::write(
+            &path,
+            serde_json::json!({
+                "Codex CLI": {
+                    "done_count": 1,
+                    "last_transition_key": legacy_key,
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut loaded = load_stats(&path);
+        assert!(!update_terminal_statistics_from_snapshot(
+            &mut loaded,
+            &mut HashMap::new(),
+            "2026-09-06",
+            &first,
+        ));
+        save_stats(&loaded, &path).unwrap();
+        let persisted_json = fs::read_to_string(&path).unwrap();
+        let _ = fs::remove_file(&path);
+        assert!(!persisted_json.contains(legacy_key));
+        assert!(persisted_json.contains("recent_terminal_hashes"));
+    }
+
+    #[test]
+    fn terminal_statistics_retain_at_most_128_recent_hashes() {
+        let mut stats = HashMap::new();
+        let mut daily = HashMap::new();
+        for index in 0..129 {
+            let snapshot = terminal_snapshot(
+                &format!("turn-{index}"),
+                domain::TurnState::Succeeded,
+                index + 1,
+                false,
+                domain::ProcessState::Running,
+                "matched-session",
+            );
+            assert!(update_terminal_statistics_from_snapshot(
+                &mut stats,
+                &mut daily,
+                "2026-09-06",
+                &snapshot,
+            ));
+        }
+        assert_eq!(stats["Codex CLI"].done_count, 129);
+        assert_eq!(stats["Codex CLI"].recent_terminal_hashes.len(), 128);
     }
 
     #[test]

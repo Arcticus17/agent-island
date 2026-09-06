@@ -33,3 +33,27 @@ GREEN coverage verifies Busy/Idle fallback, structured terminal precedence, stop
 ## Boundary / concern
 
 The statistics de-duplication retains the latest terminal transition key per agent, which is sufficient for consecutive polling of the reducer-selected active turn. It intentionally does not turn activity or text hints into statistics events. Existing user changes to `src-tauri/Cargo.toml` and generated schemas were left unstaged and unmodified by this group.
+
+## Review P2 follow-up — bounded opaque terminal identity retention
+
+- Base: `8bcf18c`.
+- Scope: D2 review P2 and the documented activity-freshness clock boundary only.
+- Files: `src-tauri/src/lib.rs`, `src-tauri/src/interface/snapshot.rs`.
+
+`AgentStats` now keeps the 128 most recent terminal transition SHA-256 hashes per agent. A terminal is counted only when its opaque hash is absent, so A -> B -> A and an ordinary repeated poll do not count again, while a distinct turn with the same terminal status does. The bounded insertion order gives an explicit 128-entry retention policy.
+
+Old aggregate stats files with `last_transition_key` remain readable: loading converts that legacy raw key into a SHA-256 hash and discards the raw value. New aggregate stats files and the `AgentStats` frontend payload contain only `recent_terminal_hashes`; regression coverage asserts that representative agent/session/turn identifiers do not serialize. No raw stable identifiers are retained in the runtime `AgentStats` type.
+
+Activity freshness now accepts an observation exactly 5,000 ms old, rejects 5,001 ms, and rejects a future observation timestamp.
+
+### TDD evidence
+
+RED regression source was added before implementation for A -> B -> A plus save/load/revisit and for the 5-second, expired, and future activity boundaries. In this worker environment, `cargo test` could not link either pre- or post-fix because the MSVC `link.exe` executable is absent, so assertion-level RED/GREEN output is unavailable here. The pre-fix control flow compared only `last_transition_key`; therefore the A -> B -> A test's third `assert!(!update...)` is the direct P2 reproduction. The activity test likewise fails against the prior `saturating_sub` behavior for the future timestamp.
+
+### Verification
+
+- `npm run test:frontend`: 23 passed, 0 failed.
+- `npm run build`: passed.
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo test --manifest-path src-tauri/Cargo.toml --lib`, `cargo check --manifest-path src-tauri/Cargo.toml --lib --offline`, and Rust portion of `npm test`: blocked before tests by missing `link.exe` in this worker's MSVC toolchain. A controller with the established linker environment must run the Rust suite.
