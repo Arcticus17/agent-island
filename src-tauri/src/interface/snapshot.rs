@@ -13,6 +13,23 @@ pub struct ProcessFact {
     pub name: String,
     pub identity: ProcessIdentity,
     pub process_state: ProcessState,
+    pub activity: ProcessActivity,
+}
+
+/// A short-lived observation of process work, deliberately separate from log events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessActivity {
+    Busy { observed_at_ms: u64 },
+    Idle { observed_at_ms: u64 },
+    Unknown,
+}
+
+const ACTIVITY_FRESHNESS_MS: u64 = 5_000;
+
+impl ProcessActivity {
+    fn is_busy_at(self, now_ms: u64) -> bool {
+        matches!(self, Self::Busy { observed_at_ms } if now_ms.saturating_sub(observed_at_ms) <= ACTIVITY_FRESHNESS_MS)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -36,9 +53,18 @@ pub struct AgentView {
     pub state: AgentState,
     pub display_status: DisplayStatus,
     pub active_session: Option<SessionView>,
+    pub active_turn: Option<ActiveTurnIdentity>,
     pub history_sessions: Vec<SessionSummary>,
     pub diagnostic: Option<DiagnosticView>,
     pub freshness: Freshness,
+}
+
+/// Structured turn identity for downstream transition consumers; never inferred from text.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ActiveTurnIdentity {
+    pub agent_id: String,
+    pub session_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -192,9 +218,7 @@ fn build_agent_view(
         agent_candidates
             .iter()
             .find(|candidate| candidate.identity.session_id == session_id)
-            .map(|candidate| {
-                session_view(now_ms, candidate, process.process_state, &agent_candidates)
-            })
+            .map(|candidate| session_view(now_ms, candidate, process, &agent_candidates))
     });
     let history_candidates = agent_candidates
         .iter()
@@ -209,7 +233,13 @@ fn build_agent_view(
         .map(|candidate| SessionSummary::from(&history_session_view(candidate, &agent_candidates)))
         .collect();
     let state = reduce_agent_state(
-        process.process_state,
+        now_ms,
+        process,
+        active_session_id.as_deref(),
+        &agent_candidates,
+    );
+    let active_turn = active_turn_identity(
+        &process.identity.agent_id,
         active_session_id.as_deref(),
         &agent_candidates,
     );
@@ -220,6 +250,7 @@ fn build_agent_view(
         display_status: derive_display_status(&state, now_ms),
         state,
         active_session,
+        active_turn,
         history_sessions,
         diagnostic,
         freshness,
@@ -231,7 +262,18 @@ fn history_session_view(
     candidates: &[&SessionCandidate],
 ) -> SessionView {
     let state = reduce_agent_state(
-        ProcessState::Running,
+        candidate.identity.last_event_at_ms,
+        &ProcessFact {
+            name: String::new(),
+            identity: ProcessIdentity {
+                agent_id: candidate.identity.agent_id.clone(),
+                project_path: None,
+                process_ids: Vec::new(),
+                started_at_ms: 0,
+            },
+            process_state: ProcessState::Running,
+            activity: ProcessActivity::Unknown,
+        },
         Some(&candidate.identity.session_id),
         candidates,
     );
@@ -251,11 +293,12 @@ fn history_session_view(
 fn session_view(
     now_ms: u64,
     candidate: &SessionCandidate,
-    process_state: ProcessState,
+    process: &ProcessFact,
     candidates: &[&SessionCandidate],
 ) -> SessionView {
     let state = reduce_agent_state(
-        process_state,
+        now_ms,
+        process,
         Some(&candidate.identity.session_id),
         candidates,
     );
@@ -265,17 +308,22 @@ fn session_view(
 }
 
 fn reduce_agent_state(
-    process_state: ProcessState,
+    now_ms: u64,
+    process: &ProcessFact,
     active_session_id: Option<&str>,
     candidates: &[&SessionCandidate],
 ) -> AgentState {
     let mut state = AgentState {
-        process: process_state,
+        process: process.process_state,
         turn: TurnState::Idle,
         attention: AttentionState::None,
         result_at_ms: None,
     };
+    if process.process_state == ProcessState::Stopped {
+        return state;
+    }
     let Some(active_session_id) = active_session_id else {
+        apply_process_activity_fallback(now_ms, process, false, &mut state);
         return state;
     };
     let mut events: Vec<&DomainEvent> = candidates
@@ -290,6 +338,9 @@ fn reduce_agent_state(
         .find(|event| matches!(event.kind, EventKind::TurnStarted))
         .or_else(|| events.last())
         .map(|event| event.turn_id.as_str());
+    let has_structured_turn_evidence = events
+        .iter()
+        .any(|event| !matches!(event.kind, EventKind::DiagnosticHint { .. }));
 
     for event in events
         .into_iter()
@@ -321,12 +372,55 @@ fn reduce_agent_state(
             EventKind::DiagnosticHint { .. } => {}
         }
     }
+    apply_process_activity_fallback(now_ms, process, has_structured_turn_evidence, &mut state);
     state
+}
+
+fn apply_process_activity_fallback(
+    now_ms: u64,
+    process: &ProcessFact,
+    has_structured_turn_evidence: bool,
+    state: &mut AgentState,
+) {
+    if !has_structured_turn_evidence
+        && matches!(process.identity.agent_id.as_str(), "opencode" | "hermes")
+        && process.activity.is_busy_at(now_ms)
+    {
+        state.turn = TurnState::Executing;
+        state.attention = AttentionState::None;
+        state.result_at_ms = None;
+    }
+}
+
+fn active_turn_identity(
+    agent_id: &str,
+    active_session_id: Option<&str>,
+    candidates: &[&SessionCandidate],
+) -> Option<ActiveTurnIdentity> {
+    let session_id = active_session_id?;
+    let mut events: Vec<&DomainEvent> = candidates
+        .iter()
+        .flat_map(|candidate| candidate.events.iter())
+        .filter(|event| event.session_id == session_id)
+        .collect();
+    events.sort_by_key(|event| event.at_ms);
+    let turn_id = events
+        .iter()
+        .rev()
+        .find(|event| matches!(event.kind, EventKind::TurnStarted))
+        .or_else(|| events.last())?
+        .turn_id
+        .clone();
+    Some(ActiveTurnIdentity {
+        agent_id: agent_id.into(),
+        session_id: session_id.into(),
+        turn_id,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_snapshot, ProcessFact, SessionCandidate, SessionView};
+    use super::{build_snapshot, ProcessActivity, ProcessFact, SessionCandidate, SessionView};
     use crate::adapters::codex::CodexAdapter;
     use crate::adapters::AgentAdapter;
     use crate::domain::{
@@ -390,6 +484,7 @@ mod tests {
                 started_at_ms: 20_000,
             },
             process_state: ProcessState::Running,
+            activity: ProcessActivity::Unknown,
         };
         let matching = session_candidate(
             "matching-active",
@@ -444,6 +539,7 @@ mod tests {
                 started_at_ms: 20_000,
             },
             process_state: ProcessState::Stopped,
+            activity: ProcessActivity::Unknown,
         };
         let mut historical = session_candidate(
             "old-session",
@@ -484,6 +580,7 @@ mod tests {
                 started_at_ms: 20_000,
             },
             process_state: ProcessState::Running,
+            activity: ProcessActivity::Unknown,
         };
         let first = session_candidate(
             "candidate-one",
@@ -535,6 +632,7 @@ mod tests {
                 started_at_ms: 20_000,
             },
             process_state: ProcessState::Running,
+            activity: ProcessActivity::Unknown,
         };
         let unrelated = session_candidate(
             "unrelated-history",
@@ -563,6 +661,7 @@ mod tests {
                 started_at_ms: 20_000,
             },
             process_state: ProcessState::Stopped,
+            activity: ProcessActivity::Unknown,
         };
         let old_history = session_candidate(
             "old-history",
@@ -592,6 +691,7 @@ mod tests {
                 started_at_ms: 10_000,
             },
             process_state: ProcessState::Running,
+            activity: ProcessActivity::Unknown,
         };
         let retained = session_candidate(
             "retained",
@@ -635,6 +735,7 @@ mod tests {
                 started_at_ms: 0,
             },
             process_state: ProcessState::Running,
+            activity: ProcessActivity::Unknown,
         };
         let candidate = SessionCandidate {
             identity: SessionIdentity {
@@ -670,5 +771,100 @@ mod tests {
         assert_eq!(snapshot.agents[0].state.turn, TurnState::Succeeded);
         assert_eq!(snapshot.agents[0].state.attention, AttentionState::None);
         assert_eq!(snapshot.agents[0].display_status, DisplayStatus::Done);
+    }
+
+    #[test]
+    fn opencode_busy_and_idle_activity_are_nonterminal_fallbacks() {
+        let mut process = ProcessFact {
+            name: "OpenCode".into(),
+            identity: ProcessIdentity {
+                agent_id: "opencode".into(),
+                project_path: Some(r"D:\work\active".into()),
+                process_ids: vec![42],
+                started_at_ms: 0,
+            },
+            process_state: ProcessState::Running,
+            activity: ProcessActivity::Busy {
+                observed_at_ms: 10_000,
+            },
+        };
+        let mut candidate = session_candidate(
+            "opencode-active",
+            r"D:\work\active",
+            10_000,
+            SessionLifecycle::Active,
+            EventKind::DiagnosticHint {
+                code: "text_never_terminal".into(),
+            },
+        );
+        candidate.identity.agent_id = "opencode".into();
+        candidate.events[0].agent_id = "opencode".into();
+
+        let busy = build_snapshot(10_001, &[process.clone()], &[candidate.clone()]);
+        assert_eq!(busy.agents[0].state.turn, TurnState::Executing);
+        assert_eq!(busy.agents[0].display_status, DisplayStatus::Working);
+
+        process.activity = ProcessActivity::Idle {
+            observed_at_ms: 10_001,
+        };
+        let idle = build_snapshot(10_002, &[process], &[candidate]);
+        assert_eq!(idle.agents[0].state.turn, TurnState::Idle);
+        assert_eq!(idle.agents[0].display_status, DisplayStatus::Idle);
+    }
+
+    #[test]
+    fn structured_turn_and_stopped_process_override_activity_fallback() {
+        let mut process = ProcessFact {
+            name: "Hermes".into(),
+            identity: ProcessIdentity {
+                agent_id: "hermes".into(),
+                project_path: Some(r"D:\work\active".into()),
+                process_ids: vec![42],
+                started_at_ms: 0,
+            },
+            process_state: ProcessState::Running,
+            activity: ProcessActivity::Busy {
+                observed_at_ms: 10_000,
+            },
+        };
+        let mut candidate = session_candidate(
+            "hermes-active",
+            r"D:\work\active",
+            10_000,
+            SessionLifecycle::Active,
+            EventKind::TurnSucceeded,
+        );
+        candidate.identity.agent_id = "hermes".into();
+        candidate.events[0].agent_id = "hermes".into();
+
+        let structured = build_snapshot(10_001, &[process.clone()], &[candidate.clone()]);
+        assert_eq!(structured.agents[0].state.turn, TurnState::Succeeded);
+        assert_eq!(structured.agents[0].display_status, DisplayStatus::Done);
+
+        process.process_state = ProcessState::Stopped;
+        let stopped = build_snapshot(10_001, &[process], &[candidate]);
+        assert_eq!(stopped.agents[0].display_status, DisplayStatus::Stopped);
+    }
+
+    #[test]
+    fn busy_conservative_process_without_a_match_is_not_projected_as_idle() {
+        let process = ProcessFact {
+            name: "OpenCode".into(),
+            identity: ProcessIdentity {
+                agent_id: "opencode".into(),
+                project_path: Some(r"D:\work\unknown".into()),
+                process_ids: vec![42],
+                started_at_ms: 0,
+            },
+            process_state: ProcessState::Running,
+            activity: ProcessActivity::Busy {
+                observed_at_ms: 10_000,
+            },
+        };
+
+        let snapshot = build_snapshot(10_001, &[process], &[]);
+
+        assert!(snapshot.agents[0].active_session.is_none());
+        assert_eq!(snapshot.agents[0].display_status, DisplayStatus::Working);
     }
 }

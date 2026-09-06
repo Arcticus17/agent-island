@@ -66,6 +66,8 @@ pub struct AgentStats {
     pub error_count: u32,
     pub done_count: u32,
     pub last_status: Option<String>,
+    #[serde(default)]
+    pub last_transition_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -417,6 +419,7 @@ fn process_fact_from_observations(
         } else {
             domain::ProcessState::Running
         },
+        activity: interface::snapshot::ProcessActivity::Unknown,
     }
 }
 
@@ -464,11 +467,10 @@ fn scan_agents(
                 started_at_ms: process.start_time().saturating_mul(1_000),
             })
             .collect();
-        let process_fact = process_fact_from_observations(agent_id, agent_name, &observations);
+        let mut process_fact = process_fact_from_observations(agent_id, agent_name, &observations);
         let process_cwd = process_fact.identity.project_path.clone();
         let mut session_scan =
             build_session_scan_for_process(agent_name, Some(&process_fact.identity));
-        process_facts.push(process_fact);
         if session_scan.acquisition == AcquisitionCompleteness::Incomplete {
             acquisition_issues.push(
                 session_scan
@@ -494,6 +496,7 @@ fn scan_agents(
         session_candidates.append(&mut session_scan.candidates);
         diagnostic_records.append(&mut session_scan.diagnostics);
         if processes.is_empty() {
+            process_facts.push(process_fact);
             session.activity.remove(agent_name);
             session.runtime_start.remove(agent_name);
             let first = session_list.first();
@@ -570,6 +573,15 @@ fn scan_agents(
             entry.last_active = now;
         }
         entry.last_cpu = total_cpu;
+        process_fact.activity = if busy {
+            interface::snapshot::ProcessActivity::Busy {
+                observed_at_ms: epoch_millis(),
+            }
+        } else {
+            interface::snapshot::ProcessActivity::Idle {
+                observed_at_ms: epoch_millis(),
+            }
+        };
         let idle_secs = now.duration_since(entry.last_active).as_secs();
         let log_status = log.as_ref().and_then(|l| l.log_status.clone());
         let alert = log.as_ref().and_then(|l| l.alert.clone());
@@ -618,17 +630,6 @@ fn scan_agents(
         } else {
             session.runtime_start.insert(agent_name.clone(), now);
         }
-        if status == "error" && stats.last_status.as_deref() != Some("error") {
-            stats.error_count += 1;
-            day_stats.error_count += 1;
-            stats_changed = true;
-        }
-        if status == "done" && stats.last_status.as_deref() != Some("done") {
-            stats.done_count += 1;
-            day_stats.done_count += 1;
-            stats_changed = true;
-        }
-        stats.last_status = Some(status.to_string());
         let stats_snapshot = stats.clone();
 
         agents.push(AgentInfo {
@@ -660,6 +661,7 @@ fn scan_agents(
             },
             usage: usage_for(agent_name),
         });
+        process_facts.push(process_fact);
     }
     let generated_at_ms = epoch_millis();
     let snapshot = interface::snapshot::build_snapshot_with_acquisition(
@@ -686,6 +688,15 @@ fn scan_agents(
         records: diagnostic_records,
     };
     apply_snapshot_projection(&mut agents, &snapshot);
+    stats_changed |= update_terminal_statistics_from_snapshot(
+        &mut session.stats,
+        &mut session.daily,
+        &today_key(),
+        &snapshot,
+    );
+    for agent in &mut agents {
+        agent.stats = session.stats.get(&agent.name).cloned();
+    }
     (agents, snapshot, diagnostics, stats_changed)
 }
 
@@ -747,6 +758,63 @@ fn apply_snapshot_projection(
             .into_iter()
             .collect();
     }
+}
+
+fn update_terminal_statistics_from_snapshot(
+    stats: &mut HashMap<String, AgentStats>,
+    daily: &mut HashMap<String, HashMap<String, AgentStats>>,
+    day: &str,
+    snapshot: &interface::snapshot::AgentViewSnapshot,
+) -> bool {
+    let mut changed = false;
+    for agent in &snapshot.agents {
+        if agent.freshness.stale || agent.state.process != domain::ProcessState::Running {
+            continue;
+        }
+        let (Some(session), Some(turn), Some(result_at_ms)) = (
+            agent.active_session.as_ref(),
+            agent.active_turn.as_ref(),
+            agent.state.result_at_ms,
+        ) else {
+            continue;
+        };
+        if turn.agent_id != agent.id || turn.session_id != session.id {
+            continue;
+        }
+        let status = match agent.state.turn {
+            domain::TurnState::Succeeded => "done",
+            domain::TurnState::Failed => "error",
+            _ => continue,
+        };
+        let transition_key = format!(
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{result_at_ms}",
+            agent.id, turn.session_id, turn.turn_id, status,
+        );
+        let agent_stats = stats.entry(agent.name.clone()).or_default();
+        if agent_stats.last_transition_key.as_deref() == Some(transition_key.as_str()) {
+            continue;
+        }
+        let day_stats = daily
+            .entry(day.into())
+            .or_default()
+            .entry(agent.name.clone())
+            .or_default();
+        match status {
+            "done" => {
+                agent_stats.done_count += 1;
+                day_stats.done_count += 1;
+            }
+            "error" => {
+                agent_stats.error_count += 1;
+                day_stats.error_count += 1;
+            }
+            _ => unreachable!(),
+        }
+        agent_stats.last_status = Some(status.into());
+        agent_stats.last_transition_key = Some(transition_key);
+        changed = true;
+    }
+    changed
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -4010,6 +4078,166 @@ fn start_global_hotkeys(app: tauri::AppHandle) {
 mod tests {
     use super::*;
 
+    fn terminal_snapshot(
+        turn_id: &str,
+        turn: domain::TurnState,
+        result_at_ms: u64,
+        stale: bool,
+        process: domain::ProcessState,
+        active_turn_session_id: &str,
+    ) -> interface::snapshot::AgentViewSnapshot {
+        let active_session = interface::snapshot::SessionView {
+            id: "matched-session".into(),
+            name: "matched-session".into(),
+            cwd: Some(r"D:\work\active".into()),
+            log_path: None,
+            records: Vec::new(),
+            recent_output: Vec::new(),
+            current_file: None,
+            log_status: None,
+            alert: None,
+            lifecycle: domain::SessionLifecycle::Active,
+            last_active_at_ms: result_at_ms,
+            display_status: domain::DisplayStatus::Done,
+        };
+        interface::snapshot::AgentViewSnapshot {
+            schema_version: 1,
+            generated_at_ms: result_at_ms.saturating_add(1),
+            agents: vec![interface::snapshot::AgentView {
+                id: "codex".into(),
+                name: "Codex CLI".into(),
+                state: domain::AgentState {
+                    process,
+                    turn,
+                    attention: domain::AttentionState::None,
+                    result_at_ms: Some(result_at_ms),
+                },
+                display_status: domain::DisplayStatus::Done,
+                active_session: Some(active_session),
+                active_turn: Some(interface::snapshot::ActiveTurnIdentity {
+                    agent_id: "codex".into(),
+                    session_id: active_turn_session_id.into(),
+                    turn_id: turn_id.into(),
+                }),
+                history_sessions: Vec::new(),
+                diagnostic: None,
+                freshness: domain::Freshness {
+                    observed_at_ms: result_at_ms,
+                    stale,
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn terminal_statistics_deduplicate_same_poll_but_count_a_new_turn() {
+        let mut stats = HashMap::new();
+        let mut daily = HashMap::new();
+        let first = terminal_snapshot(
+            "turn-1",
+            domain::TurnState::Succeeded,
+            1_000,
+            false,
+            domain::ProcessState::Running,
+            "matched-session",
+        );
+
+        assert!(update_terminal_statistics_from_snapshot(
+            &mut stats,
+            &mut daily,
+            "2026-09-06",
+            &first
+        ));
+        assert!(!update_terminal_statistics_from_snapshot(
+            &mut stats,
+            &mut daily,
+            "2026-09-06",
+            &first
+        ));
+        let second = terminal_snapshot(
+            "turn-2",
+            domain::TurnState::Succeeded,
+            2_000,
+            false,
+            domain::ProcessState::Running,
+            "matched-session",
+        );
+        assert!(update_terminal_statistics_from_snapshot(
+            &mut stats,
+            &mut daily,
+            "2026-09-06",
+            &second
+        ));
+        assert_eq!(stats["Codex CLI"].done_count, 2);
+        assert_eq!(daily["2026-09-06"]["Codex CLI"].done_count, 2);
+    }
+
+    #[test]
+    fn terminal_statistics_ignore_stale_mismatched_and_stopped_snapshots() {
+        let mut stats = HashMap::new();
+        let mut daily = HashMap::new();
+        for snapshot in [
+            terminal_snapshot(
+                "turn-1",
+                domain::TurnState::Failed,
+                1_000,
+                true,
+                domain::ProcessState::Running,
+                "matched-session",
+            ),
+            terminal_snapshot(
+                "turn-2",
+                domain::TurnState::Failed,
+                2_000,
+                false,
+                domain::ProcessState::Running,
+                "unrelated-history",
+            ),
+            terminal_snapshot(
+                "turn-3",
+                domain::TurnState::Failed,
+                3_000,
+                false,
+                domain::ProcessState::Stopped,
+                "matched-session",
+            ),
+        ] {
+            assert!(!update_terminal_statistics_from_snapshot(
+                &mut stats,
+                &mut daily,
+                "2026-09-06",
+                &snapshot,
+            ));
+        }
+        let mut newer_history = terminal_snapshot(
+            "turn-current",
+            domain::TurnState::Succeeded,
+            4_000,
+            false,
+            domain::ProcessState::Running,
+            "matched-session",
+        );
+        newer_history.agents[0].state.turn = domain::TurnState::Executing;
+        newer_history.agents[0].state.result_at_ms = None;
+        let history_summary = interface::snapshot::SessionSummary::from(
+            newer_history.agents[0].active_session.as_ref().unwrap(),
+        );
+        newer_history.agents[0]
+            .history_sessions
+            .push(history_summary);
+        newer_history.agents[0].history_sessions[0].id = "newer-history".into();
+        newer_history.agents[0].history_sessions[0].last_active_at_ms = 9_000;
+        newer_history.agents[0].history_sessions[0].display_status = domain::DisplayStatus::Error;
+        assert!(!update_terminal_statistics_from_snapshot(
+            &mut stats,
+            &mut daily,
+            "2026-09-06",
+            &newer_history,
+        ));
+        assert!(stats.is_empty());
+        assert!(daily.is_empty());
+    }
+
     #[test]
     fn diagnostics_reads_the_current_cache_generation_without_scanning() {
         let generated_at_ms = 77;
@@ -4906,6 +5134,7 @@ mod tests {
                 state: AgentState::running(TurnState::Executing, AttentionState::None),
                 display_status: DisplayStatus::Working,
                 active_session: Some(active_session),
+                active_turn: None,
                 history_sessions: vec![SessionSummary {
                     id: "older".into(),
                     name: "older".into(),
@@ -4980,6 +5209,7 @@ mod tests {
                     started_at_ms: 0,
                 },
                 process_state: ProcessState::Stopped,
+                activity: interface::snapshot::ProcessActivity::Unknown,
             }],
             &scan.candidates,
         );
