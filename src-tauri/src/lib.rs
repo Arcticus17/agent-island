@@ -760,6 +760,7 @@ fn read_tail(path: &Path, max_bytes: u64) -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
+#[allow(dead_code)]
 fn clean_line(s: &str, max_chars: usize) -> String {
     let s = s.replace(['\r', '\n'], " ");
     let s = s.trim().trim_matches('"');
@@ -772,6 +773,7 @@ fn clean_line(s: &str, max_chars: usize) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn json_text(v: &Value) -> Option<String> {
     let content = v.pointer("/message/content").or_else(|| v.get("content"))?;
     let arr = content.as_array()?;
@@ -817,6 +819,7 @@ fn extract_paths(text: &str) -> Vec<String> {
     out
 }
 
+#[allow(dead_code)]
 fn text_signal(text: &str) -> Option<(&'static str, &'static str)> {
     let lower = text.to_lowercase();
     const ERRORS: &[&str] = &[
@@ -872,6 +875,7 @@ fn text_signal(text: &str) -> Option<(&'static str, &'static str)> {
     None
 }
 
+#[allow(dead_code)]
 fn claude_snapshot(path: &Path) -> Option<LogSnapshot> {
     let text = read_tail(path, 96 * 1024);
     let mut recent = Vec::new();
@@ -933,6 +937,7 @@ fn claude_snapshot(path: &Path) -> Option<LogSnapshot> {
     })
 }
 
+#[allow(dead_code)]
 fn codex_snapshot(path: &Path) -> Option<LogSnapshot> {
     let text = read_tail(path, 128 * 1024);
     let mut recent = Vec::new();
@@ -1059,6 +1064,7 @@ fn codex_snapshot(path: &Path) -> Option<LogSnapshot> {
     })
 }
 
+#[allow(dead_code)]
 fn opencode_snapshot_from_text(path: &Path, text: &str) -> LogSnapshot {
     let mut recent = Vec::new();
     let mut file = None;
@@ -1186,33 +1192,23 @@ fn session_scan_from_file(agent_id: &str, path: &Path) -> Option<SessionScan> {
     if text.is_empty() {
         return None;
     }
-    let (mut snapshot, report, metadata_id, metadata_cwd) = match agent_id {
+    let (report, metadata_id, metadata_cwd) = match agent_id {
         "codex" => {
             let (metadata_id, metadata_cwd) = codex_metadata(&text);
             (
-                codex_snapshot(path)?,
                 adapters::codex::CodexAdapter.parse(&text),
                 metadata_id,
                 metadata_cwd,
             )
         }
-        "claude" => (
-            claude_snapshot(path)?,
-            adapters::claude::ClaudeAdapter.parse(&text),
-            None,
-            None,
-        ),
+        "claude" => (adapters::claude::ClaudeAdapter.parse(&text), None, None),
         "opencode" => (
-            opencode_snapshot_from_text(path, &text),
             adapters::opencode::OpenCodeAdapter.parse(&text),
             Some("opencode".into()),
             None,
         ),
         _ => return None,
     };
-    if snapshot.cwd.is_none() {
-        snapshot.cwd = metadata_cwd;
-    }
     let event_count = report.events.len();
     let message_count = report.messages.len();
     let message_length = report
@@ -1248,8 +1244,10 @@ fn session_scan_from_file(agent_id: &str, path: &Path) -> Option<SessionScan> {
         .into_iter()
         .filter(|event| event.session_id == canonical_id)
         .collect();
+    let records = chronological_records(report.messages);
+    let snapshot = snapshot_from_bounded_text(path, &text, metadata_cwd, &records);
     let legacy = to_session_with_id(snapshot, canonical_id.clone());
-    let candidate = session_candidate_from_legacy(agent_id, &legacy, events);
+    let candidate = session_candidate_from_legacy(agent_id, &legacy, events, records);
     let diagnostics = issue
         .map(|issue| interface::diagnostics::DiagnosticRecord {
             view: interface::diagnostics::DiagnosticView::new(
@@ -1277,6 +1275,44 @@ fn session_scan_from_file(agent_id: &str, path: &Path) -> Option<SessionScan> {
     })
 }
 
+fn chronological_records(
+    mut messages: Vec<domain::ConversationMessage>,
+) -> Vec<domain::ConversationMessage> {
+    messages.sort_by_key(|message| message.at_ms);
+    messages
+}
+
+fn snapshot_from_bounded_text(
+    path: &Path,
+    text: &str,
+    metadata_cwd: Option<String>,
+    records: &[domain::ConversationMessage],
+) -> LogSnapshot {
+    let cwd = metadata_cwd.or_else(|| {
+        text.lines().find_map(|line| {
+            serde_json::from_str::<Value>(line).ok().and_then(|value| {
+                value
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .or_else(|| value.pointer("/payload/cwd").and_then(Value::as_str))
+                    .map(str::to_owned)
+            })
+        })
+    });
+    let file = records
+        .iter()
+        .rev()
+        .find_map(|record| extract_paths(&record.text).into_iter().last());
+    LogSnapshot {
+        path: path.display().to_string(),
+        recent: records.iter().map(|record| record.text.clone()).collect(),
+        file,
+        cwd,
+        log_status: None,
+        alert: None,
+    }
+}
+
 fn codex_metadata(text: &str) -> (Option<String>, Option<String>) {
     for line in text.lines() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
@@ -1302,6 +1338,7 @@ fn session_candidate_from_legacy(
     agent_id: &str,
     session: &AgentSession,
     events: Vec<domain::DomainEvent>,
+    records: Vec<domain::ConversationMessage>,
 ) -> interface::snapshot::SessionCandidate {
     let session_events: Vec<&domain::DomainEvent> = events
         .iter()
@@ -1351,10 +1388,13 @@ fn session_candidate_from_legacy(
             name: session.name.clone(),
             cwd: session.cwd.clone(),
             log_path: session.log_path.clone(),
+            records,
             recent_output: session.recent_output.clone(),
             current_file: session.current_file.clone(),
             log_status: session.log_status.clone(),
             alert: session.alert.clone(),
+            lifecycle: domain::SessionLifecycle::Historical,
+            last_active_at_ms: last_event_at_ms,
             display_status: domain::DisplayStatus::Idle,
         },
         events,
@@ -1460,6 +1500,8 @@ fn hermes_session_scan_from_text(text: &str) -> SessionScan {
     let mut scan = SessionScan::default();
     for identity in report.sessions {
         let name = session_name(identity.project_path.as_deref(), &identity.session_id);
+        let lifecycle = identity.lifecycle;
+        let last_active_at_ms = identity.last_event_at_ms;
         let legacy = AgentSession {
             id: identity.session_id.clone(),
             name,
@@ -1477,10 +1519,13 @@ fn hermes_session_scan_from_text(text: &str) -> SessionScan {
                 name: legacy.name.clone(),
                 cwd: legacy.cwd.clone(),
                 log_path: None,
+                records: Vec::new(),
                 recent_output: Vec::new(),
                 current_file: None,
                 log_status: None,
                 alert: None,
+                lifecycle,
+                last_active_at_ms,
                 display_status: domain::DisplayStatus::Idle,
             },
             events: Vec::new(),
@@ -3802,7 +3847,14 @@ mod tests {
             std::process::id()
         ));
         let text = format!(
-            "{{\"timestamp\":\"2026-09-04T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"canonical-long\",\"cwd\":\"D:\\\\work\\\\active\"}}}}\n{}\n{{\"timestamp\":\"2026-09-04T10:01:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"tail-turn\"}}}}\n",
+            concat!(
+                "{{\"timestamp\":\"2026-09-04T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"canonical-long\",\"cwd\":\"D:\\\\work\\\\active\"}}}}\n",
+                "{{\"timestamp\":\"2026-09-04T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"user_message\",\"message\":\"head prompt\",\"turn_id\":\"head-turn\"}}}}\n",
+                "{}\n",
+                "{{\"timestamp\":\"2026-09-04T10:01:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"tail-turn\"}}}}\n",
+                "{{\"timestamp\":\"2026-09-04T10:01:01Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"user_message\",\"message\":\"tail prompt\",\"turn_id\":\"tail-turn\"}}}}\n",
+                "{{\"timestamp\":\"2026-09-04T10:01:02Z\",\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":\"tail answer\"}}]}}}}\n",
+            ),
             "x".repeat(600 * 1024)
         );
         fs::write(&path, text).unwrap();
@@ -3810,8 +3862,65 @@ mod tests {
         let scan = session_scan_from_file("codex", &path).unwrap();
 
         assert_eq!(scan.candidates[0].identity.session_id, "canonical-long");
-        assert_eq!(scan.candidates[0].events.len(), 1);
-        assert_eq!(scan.candidates[0].events[0].session_id, "canonical-long");
+        assert_eq!(scan.candidates[0].events.len(), 3);
+        assert!(scan.candidates[0]
+            .events
+            .iter()
+            .all(|event| event.session_id == "canonical-long"));
+        assert_eq!(
+            scan.candidates[0]
+                .view
+                .records
+                .iter()
+                .map(|record| record.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["head prompt", "tail prompt", "tail answer"]
+        );
+        assert_eq!(
+            scan.candidates[0].view.recent_output,
+            vec!["head prompt", "tail prompt", "tail answer"]
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn production_codex_scan_serializes_canonical_messages_in_chronological_order() {
+        let path = std::env::temp_dir().join(format!(
+            "agent-island-codex-records-{}.jsonl",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            concat!(
+                r#"{"timestamp":"2026-09-04T10:00:00Z","type":"session_meta","payload":{"id":"canonical-records","cwd":"D:\\work\\canonical"}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-04T10:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"first prompt","turn_id":"turn-1"}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-04T10:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"first answer"}]}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-04T10:00:03Z","type":"event_msg","payload":{"type":"user_message","message":"second prompt","turn_id":"turn-2"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let scan = session_scan_from_file("codex", &path).unwrap();
+        let view = serde_json::to_value(&scan.candidates[0].view).unwrap();
+
+        assert_eq!(
+            view["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|record| record["text"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["first prompt", "first answer", "second prompt"]
+        );
+        assert_eq!(
+            view["recent_output"],
+            serde_json::json!(["first prompt", "first answer", "second prompt"])
+        );
+        assert_eq!(view["cwd"], r#"D:\work\canonical"#);
         let _ = fs::remove_file(path);
     }
 
@@ -3927,10 +4036,13 @@ mod tests {
             name: "matching-active".into(),
             cwd: Some(r"D:\work\active".into()),
             log_path: None,
+            records: Vec::new(),
             recent_output: Vec::new(),
             current_file: None,
             log_status: None,
             alert: None,
+            lifecycle: domain::SessionLifecycle::Active,
+            last_active_at_ms: 10,
             display_status: DisplayStatus::Working,
         };
         let snapshot = AgentViewSnapshot {
@@ -3946,6 +4058,14 @@ mod tests {
                     id: "older".into(),
                     name: "older".into(),
                     cwd: Some(r"D:\work\older".into()),
+                    log_path: None,
+                    records: Vec::new(),
+                    recent_output: Vec::new(),
+                    current_file: None,
+                    log_status: None,
+                    alert: None,
+                    lifecycle: domain::SessionLifecycle::Historical,
+                    last_active_at_ms: 9,
                     display_status: DisplayStatus::Done,
                 }],
                 diagnostic: None,

@@ -2,9 +2,9 @@ use serde::Serialize;
 
 use crate::application::session_registry::{match_active_session, SessionMatch};
 use crate::domain::{
-    derive_display_status, freshness_for_adapter, AgentState, AttentionState, DataIssue,
-    DisplayStatus, DomainEvent, EventKind, Freshness, ProcessIdentity, ProcessState,
-    SessionIdentity, TurnState,
+    derive_display_status, freshness_for_adapter, AgentState, AttentionState, ConversationMessage,
+    DataIssue, DisplayStatus, DomainEvent, EventKind, Freshness, ProcessIdentity, ProcessState,
+    SessionIdentity, SessionLifecycle, TurnState,
 };
 use crate::interface::diagnostics::DiagnosticView;
 
@@ -47,10 +47,13 @@ pub struct SessionView {
     pub name: String,
     pub cwd: Option<String>,
     pub log_path: Option<String>,
+    pub records: Vec<ConversationMessage>,
     pub recent_output: Vec<String>,
     pub current_file: Option<String>,
     pub log_status: Option<String>,
     pub alert: Option<String>,
+    pub lifecycle: SessionLifecycle,
+    pub last_active_at_ms: u64,
     pub display_status: DisplayStatus,
 }
 
@@ -59,6 +62,14 @@ pub struct SessionSummary {
     pub id: String,
     pub name: String,
     pub cwd: Option<String>,
+    pub log_path: Option<String>,
+    pub records: Vec<ConversationMessage>,
+    pub recent_output: Vec<String>,
+    pub current_file: Option<String>,
+    pub log_status: Option<String>,
+    pub alert: Option<String>,
+    pub lifecycle: SessionLifecycle,
+    pub last_active_at_ms: u64,
     pub display_status: DisplayStatus,
 }
 
@@ -68,6 +79,14 @@ impl From<&SessionView> for SessionSummary {
             id: session.id.clone(),
             name: session.name.clone(),
             cwd: session.cwd.clone(),
+            log_path: session.log_path.clone(),
+            records: session.records.clone(),
+            recent_output: session.recent_output.clone(),
+            current_file: session.current_file.clone(),
+            log_status: session.log_status.clone(),
+            alert: session.alert.clone(),
+            lifecycle: session.lifecycle,
+            last_active_at_ms: session.last_active_at_ms,
             display_status: session.display_status,
         }
     }
@@ -145,11 +164,7 @@ fn build_agent_view(
         .filter(|candidate| {
             Some(candidate.identity.session_id.as_str()) != active_session_id.as_deref()
         })
-        .map(|candidate| {
-            let mut view = candidate.view.clone();
-            view.display_status = DisplayStatus::Idle;
-            SessionSummary::from(&view)
-        })
+        .map(|candidate| SessionSummary::from(&history_session_view(candidate, &agent_candidates)))
         .collect();
     let state = reduce_agent_state(
         process.process_state,
@@ -167,6 +182,28 @@ fn build_agent_view(
         diagnostic,
         freshness,
     }
+}
+
+fn history_session_view(
+    candidate: &SessionCandidate,
+    candidates: &[&SessionCandidate],
+) -> SessionView {
+    let state = reduce_agent_state(
+        ProcessState::Running,
+        Some(&candidate.identity.session_id),
+        candidates,
+    );
+    let mut view = candidate.view.clone();
+    view.display_status = match state.attention {
+        AttentionState::ApprovalRequired | AttentionState::InputRequired => DisplayStatus::Waiting,
+        AttentionState::None => match state.turn {
+            TurnState::Executing => DisplayStatus::Working,
+            TurnState::Succeeded => DisplayStatus::Done,
+            TurnState::Failed => DisplayStatus::Error,
+            TurnState::Idle => DisplayStatus::Idle,
+        },
+    };
+    view
 }
 
 fn session_view(
@@ -279,10 +316,13 @@ mod tests {
                 name: session_id.into(),
                 cwd: Some(project_path.into()),
                 log_path: None,
+                records: Vec::new(),
                 recent_output: Vec::new(),
                 current_file: None,
                 log_status: None,
                 alert: None,
+                lifecycle,
+                last_active_at_ms: last_event_at_ms,
                 display_status: DisplayStatus::Idle,
             },
             events: vec![DomainEvent {
@@ -347,8 +387,48 @@ mod tests {
         assert_eq!(agent.freshness.observed_at_ms, 21_000);
         assert_eq!(
             agent.history_sessions[0].display_status,
-            DisplayStatus::Idle
+            DisplayStatus::Error
         );
+    }
+
+    #[test]
+    fn serialized_history_keeps_its_own_output_metadata_and_terminal_result() {
+        let process = ProcessFact {
+            name: "Codex CLI".into(),
+            identity: ProcessIdentity {
+                agent_id: "codex".into(),
+                project_path: Some(r"D:\work\active".into()),
+                process_ids: Vec::new(),
+                started_at_ms: 20_000,
+            },
+            process_state: ProcessState::Stopped,
+        };
+        let mut historical = session_candidate(
+            "old-session",
+            r"D:\work\old",
+            30_000,
+            SessionLifecycle::Historical,
+            EventKind::TurnSucceeded,
+        );
+        historical.view.log_path = Some(r"D:\logs\old.jsonl".into());
+        historical.view.recent_output = vec!["old prompt".into(), "old result".into()];
+        historical.view.current_file = Some(r"D:\work\old\main.rs".into());
+        historical.view.log_status = Some("done".into());
+        historical.view.alert = Some("completed".into());
+
+        let snapshot = build_snapshot(31_000, &[process], &[historical]);
+        let history = serde_json::to_value(&snapshot.agents[0].history_sessions[0]).unwrap();
+
+        assert_eq!(history["display_status"], "done");
+        assert_eq!(
+            history["recent_output"],
+            serde_json::json!(["old prompt", "old result"])
+        );
+        assert_eq!(history["log_path"], r#"D:\logs\old.jsonl"#);
+        assert_eq!(history["current_file"], r#"D:\work\old\main.rs"#);
+        assert_eq!(history["log_status"], "done");
+        assert_eq!(history["lifecycle"], "Historical");
+        assert_eq!(history["last_active_at_ms"], 30_000);
     }
 
     #[test]
@@ -387,10 +467,14 @@ mod tests {
         assert_eq!(agent.state.turn, TurnState::Idle);
         assert_eq!(agent.display_status, DisplayStatus::Idle);
         assert_eq!(agent.history_sessions.len(), 2);
-        assert!(agent
-            .history_sessions
-            .iter()
-            .all(|session| session.display_status == DisplayStatus::Idle));
+        assert_eq!(
+            agent
+                .history_sessions
+                .iter()
+                .map(|session| session.display_status)
+                .collect::<Vec<_>>(),
+            vec![DisplayStatus::Working, DisplayStatus::Waiting]
+        );
         assert_eq!(agent.freshness.observed_at_ms, 23_000);
         assert_eq!(
             agent.diagnostic.as_ref().unwrap().freshness.observed_at_ms,
@@ -527,10 +611,13 @@ mod tests {
                 name: "s".into(),
                 cwd: Some(r"D:\work\active".into()),
                 log_path: None,
+                records: Vec::new(),
                 recent_output: Vec::new(),
                 current_file: None,
                 log_status: None,
                 alert: None,
+                lifecycle: SessionLifecycle::Active,
+                last_active_at_ms: 6_000,
                 display_status: DisplayStatus::Idle,
             },
             events: report.events,

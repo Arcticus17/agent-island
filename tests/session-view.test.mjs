@@ -212,6 +212,37 @@ test("historical rows do not borrow current agent output or paths", () => {
   assert.equal(row.file, null);
 });
 
+test("overview renders the serialized history session's own record projection and metadata", () => {
+  const [row] = overviewRows([{
+    id: "codex",
+    name: "Codex CLI",
+    display_status: "working",
+    active_session: null,
+    history_sessions: [{
+      id: "old",
+      name: "Old session",
+      recent_output: ["old prompt", "old result"],
+      records: [
+        { event_id: "one", at_ms: 10, role: "user", text: "old prompt" },
+        { event_id: "two", at_ms: 20, role: "assistant", text: "old result" },
+      ],
+      cwd: "D:\\old",
+      log_path: "D:\\logs\\old.jsonl",
+      current_file: "D:\\old\\main.rs",
+      log_status: "done",
+      display_status: "done",
+      lifecycle: "Historical",
+      last_active_at_ms: 20,
+    }],
+  }]);
+
+  assert.equal(row.status, "done");
+  assert.equal(row.output, "old prompt\nold result");
+  assert.equal(row.cwd, "D:\\old");
+  assert.equal(row.file, "D:\\old\\main.rs");
+  assert.deepEqual(row.session.records.map((record) => record.text), ["old prompt", "old result"]);
+});
+
 test("stable session keys isolate duplicate names and session ids", () => {
   const session = { id: "current" };
   const first = { id: "claude", name: "Assistant" };
