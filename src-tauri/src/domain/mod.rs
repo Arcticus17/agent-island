@@ -84,4 +84,10 @@ mod error_contract_tests {
         assert!(!freshness_for_adapter("hermes", 20_000, 50_001).stale);
         assert!(freshness_for_adapter("hermes", 20_000, 140_001).stale);
     }
+
+    #[test]
+    fn adapter_freshness_allows_small_clock_skew_but_rejects_distant_future_events() {
+        assert!(!freshness_for_adapter("codex", 25_000, 20_000).stale);
+        assert!(freshness_for_adapter("codex", 25_001, 20_000).stale);
+    }
 }

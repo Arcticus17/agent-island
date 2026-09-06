@@ -1707,7 +1707,7 @@ fn scan_session_directory(
             scan.acquisition = AcquisitionCompleteness::Incomplete;
         }
     }
-    let active_id = indexed_active_session(&scan, process);
+    let active_id = indexed_active_session(&scan, process, epoch_millis());
     let active = scan
         .candidates
         .iter()
@@ -1726,7 +1726,7 @@ fn scan_session_directory(
         load_session_detail(&mut scan, agent_id, Path::new(&path));
     }
     if scan.acquisition == AcquisitionCompleteness::Complete
-        && indexed_active_session(&scan, process) != active_id
+        && indexed_active_session(&scan, process, epoch_millis()) != active_id
     {
         // A changed selection would mix indexed and detailed evidence and could expose an
         // identity-only active row. Preserve the detail as history and gate this acquisition.
@@ -1738,6 +1738,7 @@ fn scan_session_directory(
 fn indexed_active_session(
     scan: &SessionScan,
     process: Option<&domain::ProcessIdentity>,
+    now_ms: u64,
 ) -> Option<String> {
     if scan.acquisition == AcquisitionCompleteness::Incomplete {
         return None;
@@ -1748,7 +1749,7 @@ fn indexed_active_session(
         .map(|candidate| candidate.identity.clone())
         .collect::<Vec<_>>();
     process.and_then(|process| {
-        match application::session_registry::match_active_session(process, &identities) {
+        match application::session_registry::match_active_session(process, &identities, now_ms) {
             application::session_registry::SessionMatch::Confirmed(id)
             | application::session_registry::SessionMatch::Probable(id) => Some(id),
             _ => None,
@@ -1879,6 +1880,7 @@ fn opencode_session_scan() -> SessionScan {
     session_scan_from_file("opencode", &path).unwrap_or_default()
 }
 
+#[cfg(test)]
 fn combine_session_scans(scans: impl Iterator<Item = SessionScan>) -> SessionScan {
     let mut combined = SessionScan::default();
     for mut scan in scans {

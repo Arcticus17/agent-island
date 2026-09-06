@@ -1,4 +1,4 @@
-use crate::domain::{ProcessIdentity, SessionIdentity};
+use crate::domain::{ProcessIdentity, SessionIdentity, EVENT_CLOCK_SKEW_TOLERANCE_MS};
 
 const PROCESS_START_GRACE_MS: u64 = 5_000;
 
@@ -28,13 +28,17 @@ impl SessionEvidence {
 pub fn match_active_session(
     process: &ProcessIdentity,
     candidates: &[SessionIdentity],
+    now_ms: u64,
 ) -> SessionMatch {
     let earliest_event_at_ms = process.started_at_ms.saturating_sub(PROCESS_START_GRACE_MS);
+    let latest_event_at_ms = now_ms.saturating_add(EVENT_CLOCK_SKEW_TOLERANCE_MS);
     let process_path = present_project_path(process.project_path.as_deref());
     let mut identities: Vec<SessionEvidence> = Vec::new();
 
     for candidate in candidates.iter().filter(|candidate| {
-        candidate.agent_id == process.agent_id && candidate.last_event_at_ms >= earliest_event_at_ms
+        candidate.agent_id == process.agent_id
+            && candidate.last_event_at_ms >= earliest_event_at_ms
+            && candidate.last_event_at_ms <= latest_event_at_ms
     }) {
         let candidate_path = present_project_path(candidate.project_path.as_deref());
         let (has_matching_project, has_nonmatching_project) = match (process_path, candidate_path) {
@@ -144,7 +148,7 @@ fn shares_process_id(process: &ProcessIdentity, candidate_process_ids: &[u32]) -
 
 #[cfg(test)]
 mod tests {
-    use super::{match_active_session, SessionMatch};
+    use super::{match_active_session as match_active_session_at, SessionMatch};
     use crate::domain::{
         Confidence, EventSource, ProcessIdentity, SessionIdentity, SessionLifecycle,
     };
@@ -180,6 +184,34 @@ mod tests {
             confidence: Confidence::Unknown,
             lifecycle: SessionLifecycle::Historical,
         }
+    }
+
+    fn match_active_session(
+        process: &ProcessIdentity,
+        candidates: &[SessionIdentity],
+    ) -> SessionMatch {
+        match_active_session_at(process, candidates, 30_000)
+    }
+
+    fn match_at(
+        process: &ProcessIdentity,
+        candidates: &[SessionIdentity],
+        now_ms: u64,
+    ) -> SessionMatch {
+        match_active_session_at(process, candidates, now_ms)
+    }
+
+    #[test]
+    fn rejects_candidate_events_beyond_the_clock_skew_allowance() {
+        let process = process(Some(r"D:\work\app"), vec![10], 20_000);
+        let tolerated = session("codex", "tolerated", Some(r"D:\work\app"), vec![], 35_000);
+        let future = session("codex", "future", Some(r"D:\work\app"), vec![], 35_001);
+
+        assert_eq!(
+            match_at(&process, &[tolerated], 30_000),
+            SessionMatch::Probable("tolerated".into())
+        );
+        assert_eq!(match_at(&process, &[future], 30_000), SessionMatch::Unknown);
     }
 
     #[test]

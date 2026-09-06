@@ -176,7 +176,7 @@ fn build_agent_view(
         .collect();
     let session_match =
         if process.process_state == ProcessState::Running && acquisition_issue.is_none() {
-            match_active_session(&process.identity, &identities)
+            match_active_session(&process.identity, &identities, now_ms)
         } else {
             SessionMatch::Unknown
         };
@@ -737,6 +737,12 @@ mod tests {
             process_state: ProcessState::Running,
             activity: ProcessActivity::Unknown,
         };
+        let last_event_at_ms = report
+            .events
+            .iter()
+            .map(|event| event.at_ms)
+            .max()
+            .expect("fixture must include events");
         let candidate = SessionCandidate {
             identity: SessionIdentity {
                 agent_id: "codex".into(),
@@ -744,7 +750,7 @@ mod tests {
                 project_path: Some(r"D:\work\active".into()),
                 process_ids: vec![42],
                 started_at_ms: 0,
-                last_event_at_ms: 6_000,
+                last_event_at_ms,
                 source: EventSource::CodexLog,
                 confidence: Confidence::Confirmed,
                 lifecycle: SessionLifecycle::Active,
@@ -760,13 +766,13 @@ mod tests {
                 log_status: None,
                 alert: None,
                 lifecycle: SessionLifecycle::Active,
-                last_active_at_ms: 6_000,
+                last_active_at_ms: last_event_at_ms,
                 display_status: DisplayStatus::Idle,
             },
             events: report.events,
         };
 
-        let snapshot = build_snapshot(7_000, &[process], &[candidate]);
+        let snapshot = build_snapshot(last_event_at_ms + 1_000, &[process], &[candidate]);
 
         assert_eq!(snapshot.agents[0].state.turn, TurnState::Succeeded);
         assert_eq!(snapshot.agents[0].state.attention, AttentionState::None);

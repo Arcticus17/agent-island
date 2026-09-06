@@ -1,5 +1,6 @@
 const owns = (value, key) => Object.prototype.hasOwnProperty.call(value ?? {}, key);
 const RETAINED_SNAPSHOT_MAX_AGE_MS = 6_000;
+const EVENT_CLOCK_SKEW_TOLERANCE_MS = 5_000;
 
 export function agentKey(agent, index = 0) {
   const id = String(agent?.id ?? "").trim();
@@ -23,7 +24,15 @@ export function isSnapshotFresh(
   if (!freshness) return true;
   if (freshness.stale === true) return false;
   const observedAt = Number(freshness.observed_at_ms);
-  return Number.isFinite(observedAt) && now - observedAt <= maxAgeMs;
+  if (!Number.isFinite(observedAt) || observedAt > now + EVENT_CLOCK_SKEW_TOLERANCE_MS) {
+    return false;
+  }
+  const snapshotReceivedAt = owns(agent, "snapshot_received_at_ms")
+    ? Number(agent.snapshot_received_at_ms)
+    : observedAt;
+  return Number.isFinite(snapshotReceivedAt)
+    && snapshotReceivedAt <= now + EVENT_CLOCK_SKEW_TOLERANCE_MS
+    && now - snapshotReceivedAt <= maxAgeMs;
 }
 
 export function markRetainedAgentsStale(agents) {

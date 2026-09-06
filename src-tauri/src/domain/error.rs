@@ -48,6 +48,9 @@ pub struct Freshness {
     pub stale: bool,
 }
 
+/// Maximum accepted lead for timestamps emitted by another process or filesystem clock.
+pub const EVENT_CLOCK_SKEW_TOLERANCE_MS: u64 = 5_000;
+
 pub fn adapter_freshness_window_ms(adapter: &str) -> u64 {
     match adapter {
         "hermes" => 120_000,
@@ -57,9 +60,12 @@ pub fn adapter_freshness_window_ms(adapter: &str) -> u64 {
 }
 
 pub fn freshness_for_adapter(adapter: &str, observed_at_ms: u64, now_ms: u64) -> Freshness {
+    let too_far_in_future = observed_at_ms > now_ms.saturating_add(EVENT_CLOCK_SKEW_TOLERANCE_MS);
+    let too_old =
+        observed_at_ms <= now_ms && now_ms - observed_at_ms > adapter_freshness_window_ms(adapter);
     Freshness {
         observed_at_ms,
-        stale: now_ms.saturating_sub(observed_at_ms) > adapter_freshness_window_ms(adapter),
+        stale: too_far_in_future || too_old,
     }
 }
 

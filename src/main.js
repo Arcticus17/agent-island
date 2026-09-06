@@ -1387,7 +1387,12 @@ function simulateDemoEvents() {
 async function poll() {
   const previousKey = agents[cur] ? agentKey(agents[cur], cur) : null;
   try {
-    agents = inTauri ? await invoke("get_agents") : demoAgents;
+    const polledAgents = inTauri ? await invoke("get_agents") : demoAgents;
+    const receivedAt = Date.now();
+    agents = polledAgents.map((agent) => ({
+      ...agent,
+      snapshot_received_at_ms: receivedAt,
+    }));
   } catch (_) {
     agents = markRetainedAgentsStale(agents);
   }

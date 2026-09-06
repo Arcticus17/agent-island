@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::EVENT_CLOCK_SKEW_TOLERANCE_MS;
+
 pub const DONE_HIGHLIGHT_MS: u64 = 8_000;
 pub const ERROR_HIGHLIGHT_MS: u64 = 15_000;
 
@@ -76,17 +78,25 @@ pub fn derive_display_status(state: &AgentState, now_ms: u64) -> DisplayStatus {
     match state.turn {
         TurnState::Executing => DisplayStatus::Working,
         TurnState::Succeeded
-            if now_ms.saturating_sub(state.result_at_ms.unwrap_or(0)) <= DONE_HIGHLIGHT_MS =>
+            if result_is_current(state.result_at_ms, now_ms, DONE_HIGHLIGHT_MS) =>
         {
             DisplayStatus::Done
         }
-        TurnState::Failed
-            if now_ms.saturating_sub(state.result_at_ms.unwrap_or(0)) <= ERROR_HIGHLIGHT_MS =>
-        {
+        TurnState::Failed if result_is_current(state.result_at_ms, now_ms, ERROR_HIGHLIGHT_MS) => {
             DisplayStatus::Error
         }
         _ => DisplayStatus::Idle,
     }
+}
+
+fn result_is_current(result_at_ms: Option<u64>, now_ms: u64, highlight_ms: u64) -> bool {
+    let Some(result_at_ms) = result_at_ms else {
+        return false;
+    };
+    if result_at_ms > now_ms {
+        return result_at_ms - now_ms <= EVENT_CLOCK_SKEW_TOLERANCE_MS;
+    }
+    now_ms - result_at_ms <= highlight_ms
 }
 
 #[cfg(test)]
@@ -118,5 +128,17 @@ mod tests {
         assert_eq!(derive_display_status(&done, 9_001), DisplayStatus::Idle);
         assert_eq!(derive_display_status(&error, 15_999), DisplayStatus::Error);
         assert_eq!(derive_display_status(&error, 16_001), DisplayStatus::Idle);
+    }
+
+    #[test]
+    fn result_highlights_allow_small_clock_skew_but_reject_distant_future_events() {
+        let tolerated = AgentState::result(TurnState::Succeeded, 7_000);
+        let future = AgentState::result(TurnState::Failed, 7_001);
+
+        assert_eq!(
+            derive_display_status(&tolerated, 2_000),
+            DisplayStatus::Done
+        );
+        assert_eq!(derive_display_status(&future, 2_000), DisplayStatus::Idle);
     }
 }

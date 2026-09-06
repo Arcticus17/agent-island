@@ -92,12 +92,43 @@ test("present malformed freshness is ineligible while no freshness preserves leg
   );
 });
 
+test("snapshot transport age is independent from an unchanged event timestamp", () => {
+  const quietButPolled = {
+    snapshot_received_at_ms: 10_000,
+    freshness: { observed_at_ms: 1_000, stale: false },
+  };
+
+  assert.equal(isSnapshotFresh(quietButPolled, 10_001), true);
+});
+
+test("event timestamps beyond the clock-skew allowance are never fresh", () => {
+  assert.equal(
+    isSnapshotFresh({ freshness: { observed_at_ms: 15_001, stale: false } }, 10_000),
+    false,
+  );
+});
+
+test("a current successful poll can route a hook for a quiet active session", () => {
+  const quietClaude = {
+    id: "claude",
+    active_session: { id: "current" },
+    snapshot_received_at_ms: 8_000,
+    freshness: { observed_at_ms: 1_000, stale: false },
+  };
+
+  assert.deepEqual(
+    hookNotificationTarget([quietClaude], "current", 8_001),
+    { agent: quietClaude, agentIndex: 0, session: quietClaude.active_session },
+  );
+});
+
 test("hook event production route uses the resolved active-session target", async () => {
   const source = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
 
   assert.match(source, /hookNotificationTarget,/);
   assert.match(source, /const target = hookNotificationTarget\(agents, ev\.session, Date\.now\(\)\);/);
   assert.match(source, /pushNotify\(target\.agent, "waiting", target\.session, target\.agentIndex\);/);
+  assert.match(source, /snapshot_received_at_ms:\s*receivedAt/);
 });
 
 test("error focus ignores stale errors", () => {
