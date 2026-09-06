@@ -14,7 +14,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use sysinfo::{ProcessesToUpdate, System};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
@@ -85,6 +85,45 @@ struct SessionScan {
     legacy_sessions: Vec<AgentSession>,
     candidates: Vec<interface::snapshot::SessionCandidate>,
     diagnostics: Vec<interface::diagnostics::DiagnosticRecord>,
+    acquisition: AcquisitionCompleteness,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum AcquisitionCompleteness {
+    #[default]
+    Complete,
+    Incomplete,
+}
+
+impl SessionScan {
+    fn record_issue(&mut self, adapter: &str, issue: domain::DataIssue) {
+        self.acquisition = AcquisitionCompleteness::Incomplete;
+        self.diagnostics
+            .push(interface::diagnostics::DiagnosticRecord {
+                view: interface::diagnostics::DiagnosticView::new(
+                    adapter,
+                    issue,
+                    domain::Freshness {
+                        observed_at_ms: epoch_millis(),
+                        stale: true,
+                    },
+                    None,
+                    0,
+                    0,
+                ),
+                session_id: None,
+                project_path: None,
+                message_length: 0,
+            });
+    }
+}
+
+fn io_issue(error: &std::io::Error) -> domain::DataIssue {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        domain::DataIssue::PermissionDenied
+    } else {
+        domain::DataIssue::LogUnavailable
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -396,7 +435,7 @@ fn scan_agents(
     interface::diagnostics::DiagnosticSnapshot,
     bool,
 ) {
-    sys.refresh_processes(ProcessesToUpdate::All, true);
+    refresh_agent_processes(sys);
     let now = Instant::now();
     let delta = now.duration_since(session.last_poll).as_secs();
     session.last_poll = now;
@@ -404,6 +443,7 @@ fn scan_agents(
     let mut process_facts = Vec::new();
     let mut session_candidates = Vec::new();
     let mut diagnostic_records = Vec::new();
+    let mut acquisition_issues = Vec::new();
     let mut stats_changed = false;
 
     for def in agent_defs() {
@@ -426,9 +466,30 @@ fn scan_agents(
             .collect();
         let process_fact = process_fact_from_observations(agent_id, agent_name, &observations);
         let process_cwd = process_fact.identity.project_path.clone();
+        let mut session_scan =
+            build_session_scan_for_process(agent_name, Some(&process_fact.identity));
         process_facts.push(process_fact);
-
-        let mut session_scan = build_session_scan(agent_name);
+        if session_scan.acquisition == AcquisitionCompleteness::Incomplete {
+            acquisition_issues.push(
+                session_scan
+                    .diagnostics
+                    .first()
+                    .map(|record| record.view.clone())
+                    .unwrap_or_else(|| {
+                        interface::diagnostics::DiagnosticView::new(
+                            agent_id,
+                            domain::DataIssue::AcquisitionIncomplete,
+                            domain::Freshness {
+                                observed_at_ms: epoch_millis(),
+                                stale: true,
+                            },
+                            None,
+                            0,
+                            0,
+                        )
+                    }),
+            );
+        }
         let session_list = std::mem::take(&mut session_scan.legacy_sessions);
         session_candidates.append(&mut session_scan.candidates);
         diagnostic_records.append(&mut session_scan.diagnostics);
@@ -601,8 +662,12 @@ fn scan_agents(
         });
     }
     let generated_at_ms = epoch_millis();
-    let snapshot =
-        interface::snapshot::build_snapshot(generated_at_ms, &process_facts, &session_candidates);
+    let snapshot = interface::snapshot::build_snapshot_with_acquisition(
+        generated_at_ms,
+        &process_facts,
+        &session_candidates,
+        &acquisition_issues,
+    );
     for agent in &snapshot.agents {
         if let Some(view) = &agent.diagnostic {
             diagnostic_records.push(interface::diagnostics::DiagnosticRecord {
@@ -622,6 +687,19 @@ fn scan_agents(
     };
     apply_snapshot_projection(&mut agents, &snapshot);
     (agents, snapshot, diagnostics, stats_changed)
+}
+
+fn refresh_agent_processes(sys: &mut System) {
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, agent_process_refresh_kind());
+}
+
+fn agent_process_refresh_kind() -> ProcessRefreshKind {
+    ProcessRefreshKind::nothing()
+        .with_cmd(UpdateKind::Always)
+        .with_cwd(UpdateKind::Always)
+        .with_exe(UpdateKind::Always)
+        .with_cpu()
+        .with_memory()
 }
 
 fn legacy_status(display_status: domain::DisplayStatus) -> &'static str {
@@ -1188,9 +1266,23 @@ fn to_session_with_id(snap: LogSnapshot, id: String) -> AgentSession {
 }
 
 fn session_scan_from_file(agent_id: &str, path: &Path) -> Option<SessionScan> {
-    let text = read_bounded_head_tail(path, 64 * 1024, 512 * 1024);
+    session_scan_from_file_with_budget(agent_id, path, 64 * 1024, 512 * 1024)
+}
+
+fn session_scan_from_file_with_budget(
+    agent_id: &str,
+    path: &Path,
+    head: u64,
+    tail: u64,
+) -> Option<SessionScan> {
+    let acquired = read_bounded_head_tail(path, head, tail);
+    let mut scan = SessionScan::default();
+    for issue in acquired.issues {
+        scan.record_issue(agent_id, issue);
+    }
+    let text = acquired.text;
     if text.is_empty() {
-        return None;
+        return Some(scan);
     }
     let (report, metadata_id, metadata_cwd) = match agent_id {
         "codex" => {
@@ -1247,8 +1339,12 @@ fn session_scan_from_file(agent_id: &str, path: &Path) -> Option<SessionScan> {
     let records = chronological_records(report.messages);
     let snapshot = snapshot_from_bounded_text(path, &text, metadata_cwd, &records);
     let legacy = to_session_with_id(snapshot, canonical_id.clone());
-    let candidate = session_candidate_from_legacy(agent_id, &legacy, events, records);
-    let diagnostics = issue
+    let candidate =
+        session_candidate_from_legacy(agent_id, &legacy, events, records, acquired.modified_at_ms);
+    if issue.is_some() {
+        scan.acquisition = AcquisitionCompleteness::Incomplete;
+    }
+    let diagnostics: Vec<_> = issue
         .map(|issue| interface::diagnostics::DiagnosticRecord {
             view: interface::diagnostics::DiagnosticView::new(
                 agent_id,
@@ -1268,11 +1364,10 @@ fn session_scan_from_file(agent_id: &str, path: &Path) -> Option<SessionScan> {
         })
         .into_iter()
         .collect();
-    Some(SessionScan {
-        legacy_sessions: vec![legacy],
-        candidates: vec![candidate],
-        diagnostics,
-    })
+    scan.legacy_sessions.push(legacy);
+    scan.candidates.push(candidate);
+    scan.diagnostics.extend(diagnostics);
+    Some(scan)
 }
 
 const MAX_DISPLAY_RECORDS: usize = 24;
@@ -1365,19 +1460,12 @@ fn session_candidate_from_legacy(
     session: &AgentSession,
     events: Vec<domain::DomainEvent>,
     records: Vec<domain::ConversationMessage>,
+    file_time_ms: u64,
 ) -> interface::snapshot::SessionCandidate {
     let session_events: Vec<&domain::DomainEvent> = events
         .iter()
         .filter(|event| event.session_id == session.id)
         .collect();
-    let file_time_ms = session
-        .log_path
-        .as_deref()
-        .and_then(|path| fs::metadata(path).ok())
-        .and_then(|metadata| metadata.modified().ok())
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0);
     let last_event_at_ms = session_events
         .iter()
         .map(|event| event.at_ms)
@@ -1427,26 +1515,185 @@ fn session_candidate_from_legacy(
     }
 }
 
-fn claude_session_scan() -> SessionScan {
-    let Some(root) = home_dir().map(|h| h.join(".claude").join("projects")) else {
-        return SessionScan::default();
-    };
-    combine_session_scans(
-        list_newest_files(&root, 4, "jsonl", 3)
-            .into_iter()
-            .filter_map(|path| session_scan_from_file("claude", &path)),
-    )
+fn scan_session_directory(
+    agent_id: &str,
+    root: &Path,
+    process: Option<&domain::ProcessIdentity>,
+) -> SessionScan {
+    let mut scan = SessionScan::default();
+    let mut files = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) => {
+                scan.record_issue(agent_id, io_issue(&error));
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    scan.record_issue(agent_id, io_issue(&error));
+                    continue;
+                }
+            };
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    scan.record_issue(agent_id, io_issue(&error));
+                    continue;
+                }
+            };
+            if metadata.is_symlink() {
+                scan.record_issue(agent_id, domain::DataIssue::AcquisitionIncomplete);
+            } else if metadata.is_dir() {
+                pending.push(entry.path());
+            } else if entry.path().extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+                match metadata.modified() {
+                    Ok(modified) => files.push((modified, entry.path())),
+                    Err(error) => scan.record_issue(agent_id, io_issue(&error)),
+                }
+            }
+        }
+    }
+    files.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    // Every file contributes identity evidence. Only selected files get expensive display parsing.
+    for (_, path) in &files {
+        let mut identity_scan = index_session_file(agent_id, path);
+        scan.candidates.append(&mut identity_scan.candidates);
+        scan.diagnostics.append(&mut identity_scan.diagnostics);
+        if identity_scan.acquisition == AcquisitionCompleteness::Incomplete {
+            scan.acquisition = AcquisitionCompleteness::Incomplete;
+        }
+    }
+    for (_, path) in files.iter().take(3) {
+        load_session_detail(&mut scan, agent_id, path);
+    }
+    let identities = scan
+        .candidates
+        .iter()
+        .map(|candidate| candidate.identity.clone())
+        .collect::<Vec<_>>();
+    let active_id = process.and_then(|process| {
+        match application::session_registry::match_active_session(process, &identities) {
+            application::session_registry::SessionMatch::Confirmed(id)
+            | application::session_registry::SessionMatch::Probable(id) => Some(id),
+            _ => None,
+        }
+    });
+    let active_path = active_id
+        .and_then(|id| {
+            scan.candidates
+                .iter()
+                .find(|candidate| candidate.identity.session_id == id)
+        })
+        .and_then(|candidate| candidate.view.log_path.clone());
+    if let Some(path) = active_path.filter(|path| {
+        !files
+            .iter()
+            .take(3)
+            .any(|(_, loaded)| loaded.to_string_lossy().as_ref() == path)
+    }) {
+        load_session_detail(&mut scan, agent_id, Path::new(&path));
+    }
+    scan
 }
 
-fn codex_session_scan() -> SessionScan {
-    let Some(root) = home_dir().map(|h| h.join(".codex").join("sessions")) else {
-        return SessionScan::default();
+fn load_session_detail(scan: &mut SessionScan, agent_id: &str, path: &Path) {
+    if let Some(mut detail) = session_scan_from_file(agent_id, path) {
+        if detail.acquisition == AcquisitionCompleteness::Incomplete {
+            scan.acquisition = AcquisitionCompleteness::Incomplete;
+        }
+        scan.diagnostics.append(&mut detail.diagnostics);
+        for candidate in detail.candidates {
+            if let Some(existing) = scan
+                .candidates
+                .iter_mut()
+                .find(|existing| existing.view.log_path == candidate.view.log_path)
+            {
+                // A file replaced between the index and detail read cannot certify ownership.
+                if existing.identity.session_id != candidate.identity.session_id
+                    || existing.identity.project_path != candidate.identity.project_path
+                {
+                    scan.acquisition = AcquisitionCompleteness::Incomplete;
+                }
+                *existing = candidate;
+            }
+        }
+        scan.legacy_sessions.append(&mut detail.legacy_sessions);
+    }
+}
+
+fn index_session_file(agent_id: &str, path: &Path) -> SessionScan {
+    let mut scan = SessionScan::default();
+    let mut acquired = AcquiredText::default();
+    let result = (|| -> std::io::Result<()> {
+        let mut file = File::open(path)?;
+        let metadata = file.metadata()?;
+        acquired.modified_at_ms = metadata
+            .modified()?
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        let mut head = Vec::new();
+        (&mut file).take(16 * 1024).read_to_end(&mut head)?;
+        if metadata.len() > head.len() as u64 {
+            head.truncate(
+                head.iter()
+                    .rposition(|byte| *byte == b'\n')
+                    .map(|index| index + 1)
+                    .unwrap_or(0),
+            );
+        }
+        acquired.text = String::from_utf8_lossy(&head).into_owned();
+        Ok(())
+    })();
+    if let Err(error) = result {
+        scan.record_issue(agent_id, io_issue(&error));
+        return scan;
+    }
+    let (id, cwd) = if agent_id == "codex" {
+        codex_metadata(&acquired.text)
+    } else {
+        acquired
+            .text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find_map(|value| {
+                let id = value
+                    .get("sessionId")
+                    .or_else(|| value.get("session_id"))?
+                    .as_str()?
+                    .to_owned();
+                let cwd = value.get("cwd").and_then(Value::as_str).map(str::to_owned);
+                Some((Some(id), cwd))
+            })
+            .unwrap_or_default()
     };
-    combine_session_scans(
-        list_newest_files(&root, 5, "jsonl", 3)
-            .into_iter()
-            .filter_map(|path| session_scan_from_file("codex", &path)),
-    )
+    if id.is_none() || cwd.is_none() {
+        scan.record_issue(agent_id, domain::DataIssue::AcquisitionIncomplete);
+    }
+    let id = id.unwrap_or_else(|| path.to_string_lossy().into_owned());
+    let legacy = AgentSession {
+        id: id.clone(),
+        name: session_name(cwd.as_deref(), &id),
+        cwd,
+        log_path: Some(path.to_string_lossy().into_owned()),
+        recent_output: Vec::new(),
+        current_file: None,
+        log_status: None,
+        alert: None,
+    };
+    scan.candidates.push(session_candidate_from_legacy(
+        agent_id,
+        &legacy,
+        Vec::new(),
+        Vec::new(),
+        acquired.modified_at_ms,
+    ));
+    scan
 }
 
 fn opencode_session_scan() -> SessionScan {
@@ -1465,6 +1712,9 @@ fn opencode_session_scan() -> SessionScan {
 fn combine_session_scans(scans: impl Iterator<Item = SessionScan>) -> SessionScan {
     let mut combined = SessionScan::default();
     for mut scan in scans {
+        if scan.acquisition == AcquisitionCompleteness::Incomplete {
+            combined.acquisition = AcquisitionCompleteness::Incomplete;
+        }
         combined.legacy_sessions.append(&mut scan.legacy_sessions);
         combined.candidates.append(&mut scan.candidates);
         combined.diagnostics.append(&mut scan.diagnostics);
@@ -1474,46 +1724,58 @@ fn combine_session_scans(scans: impl Iterator<Item = SessionScan>) -> SessionSca
 
 static HERMES_CACHE: OnceLock<Mutex<Option<(Instant, SessionScan)>>> = OnceLock::new();
 
-fn run_command_timeout(command: &mut std::process::Command, secs: u64) -> Option<(bool, String)> {
-    use std::sync::mpsc;
+fn run_command_timeout(
+    command: &mut std::process::Command,
+    secs: u64,
+) -> Result<(bool, String), domain::DataIssue> {
+    static COMMAND_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let token = format!(
-        "agent-island-{}-{}",
+        "agent-island-{}-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
-            .unwrap_or(0)
+            .unwrap_or(0),
+        COMMAND_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     );
     let out_path = std::env::temp_dir().join(format!("{token}.out"));
     let err_path = std::env::temp_dir().join(format!("{token}.err"));
-    let out_file = File::create(&out_path).ok()?;
-    let err_file = File::create(&err_path).ok()?;
-    let child = command
-        .stdout(Stdio::from(out_file))
-        .stderr(Stdio::from(err_file))
-        .spawn()
-        .ok()?;
-    let shared = Arc::new(Mutex::new(Some(child)));
-    let worker = shared.clone();
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let child = worker.lock().unwrap().take();
-        let status = child.map(|mut c| c.wait()).transpose();
-        let _ = tx.send(status);
-    });
-    let result = match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
-        Ok(Ok(Some(status))) => Some(status.success()),
-        _ => {
-            if let Some(mut child) = shared.lock().unwrap().take() {
-                let _ = child.kill();
+    let result = (|| {
+        let out_file = File::create(&out_path).map_err(|error| io_issue(&error))?;
+        let err_file = File::create(&err_path).map_err(|error| io_issue(&error))?;
+        let mut child = command
+            .stdout(Stdio::from(out_file))
+            .stderr(Stdio::from(err_file))
+            .spawn()
+            .map_err(|error| io_issue(&error))?;
+        let started = Instant::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if started.elapsed().as_secs() < secs => {
+                    std::thread::sleep(std::time::Duration::from_millis(10))
+                }
+                outcome => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(outcome
+                        .err()
+                        .map(|error| io_issue(&error))
+                        .unwrap_or(domain::DataIssue::LogUnavailable));
+                }
             }
-            None
+        };
+        let acquired = read_bounded_head_tail(&out_path, 512 * 1024, 512 * 1024);
+        if let Some(issue) = acquired.issues.into_iter().next() {
+            return Err(issue);
         }
-    };
-    let text = fs::read_to_string(&out_path).unwrap_or_default();
+        Ok((status.success(), acquired.text))
+    })();
+    // Release redirection handles even when spawning fails before removing temporary files.
+    command.stdout(Stdio::null()).stderr(Stdio::null());
     let _ = fs::remove_file(&out_path);
     let _ = fs::remove_file(&err_path);
-    result.map(|success| (success, text))
+    result
 }
 
 fn hermes_session_scan_from_text(text: &str) -> SessionScan {
@@ -1524,6 +1786,9 @@ fn hermes_session_scan_from_text(text: &str) -> SessionScan {
         report.skipped_lines,
     );
     let mut scan = SessionScan::default();
+    if issue.is_some() {
+        scan.acquisition = AcquisitionCompleteness::Incomplete;
+    }
     for identity in report.sessions {
         let name = session_name(identity.project_path.as_deref(), &identity.session_id);
         let lifecycle = identity.lifecycle;
@@ -1580,11 +1845,22 @@ fn hermes_session_scan_from_text(text: &str) -> SessionScan {
 fn parse_hermes_session_scan() -> SessionScan {
     let mut command = quiet_command("hermes");
     command.args(["sessions", "list"]);
-    let Some((success, text)) = run_command_timeout(&mut command, 8) else {
-        return SessionScan::default();
+    hermes_scan_from_command(&mut command, 8)
+}
+
+fn hermes_scan_from_command(command: &mut std::process::Command, timeout_secs: u64) -> SessionScan {
+    let (success, text) = match run_command_timeout(command, timeout_secs) {
+        Ok(output) => output,
+        Err(issue) => {
+            let mut scan = SessionScan::default();
+            scan.record_issue("hermes", issue);
+            return scan;
+        }
     };
     if !success {
-        return SessionScan::default();
+        let mut scan = SessionScan::default();
+        scan.record_issue("hermes", domain::DataIssue::LogUnavailable);
+        return scan;
     }
     hermes_session_scan_from_text(&text)
 }
@@ -1606,6 +1882,13 @@ fn hermes_session_scan() -> SessionScan {
 }
 
 fn build_session_scan(name: &str) -> SessionScan {
+    build_session_scan_for_process(name, None)
+}
+
+fn build_session_scan_for_process(
+    name: &str,
+    process: Option<&domain::ProcessIdentity>,
+) -> SessionScan {
     let defs = agent_defs();
     let kind = defs
         .iter()
@@ -1613,8 +1896,20 @@ fn build_session_scan(name: &str) -> SessionScan {
         .map(|d| d.log_kind.as_str())
         .unwrap_or("");
     match kind {
-        "claude" => claude_session_scan(),
-        "codex" => codex_session_scan(),
+        "claude" | "codex" => {
+            let Some(root) = home_dir().map(|home| {
+                if kind == "claude" {
+                    home.join(".claude/projects")
+                } else {
+                    home.join(".codex/sessions")
+                }
+            }) else {
+                let mut scan = SessionScan::default();
+                scan.record_issue(kind, domain::DataIssue::LogUnavailable);
+                return scan;
+            };
+            scan_session_directory(kind, &root, process)
+        }
         "opencode" => opencode_session_scan(),
         "hermes" => hermes_session_scan(),
         _ => SessionScan::default(),
@@ -1632,46 +1927,85 @@ fn epoch_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn read_bounded_head_tail(path: &Path, head_bytes: u64, tail_bytes: u64) -> String {
-    let Ok(mut file) = File::open(path) else {
-        return String::new();
-    };
-    let Ok(metadata) = file.metadata() else {
-        return String::new();
-    };
-    let len = metadata.len();
-    if len <= head_bytes.saturating_add(tail_bytes) {
-        let mut bytes = Vec::with_capacity(len as usize);
-        return if file.read_to_end(&mut bytes).is_ok() {
-            String::from_utf8_lossy(&bytes).into_owned()
+#[derive(Default)]
+struct AcquiredText {
+    text: String,
+    modified_at_ms: u64,
+    issues: Vec<domain::DataIssue>,
+}
+
+fn read_bounded_head_tail(path: &Path, head_bytes: u64, tail_bytes: u64) -> AcquiredText {
+    let mut acquired = AcquiredText::default();
+    let result = (|| -> std::io::Result<()> {
+        let mut file = File::open(path)?;
+        let metadata = file.metadata()?;
+        acquired.modified_at_ms = metadata
+            .modified()?
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        let len = metadata.len();
+        read_bounded_stream(&mut file, len, head_bytes, tail_bytes, &mut acquired);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        acquired.issues.push(io_issue(&error));
+    }
+    acquired
+}
+
+fn read_bounded_stream(
+    reader: &mut (impl Read + Seek),
+    len: u64,
+    head_bytes: u64,
+    tail_bytes: u64,
+    acquired: &mut AcquiredText,
+) {
+    let mut bytes = Vec::new();
+    let bounded = len > head_bytes.saturating_add(tail_bytes);
+    let head_len = if bounded { head_bytes } else { len };
+    if let Err(error) = reader.take(head_len).read_to_end(&mut bytes) {
+        acquired.issues.push(io_issue(&error));
+    } else if bytes.len() as u64 != head_len {
+        acquired
+            .issues
+            .push(domain::DataIssue::AcquisitionIncomplete);
+    }
+    if bounded {
+        // A splice drops unknown state boundaries; retain detail, but do not certify it as current.
+        acquired
+            .issues
+            .push(domain::DataIssue::AcquisitionIncomplete);
+        bytes.truncate(
+            bytes
+                .iter()
+                .rposition(|byte| *byte == b'\n')
+                .map(|index| index + 1)
+                .unwrap_or(0),
+        );
+        let tail_result = reader.seek(SeekFrom::Start(len - tail_bytes));
+        if let Err(error) = tail_result {
+            acquired.issues.push(io_issue(&error));
         } else {
-            String::new()
-        };
+            let mut tail = Vec::new();
+            if let Err(error) = reader.take(tail_bytes).read_to_end(&mut tail) {
+                acquired.issues.push(io_issue(&error));
+            } else if tail.len() as u64 != tail_bytes {
+                acquired
+                    .issues
+                    .push(domain::DataIssue::AcquisitionIncomplete);
+            }
+            if let Some(first_newline) = tail.iter().position(|byte| *byte == b'\n') {
+                bytes.extend_from_slice(&tail[first_newline + 1..]);
+            }
+        }
     }
-
-    let mut head = vec![0; head_bytes as usize];
-    let head_len = file.read(&mut head).unwrap_or(0);
-    head.truncate(head_len);
-    if let Some(last_newline) = head.iter().rposition(|byte| *byte == b'\n') {
-        head.truncate(last_newline + 1);
+    if std::str::from_utf8(&bytes).is_err() {
+        acquired
+            .issues
+            .push(domain::DataIssue::AcquisitionIncomplete);
     }
-
-    if file
-        .seek(SeekFrom::Start(len.saturating_sub(tail_bytes)))
-        .is_err()
-    {
-        return String::from_utf8_lossy(&head).into_owned();
-    }
-    let mut tail = Vec::with_capacity(tail_bytes as usize);
-    if file.read_to_end(&mut tail).is_err() {
-        return String::from_utf8_lossy(&head).into_owned();
-    }
-    if let Some(first_newline) = tail.iter().position(|byte| *byte == b'\n') {
-        tail.drain(..=first_newline);
-    }
-    head.push(b'\n');
-    head.extend(tail);
-    String::from_utf8_lossy(&head).into_owned()
+    acquired.text = String::from_utf8_lossy(&bytes).into_owned();
 }
 
 fn epoch_millis() -> u64 {
@@ -3703,7 +4037,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_message_only_scan_with_malformed_neighbor_is_not_parse_failed() {
+    fn claude_message_only_scan_with_malformed_neighbor_reports_skipped_lines() {
         let path = std::env::temp_dir().join(format!(
             "agent-island-claude-message-only-{}.jsonl",
             std::process::id()
@@ -3719,12 +4053,13 @@ mod tests {
 
         let scan = session_scan_from_file("claude", &path).unwrap();
 
-        assert!(scan.diagnostics.is_empty());
+        assert_eq!(scan.diagnostics[0].view.skipped_lines, Some(1));
+        assert_eq!(scan.candidates[0].view.records[0].text, "hello");
         fs::remove_file(path).unwrap();
     }
 
     #[test]
-    fn codex_message_only_scan_with_malformed_neighbor_is_not_parse_failed() {
+    fn codex_message_only_scan_with_malformed_neighbor_reports_skipped_lines() {
         let path = std::env::temp_dir().join(format!(
             "agent-island-codex-message-only-{}.jsonl",
             std::process::id()
@@ -3741,8 +4076,214 @@ mod tests {
 
         let scan = session_scan_from_file("codex", &path).unwrap();
 
-        assert!(scan.diagnostics.is_empty());
+        assert_eq!(scan.diagnostics[0].view.skipped_lines, Some(1));
+        assert_eq!(scan.candidates[0].view.records[0].text, "hello");
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn acquisition_missing_file_is_diagnostic_not_successful_empty_scan() {
+        let path =
+            std::env::temp_dir().join(format!("agent-island-missing-{}.jsonl", epoch_millis()));
+        let scan = session_scan_from_file("codex", &path).expect("failed acquisition must survive");
+        assert_eq!(scan.diagnostics[0].view.code, "log_unavailable");
+        assert!(scan.diagnostics[0].view.freshness.stale);
+    }
+
+    #[test]
+    fn discovery_four_files_keep_same_project_conflict_before_display_limit() {
+        let root = std::env::temp_dir().join(format!("agent-island-discovery-{}", epoch_millis()));
+        fs::create_dir_all(&root).unwrap();
+        for (index, project) in ["D:/target", "D:/target", "D:/other1", "D:/other2"]
+            .iter()
+            .enumerate()
+        {
+            let path = root.join(format!("{index}.jsonl"));
+            fs::write(&path, format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"s{index}\",\"cwd\":\"{project}\"}}}}\n")).unwrap();
+            File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(10 + index as u64))
+                .unwrap();
+        }
+        let scan = scan_session_directory("codex", &root, None);
+        let process = process_fact_from_observations(
+            "codex",
+            "Codex CLI",
+            &[ProcessObservation {
+                pid: 42,
+                project_path: Some("D:/target".into()),
+                started_at_ms: 0,
+            }],
+        );
+        let snapshot = interface::snapshot::build_snapshot(20_000, &[process], &scan.candidates);
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            snapshot.agents[0].active_session.is_none(),
+            "omitted fourth identity falsely proves ownership"
+        );
+        assert_eq!(
+            snapshot.agents[0]
+                .diagnostic
+                .as_ref()
+                .unwrap()
+                .candidate_count,
+            Some(2)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn acquisition_process_launched_after_system_has_matching_command_and_cwd() {
+        let mut system = System::new_all();
+        let root = std::env::temp_dir().join(format!("agent-island-child-{}", epoch_millis()));
+        fs::create_dir_all(&root).unwrap();
+        let mut child = quiet_command("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Start-Sleep -Seconds 20 # agent-island-refresh-probe",
+            ])
+            .current_dir(&root)
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        refresh_agent_processes(&mut system);
+        let discovered = matching_processes(&system, "agent-island-refresh-probe")
+            .into_iter()
+            .find(|process| process.pid().as_u32() == child.id());
+        let cwd = discovered
+            .and_then(|process| process.cwd())
+            .map(Path::to_path_buf);
+        let exe = discovered
+            .and_then(|process| process.exe())
+            .map(Path::to_path_buf);
+        let _ = child.kill();
+        let _ = child.wait();
+        fs::remove_dir_all(&root).unwrap();
+        assert!(
+            discovered.is_some(),
+            "new process command line missing from production refresh"
+        );
+        assert_eq!(cwd, Some(root));
+        assert!(exe.is_some());
+    }
+
+    #[test]
+    fn acquisition_incomplete_universe_rejects_even_pid_confirmed_ownership() {
+        let path =
+            std::env::temp_dir().join(format!("agent-island-incomplete-{}.jsonl", epoch_millis()));
+        fs::write(
+            &path,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"current\",\"cwd\":\"D:/target\"}}\n",
+        )
+        .unwrap();
+        let mut scan = session_scan_from_file("codex", &path).unwrap();
+        scan.candidates[0].identity.process_ids = vec![42];
+        let missing = session_scan_from_file("codex", &path.with_extension("missing")).unwrap();
+        let combined = combine_session_scans([scan, missing].into_iter());
+        let process = process_fact_from_observations(
+            "codex",
+            "Codex CLI",
+            &[ProcessObservation {
+                pid: 42,
+                project_path: Some("D:/target".into()),
+                started_at_ms: 0,
+            }],
+        );
+        let issues = combined
+            .diagnostics
+            .iter()
+            .map(|record| record.view.clone())
+            .collect::<Vec<_>>();
+        let snapshot = interface::snapshot::build_snapshot_with_acquisition(
+            epoch_millis(),
+            &[process],
+            &combined.candidates,
+            &issues,
+        );
+        fs::remove_file(path).unwrap();
+        assert!(snapshot.agents[0].active_session.is_none());
+        assert!(snapshot.agents[0].freshness.stale);
+        assert_eq!(
+            snapshot.agents[0].diagnostic.as_ref().unwrap().code,
+            "log_unavailable"
+        );
+        assert_eq!(snapshot.agents[0].history_sessions.len(), 1);
+    }
+
+    #[test]
+    fn acquisition_failed_hermes_command_is_diagnostic() {
+        let mut command = quiet_command("agent-island-nonexistent-cli-638518");
+        let scan = hermes_scan_from_command(&mut command, 1);
+        assert_eq!(scan.acquisition, AcquisitionCompleteness::Incomplete);
+        assert_eq!(scan.diagnostics[0].view.code, "log_unavailable");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn acquisition_nonzero_hermes_command_differs_from_successful_empty() {
+        let mut failed = quiet_command("cmd.exe");
+        failed.args(["/D", "/C", "exit 7"]);
+        let failed = hermes_scan_from_command(&mut failed, 2);
+        assert_eq!(failed.acquisition, AcquisitionCompleteness::Incomplete);
+        assert_eq!(failed.diagnostics[0].view.code, "log_unavailable");
+        let mut empty = quiet_command("cmd.exe");
+        empty.args(["/D", "/C", "exit 0"]);
+        let empty = hermes_scan_from_command(&mut empty, 2);
+        assert_eq!(empty.acquisition, AcquisitionCompleteness::Complete);
+        assert!(empty.diagnostics.is_empty());
+        assert!(empty.candidates.is_empty());
+    }
+
+    #[test]
+    fn acquisition_directory_failure_is_not_successful_empty_enumeration() {
+        let root = std::env::temp_dir().join(format!("agent-island-empty-{}", epoch_millis()));
+        let missing = scan_session_directory("codex", &root, None);
+        assert_eq!(missing.acquisition, AcquisitionCompleteness::Incomplete);
+        assert_eq!(missing.diagnostics[0].view.code, "log_unavailable");
+        fs::create_dir_all(&root).unwrap();
+        let empty = scan_session_directory("codex", &root, None);
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(empty.acquisition, AcquisitionCompleteness::Complete);
+        assert!(empty.diagnostics.is_empty());
+        assert!(empty.candidates.is_empty());
+    }
+
+    #[test]
+    fn discovery_oldest_matching_file_gets_detail_before_history_cap() {
+        let root = std::env::temp_dir().join(format!("agent-island-oldest-{}", epoch_millis()));
+        fs::create_dir_all(&root).unwrap();
+        for index in 0..5 {
+            let path = root.join(format!("{index}.jsonl"));
+            fs::write(&path, format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"s{index}\",\"cwd\":\"D:/project{index}\"}}}}\n{{\"timestamp\":\"2026-09-04T10:00:01Z\",\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":\"answer {index}\"}}]}}}}\n")).unwrap();
+            File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(10 + index))
+                .unwrap();
+        }
+        let process = process_fact_from_observations(
+            "codex",
+            "Codex CLI",
+            &[ProcessObservation {
+                pid: 42,
+                project_path: Some("D:/project0".into()),
+                started_at_ms: 0,
+            }],
+        );
+        let scan = scan_session_directory("codex", &root, Some(&process.identity));
+        let snapshot = interface::snapshot::build_snapshot(20_000, &[process], &scan.candidates);
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(scan.candidates.len(), 5);
+        assert_eq!(scan.legacy_sessions.len(), 4);
+        assert_eq!(
+            snapshot.agents[0].active_session.as_ref().unwrap().records[0].text,
+            "answer 0"
+        );
+        assert_eq!(snapshot.agents[0].history_sessions.len(), 3);
     }
 
     #[test]

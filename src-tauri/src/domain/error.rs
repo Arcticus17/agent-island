@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum DataIssue {
     LogUnavailable,
+    AcquisitionIncomplete,
+    PartialParse { skipped_lines: usize },
     ParseFailed { skipped_lines: usize },
     SessionAmbiguous { candidate_count: usize },
     ProcessGone,
@@ -14,6 +16,8 @@ impl DataIssue {
     pub fn code(&self) -> &'static str {
         match self {
             Self::LogUnavailable => "log_unavailable",
+            Self::AcquisitionIncomplete => "acquisition_incomplete",
+            Self::PartialParse { .. } => "partial_parse",
             Self::ParseFailed { .. } => "parse_failed",
             Self::SessionAmbiguous { .. } => "session_ambiguous",
             Self::ProcessGone => "process_gone",
@@ -23,7 +27,9 @@ impl DataIssue {
 
     pub fn skipped_lines(&self) -> Option<usize> {
         match self {
-            Self::ParseFailed { skipped_lines } => Some(*skipped_lines),
+            Self::ParseFailed { skipped_lines } | Self::PartialParse { skipped_lines } => {
+                Some(*skipped_lines)
+            }
             _ => None,
         }
     }
@@ -58,6 +64,9 @@ pub fn freshness_for_adapter(adapter: &str, observed_at_ms: u64, now_ms: u64) ->
 }
 
 pub fn parse_issue(has_valid_structured_items: bool, skipped_lines: usize) -> Option<DataIssue> {
-    (!has_valid_structured_items && skipped_lines > 0)
-        .then_some(DataIssue::ParseFailed { skipped_lines })
+    (skipped_lines > 0).then_some(if has_valid_structured_items {
+        DataIssue::PartialParse { skipped_lines }
+    } else {
+        DataIssue::ParseFailed { skipped_lines }
+    })
 }

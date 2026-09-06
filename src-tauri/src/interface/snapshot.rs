@@ -99,7 +99,7 @@ pub fn build_snapshot(
 ) -> AgentViewSnapshot {
     let agents = process_facts
         .iter()
-        .map(|process| build_agent_view(now_ms, process, session_candidates))
+        .map(|process| build_agent_view(now_ms, process, session_candidates, None))
         .collect();
 
     AgentViewSnapshot {
@@ -109,10 +109,36 @@ pub fn build_snapshot(
     }
 }
 
+pub fn build_snapshot_with_acquisition(
+    now_ms: u64,
+    process_facts: &[ProcessFact],
+    session_candidates: &[SessionCandidate],
+    acquisition_issues: &[DiagnosticView],
+) -> AgentViewSnapshot {
+    AgentViewSnapshot {
+        schema_version: 1,
+        generated_at_ms: now_ms,
+        agents: process_facts
+            .iter()
+            .map(|process| {
+                build_agent_view(
+                    now_ms,
+                    process,
+                    session_candidates,
+                    acquisition_issues
+                        .iter()
+                        .find(|issue| issue.adapter == process.identity.agent_id),
+                )
+            })
+            .collect(),
+    }
+}
+
 fn build_agent_view(
     now_ms: u64,
     process: &ProcessFact,
     session_candidates: &[SessionCandidate],
+    acquisition_issue: Option<&DiagnosticView>,
 ) -> AgentView {
     let agent_candidates: Vec<&SessionCandidate> = session_candidates
         .iter()
@@ -122,11 +148,12 @@ fn build_agent_view(
         .iter()
         .map(|candidate| candidate.identity.clone())
         .collect();
-    let session_match = if process.process_state == ProcessState::Running {
-        match_active_session(&process.identity, &identities)
-    } else {
-        SessionMatch::Unknown
-    };
+    let session_match =
+        if process.process_state == ProcessState::Running && acquisition_issue.is_none() {
+            match_active_session(&process.identity, &identities)
+        } else {
+            SessionMatch::Unknown
+        };
     let (active_session_id, diagnostic_issue) = match session_match {
         SessionMatch::Confirmed(session_id) | SessionMatch::Probable(session_id) => {
             (Some(session_id), None)
@@ -148,9 +175,13 @@ fn build_agent_view(
                 .map(|candidate| candidate.identity.last_event_at_ms)
         })
         .unwrap_or(now_ms);
-    let freshness = freshness_for_adapter(&process.identity.agent_id, observed_at_ms, now_ms);
-    let diagnostic = diagnostic_issue
-        .map(|issue| DiagnosticView::new(&process.identity.agent_id, issue, freshness, None, 0, 0));
+    let mut freshness = freshness_for_adapter(&process.identity.agent_id, observed_at_ms, now_ms);
+    freshness.stale |= acquisition_issue.is_some();
+    let diagnostic = acquisition_issue.cloned().or_else(|| {
+        diagnostic_issue.map(|issue| {
+            DiagnosticView::new(&process.identity.agent_id, issue, freshness, None, 0, 0)
+        })
+    });
     let active_session = active_session_id.as_deref().and_then(|session_id| {
         agent_candidates
             .iter()
@@ -159,11 +190,16 @@ fn build_agent_view(
                 session_view(now_ms, candidate, process.process_state, &agent_candidates)
             })
     });
-    let history_sessions = agent_candidates
+    let history_candidates = agent_candidates
         .iter()
         .filter(|candidate| {
             Some(candidate.identity.session_id.as_str()) != active_session_id.as_deref()
         })
+        .copied()
+        .collect::<Vec<_>>();
+    let history_sessions = history_candidates
+        .into_iter()
+        .take(3)
         .map(|candidate| SessionSummary::from(&history_session_view(candidate, &agent_candidates)))
         .collect();
     let state = reduce_agent_state(

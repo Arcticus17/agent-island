@@ -56,7 +56,7 @@ mod error_contract_tests {
                     || !report.sessions.is_empty(),
                 report.skipped_lines,
             ),
-            None
+            Some(DataIssue::PartialParse { skipped_lines: 1 })
         );
     }
 
