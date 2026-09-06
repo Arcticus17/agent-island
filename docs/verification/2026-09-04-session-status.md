@@ -6,9 +6,9 @@ Date: 2026-09-07 (Windows)
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `npm test` | PASS | Frontend selectors: 23 passed; Rust library: 110 passed. |
+| `npm test` | PASS | Frontend selectors: 26 passed; Rust library: 113 passed. |
 | `npm run build` | PASS | Vite production build completed successfully. |
-| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | PASS | 110 passed, 0 failed. |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | PASS | 113 passed, 0 failed. |
 | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | PASS | No formatting differences. |
 | `git diff --check` | PASS | No whitespace errors; the three reported working-tree entries are stat-only line-ending metadata with no content diff. |
 
@@ -33,6 +33,7 @@ This is startup-only evidence. No interactive GUI observation was performed duri
 | Incomplete acquisition cannot prove an active session | Production tests cover missing files/directories, partial parses, disappearing or changed indexed records, Hermes command failures, and incomplete evidence even with a matching PID. | App launch reached the executable. | Not performed. |
 | Terminal statistics do not recount recent revisits | Tests cover duplicate polls, `A -> B -> A`, save/load revisits, legacy migration, the bounded 128-entry hash window, and serialization without raw identifiers. | App launch reached the executable. | Not performed. |
 | Process activity is only a fresh nonterminal fallback | Snapshot tests cover OpenCode/Hermes busy and idle fallback, structured or stopped-state priority, the exact five-second boundary, expired samples, and future timestamps. | App launch reached the executable. | Not performed. |
+| Poll freshness and event freshness remain independent | Frontend tests keep a quiet active session eligible after a successful poll, make failed-poll retention stale, and reject event or poll timestamps beyond the five-second clock-skew allowance; Rust tests enforce the same event/session/result upper bound. | App launch reached the executable. | Not performed. |
 
 ## Scope and privacy
 
