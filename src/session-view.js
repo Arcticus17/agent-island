@@ -23,7 +23,7 @@ export function isSnapshotFresh(
   if (!freshness) return true;
   if (freshness.stale === true) return false;
   const observedAt = Number(freshness.observed_at_ms);
-  return !Number.isFinite(observedAt) || now - observedAt <= maxAgeMs;
+  return Number.isFinite(observedAt) && now - observedAt <= maxAgeMs;
 }
 
 export function markRetainedAgentsStale(agents) {
@@ -72,6 +72,22 @@ export function agentIndexesFor(agents, {
 
 export function islandSession(agent) {
   return agent?.active_session ?? null;
+}
+
+export function hookNotificationTarget(agents, hookSessionId, now = Date.now()) {
+  const claudeSessions = (agents ?? [])
+    .map((agent, agentIndex) => ({ agent, agentIndex, session: islandSession(agent) }))
+    .filter(({ agent, session }) => (
+      String(agent?.id ?? "").trim() === "claude"
+      && String(session?.id ?? "").trim()
+    ));
+  const sessionId = String(hookSessionId ?? "").trim();
+  const candidates = sessionId
+    ? claudeSessions.filter(({ session }) => String(session.id).trim() === sessionId)
+    : claudeSessions.filter(({ agent }) => isSnapshotFresh(agent, now));
+
+  if (candidates.length !== 1 || !isSnapshotFresh(candidates[0].agent, now)) return null;
+  return candidates[0];
 }
 
 export function statusFor(agent, session) {

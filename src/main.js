@@ -14,6 +14,7 @@ import {
   agentKey,
   agentIndexesFor,
   freshErrorIndex,
+  hookNotificationTarget,
   islandSession,
   markRetainedAgentsStale,
   notificationGroupKey,
@@ -1012,8 +1013,8 @@ async function initHookEvents() {
     if (ev.kind === "stop") {
       poll();
     } else if (ev.kind === "notification" && ev.message) {
-      const agent = agents.find((x) => x.name === "Claude Code");
-      if (agent) pushNotify(agent, "waiting", null, agents.indexOf(agent));
+      const target = hookNotificationTarget(agents, ev.session, Date.now());
+      if (target) pushNotify(target.agent, "waiting", target.session, target.agentIndex);
     }
   }).catch(() => {});
 }

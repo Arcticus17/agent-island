@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 
 import {
   agentKey,
   agentIndexesFor,
   freshErrorIndex,
+  hookNotificationTarget,
   islandSession,
+  isSnapshotFresh,
   markRetainedAgentsStale,
   notificationGroupKey,
   overviewRows,
@@ -14,6 +17,88 @@ import {
   snapshotTransitionDecision,
   statusFor,
 } from "../src/session-view.js";
+
+test("hook notifications resolve the stable Claude agent and its matching active session", () => {
+  const agents = [
+    {
+      id: "codex",
+      name: "Claude Code",
+      active_session: { id: "turn-7" },
+      freshness: { observed_at_ms: 1_000, stale: false },
+    },
+    {
+      id: "claude",
+      name: "Renamed assistant",
+      active_session: { id: "turn-7" },
+      freshness: { observed_at_ms: 1_000, stale: false },
+    },
+  ];
+
+  const target = hookNotificationTarget(agents, "turn-7", 1_001);
+
+  assert.deepEqual(target, {
+    agent: agents[1],
+    agentIndex: 1,
+    session: agents[1].active_session,
+  });
+  assert.equal(
+    notificationGroupKey(target.agent, target.session, target.agentIndex),
+    "claude::turn-7",
+  );
+  assert.equal(hookNotificationTarget(agents, "missing", 1_001), null);
+});
+
+test("hook notifications without a session require one fresh Claude active session", () => {
+  const freshClaude = {
+    id: "claude",
+    active_session: { id: "current" },
+    freshness: { observed_at_ms: 1_000, stale: false },
+  };
+
+  assert.deepEqual(
+    hookNotificationTarget([freshClaude], "", 1_001),
+    { agent: freshClaude, agentIndex: 0, session: freshClaude.active_session },
+  );
+  assert.equal(
+    hookNotificationTarget([
+      freshClaude,
+      {
+        id: "claude",
+        active_session: { id: "other" },
+        freshness: { observed_at_ms: 1_000, stale: false },
+      },
+    ], "", 1_001),
+    null,
+  );
+  assert.equal(
+    hookNotificationTarget([{
+      ...freshClaude,
+      freshness: { observed_at_ms: 1_000, stale: true },
+    }], "", 1_001),
+    null,
+  );
+  assert.equal(
+    hookNotificationTarget([freshClaude], "", 7_001),
+    null,
+  );
+});
+
+test("present malformed freshness is ineligible while no freshness preserves legacy compatibility", () => {
+  assert.equal(isSnapshotFresh({}, 10_000), true);
+  assert.equal(isSnapshotFresh({ freshness: { stale: false } }, 10_000), false);
+  assert.equal(
+    isSnapshotFresh({ freshness: { observed_at_ms: "not-a-timestamp", stale: false } }, 10_000),
+    false,
+  );
+});
+
+test("hook event production route uses the resolved active-session target", async () => {
+  const source = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
+
+  assert.match(source, /hookNotificationTarget,/);
+  assert.match(source, /const target = hookNotificationTarget\(agents, ev\.session, Date\.now\(\)\);/);
+  assert.match(source, /pushNotify\(target\.agent, "waiting", target\.session, target\.agentIndex\);/);
+});
 
 test("error focus ignores stale errors", () => {
   const agents = [
