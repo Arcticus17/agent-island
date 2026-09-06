@@ -177,11 +177,17 @@ fn build_agent_view(
         .unwrap_or(now_ms);
     let mut freshness = freshness_for_adapter(&process.identity.agent_id, observed_at_ms, now_ms);
     freshness.stale |= acquisition_issue.is_some();
-    let diagnostic = acquisition_issue.cloned().or_else(|| {
-        diagnostic_issue.map(|issue| {
-            DiagnosticView::new(&process.identity.agent_id, issue, freshness, None, 0, 0)
+    let diagnostic = acquisition_issue
+        .cloned()
+        .map(|mut issue| {
+            issue.freshness.stale = true;
+            issue
         })
-    });
+        .or_else(|| {
+            diagnostic_issue.map(|issue| {
+                DiagnosticView::new(&process.identity.agent_id, issue, freshness, None, 0, 0)
+            })
+        });
     let active_session = active_session_id.as_deref().and_then(|session_id| {
         agent_candidates
             .iter()

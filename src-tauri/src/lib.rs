@@ -1349,11 +1349,10 @@ fn session_scan_from_file_with_budget(
             view: interface::diagnostics::DiagnosticView::new(
                 agent_id,
                 issue,
-                domain::freshness_for_adapter(
-                    agent_id,
-                    candidate.identity.last_event_at_ms,
-                    epoch_millis(),
-                ),
+                domain::Freshness {
+                    observed_at_ms: candidate.identity.last_event_at_ms,
+                    stale: true,
+                },
                 event_type,
                 event_count,
                 message_count,
@@ -1568,37 +1567,53 @@ fn scan_session_directory(
             scan.acquisition = AcquisitionCompleteness::Incomplete;
         }
     }
-    for (_, path) in files.iter().take(3) {
-        load_session_detail(&mut scan, agent_id, path);
+    let active_id = indexed_active_session(&scan, process);
+    let active = scan
+        .candidates
+        .iter()
+        .find(|candidate| Some(candidate.identity.session_id.as_str()) == active_id.as_deref());
+    let history = scan
+        .candidates
+        .iter()
+        .filter(|candidate| Some(candidate.identity.session_id.as_str()) != active_id.as_deref())
+        .take(3);
+    let detail_paths = active
+        .into_iter()
+        .chain(history)
+        .filter_map(|candidate| candidate.view.log_path.clone())
+        .collect::<Vec<_>>();
+    for path in detail_paths {
+        load_session_detail(&mut scan, agent_id, Path::new(&path));
+    }
+    if scan.acquisition == AcquisitionCompleteness::Complete
+        && indexed_active_session(&scan, process) != active_id
+    {
+        // A changed selection would mix indexed and detailed evidence and could expose an
+        // identity-only active row. Preserve the detail as history and gate this acquisition.
+        scan.record_issue(agent_id, domain::DataIssue::AcquisitionIncomplete);
+    }
+    scan
+}
+
+fn indexed_active_session(
+    scan: &SessionScan,
+    process: Option<&domain::ProcessIdentity>,
+) -> Option<String> {
+    if scan.acquisition == AcquisitionCompleteness::Incomplete {
+        return None;
     }
     let identities = scan
         .candidates
         .iter()
         .map(|candidate| candidate.identity.clone())
         .collect::<Vec<_>>();
-    let active_id = process.and_then(|process| {
+    process.and_then(|process| {
         match application::session_registry::match_active_session(process, &identities) {
             application::session_registry::SessionMatch::Confirmed(id)
             | application::session_registry::SessionMatch::Probable(id) => Some(id),
             _ => None,
         }
-    });
-    let active_path = active_id
-        .and_then(|id| {
-            scan.candidates
-                .iter()
-                .find(|candidate| candidate.identity.session_id == id)
-        })
-        .and_then(|candidate| candidate.view.log_path.clone());
-    if let Some(path) = active_path.filter(|path| {
-        !files
-            .iter()
-            .take(3)
-            .any(|(_, loaded)| loaded.to_string_lossy().as_ref() == path)
-    }) {
-        load_session_detail(&mut scan, agent_id, Path::new(&path));
-    }
-    scan
+    })
 }
 
 fn load_session_detail(scan: &mut SessionScan, agent_id: &str, path: &Path) {
@@ -1607,18 +1622,33 @@ fn load_session_detail(scan: &mut SessionScan, agent_id: &str, path: &Path) {
             scan.acquisition = AcquisitionCompleteness::Incomplete;
         }
         scan.diagnostics.append(&mut detail.diagnostics);
+        let indexed = scan.candidates.iter().filter(|candidate| {
+            candidate.view.log_path.as_deref() == Some(path.to_string_lossy().as_ref())
+        });
+        let identity_disappeared = indexed.clone().any(|expected| {
+            !detail.candidates.iter().any(|candidate| {
+                candidate.view.log_path == expected.view.log_path
+                    && candidate.identity.session_id == expected.identity.session_id
+                    && candidate.identity.project_path == expected.identity.project_path
+            })
+        });
+        let identity_replaced = detail.candidates.iter().any(|candidate| {
+            !indexed.clone().any(|expected| {
+                candidate.view.log_path == expected.view.log_path
+                    && candidate.identity.session_id == expected.identity.session_id
+                    && candidate.identity.project_path == expected.identity.project_path
+            })
+        });
+        if identity_disappeared || identity_replaced {
+            scan.record_issue(agent_id, domain::DataIssue::AcquisitionIncomplete);
+            return;
+        }
         for candidate in detail.candidates {
             if let Some(existing) = scan
                 .candidates
                 .iter_mut()
                 .find(|existing| existing.view.log_path == candidate.view.log_path)
             {
-                // A file replaced between the index and detail read cannot certify ownership.
-                if existing.identity.session_id != candidate.identity.session_id
-                    || existing.identity.project_path != candidate.identity.project_path
-                {
-                    scan.acquisition = AcquisitionCompleteness::Incomplete;
-                }
                 *existing = candidate;
             }
         }
@@ -1829,7 +1859,10 @@ fn hermes_session_scan_from_text(text: &str) -> SessionScan {
                 view: interface::diagnostics::DiagnosticView::new(
                     "hermes",
                     issue,
-                    domain::freshness_for_adapter("hermes", epoch_millis(), epoch_millis()),
+                    domain::Freshness {
+                        observed_at_ms: epoch_millis(),
+                        stale: true,
+                    },
                     None,
                     0,
                     0,
@@ -4088,6 +4121,202 @@ mod tests {
         let scan = session_scan_from_file("codex", &path).expect("failed acquisition must survive");
         assert_eq!(scan.diagnostics[0].view.code, "log_unavailable");
         assert!(scan.diagnostics[0].view.freshness.stale);
+    }
+
+    #[test]
+    fn acquisition_indexed_identity_disappearing_in_detail_gates_ownership() {
+        for (name, replacement) in [("empty", ""), ("identity_removed", "{\"type\":\"unknown\"}\n"), ("replaced", "{\"type\":\"session_meta\",\"payload\":{\"id\":\"replacement\",\"cwd\":\"D:/other\"}}\n")] {
+            let path = std::env::temp_dir().join(format!("agent-island-d1-race-{name}-{}.jsonl", epoch_millis()));
+            fs::write(&path, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"indexed\",\"cwd\":\"D:/target\"}}\n").unwrap();
+            let mut scan = index_session_file("codex", &path);
+            fs::write(&path, replacement).unwrap();
+            let independent_read = session_scan_from_file("codex", &path).unwrap();
+            load_session_detail(&mut scan, "codex", &path);
+            fs::remove_file(&path).unwrap();
+            if name == "empty" {
+                assert_eq!(independent_read.acquisition, AcquisitionCompleteness::Complete);
+                assert!(independent_read.candidates.is_empty());
+            }
+            assert_eq!(scan.acquisition, AcquisitionCompleteness::Incomplete, "{name}");
+            assert!(scan.diagnostics.iter().any(|record| record.view.code == "acquisition_incomplete"), "{name}");
+            let process = process_fact_from_observations("codex", "Codex CLI", &[ProcessObservation { pid: 42, project_path: Some("D:/target".into()), started_at_ms: 0 }]);
+            let issues = scan.diagnostics.iter().map(|record| record.view.clone()).collect::<Vec<_>>();
+            let snapshot = interface::snapshot::build_snapshot_with_acquisition(epoch_millis(), &[process], &scan.candidates, &issues);
+            assert!(snapshot.agents[0].active_session.is_none());
+            assert!(snapshot.agents[0].freshness.stale);
+            assert_eq!(snapshot.agents[0].history_sessions[0].id, "indexed");
+        }
+    }
+
+    #[test]
+    fn discovery_visible_history_is_hydrated_for_every_active_position() {
+        for (active, expected_history) in [
+            (Some(4), ["answer 3", "answer 2", "answer 1"]),
+            (Some(2), ["answer 4", "answer 3", "answer 1"]),
+            (Some(0), ["answer 4", "answer 3", "answer 2"]),
+            (None, ["answer 4", "answer 3", "answer 2"]),
+        ] {
+            let root = std::env::temp_dir().join(format!(
+                "agent-island-d1-visible-{active:?}-{}",
+                epoch_millis()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            for index in 0..5 {
+                let path = root.join(format!("{index}.jsonl"));
+                fs::write(&path, format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"s{index}\",\"cwd\":\"D:/project{index}\"}}}}\n{{\"timestamp\":\"2026-09-04T10:00:01Z\",\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":\"answer {index}\"}}]}}}}\n{{\"timestamp\":\"2026-09-04T10:00:02Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"turn\"}}}}\n")).unwrap();
+                File::options()
+                    .write(true)
+                    .open(path)
+                    .unwrap()
+                    .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(10 + index))
+                    .unwrap();
+            }
+            let process = process_fact_from_observations(
+                "codex",
+                "Codex CLI",
+                &[ProcessObservation {
+                    pid: 42,
+                    project_path: Some(
+                        active
+                            .map(|id| format!("D:/project{id}"))
+                            .unwrap_or("D:/unrelated".into()),
+                    ),
+                    started_at_ms: 0,
+                }],
+            );
+            let scan = scan_session_directory("codex", &root, Some(&process.identity));
+            let issues = scan
+                .diagnostics
+                .iter()
+                .map(|record| record.view.clone())
+                .collect::<Vec<_>>();
+            let snapshot = interface::snapshot::build_snapshot_with_acquisition(
+                epoch_millis(),
+                &[process],
+                &scan.candidates,
+                &issues,
+            );
+            fs::remove_dir_all(root).unwrap();
+            assert_eq!(scan.acquisition, AcquisitionCompleteness::Complete);
+            assert_eq!(
+                scan.legacy_sessions.len(),
+                if active.is_some() { 4 } else { 3 }
+            );
+            let serialized = serde_json::to_value(&snapshot.agents[0]).unwrap();
+            for (row, expected) in serialized["history_sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(expected_history)
+            {
+                assert_eq!(row["records"][0]["text"], expected, "active {active:?}");
+                assert_eq!(row["display_status"], "done");
+            }
+            assert_eq!(
+                snapshot.agents[0]
+                    .active_session
+                    .as_ref()
+                    .map(|session| session.id.clone()),
+                active.map(|id| format!("s{id}"))
+            );
+        }
+    }
+
+    #[test]
+    fn acquisition_parse_diagnostics_are_stale_in_snapshot_and_export() {
+        let path =
+            std::env::temp_dir().join(format!("agent-island-d1-partial-{}.jsonl", epoch_millis()));
+        fs::write(&path, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"current\",\"cwd\":\"D:/target\"}}\n{\"timestamp\":\"2099-01-01T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"hello\",\"turn_id\":\"turn\"}}\nnot-json\n").unwrap();
+        let partial = session_scan_from_file("codex", &path).unwrap();
+        fs::remove_file(path).unwrap();
+        let invalid = hermes_session_scan_from_text("invalid row\n");
+        for (adapter, scan, expected_code) in [
+            ("codex", partial, "partial_parse"),
+            ("hermes", invalid, "parse_failed"),
+        ] {
+            assert_eq!(scan.diagnostics[0].view.code, expected_code);
+            assert!(scan.diagnostics[0].view.freshness.stale, "{adapter}");
+            let process = process_fact_from_observations(
+                adapter,
+                adapter,
+                &[ProcessObservation {
+                    pid: 42,
+                    project_path: Some("D:/target".into()),
+                    started_at_ms: 0,
+                }],
+            );
+            let mut issue = scan.diagnostics[0].view.clone();
+            issue.freshness.stale = false;
+            let snapshot = interface::snapshot::build_snapshot_with_acquisition(
+                epoch_millis(),
+                &[process],
+                &scan.candidates,
+                &[issue],
+            );
+            assert!(snapshot.agents[0].freshness.stale);
+            assert!(
+                snapshot.agents[0]
+                    .diagnostic
+                    .as_ref()
+                    .unwrap()
+                    .freshness
+                    .stale
+            );
+            let diagnostics = interface::diagnostics::DiagnosticSnapshot {
+                generated_at_ms: epoch_millis(),
+                records: scan.diagnostics,
+            };
+            let export = serde_json::to_value(interface::diagnostics::build_export_report(
+                &diagnostics,
+                "test",
+                "windows",
+            ))
+            .unwrap();
+            assert_eq!(export["entries"][0]["stale"], true);
+        }
+    }
+
+    #[test]
+    fn discovery_detail_changing_indexed_time_evidence_gates_ownership() {
+        let root =
+            std::env::temp_dir().join(format!("agent-island-d1-time-change-{}", epoch_millis()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("session.jsonl");
+        fs::write(&path, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"current\",\"cwd\":\"D:/target\"}}\n{\"timestamp\":\"2026-09-04T10:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"hello\",\"turn_id\":\"turn\"}}\n").unwrap();
+        let process = process_fact_from_observations(
+            "codex",
+            "Codex CLI",
+            &[ProcessObservation {
+                pid: 42,
+                project_path: Some("D:/target".into()),
+                started_at_ms: epoch_millis(),
+            }],
+        );
+        let scan = scan_session_directory("codex", &root, Some(&process.identity));
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(scan.acquisition, AcquisitionCompleteness::Incomplete);
+        assert_eq!(scan.diagnostics[0].view.code, "acquisition_incomplete");
+        assert_eq!(scan.candidates[0].view.records[0].text, "hello");
+    }
+
+    #[test]
+    fn acquisition_short_stream_preserves_valid_prefix_with_incomplete_evidence() {
+        let text =
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"current\",\"cwd\":\"D:/target\"}}\n";
+        let mut source = std::io::Cursor::new(text.as_bytes());
+        let mut acquired = AcquiredText::default();
+        read_bounded_stream(
+            &mut source,
+            text.len() as u64 + 20,
+            1024,
+            1024,
+            &mut acquired,
+        );
+        assert_eq!(acquired.text, text);
+        assert_eq!(
+            acquired.issues,
+            vec![domain::DataIssue::AcquisitionIncomplete]
+        );
     }
 
     #[test]
