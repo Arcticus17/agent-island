@@ -243,6 +243,36 @@ test("overview renders the serialized history session's own record projection an
   assert.deepEqual(row.session.records.map((record) => record.text), ["old prompt", "old result"]);
 });
 
+test("overview uses stopped typed history payload without falling back to legacy session_list", () => {
+  const [row] = overviewRows([{
+    id: "codex",
+    name: "Codex CLI",
+    status: "stopped",
+    display_status: "stopped",
+    active_session: null,
+    history_sessions: [{
+      id: "completed-session",
+      name: "Completed session",
+      records: [{ event_id: "result", at_ms: 20, role: "Assistant", text: "completed" }],
+      recent_output: ["completed"],
+      cwd: "D:\\history",
+      log_path: "D:\\logs\\history.jsonl",
+      current_file: "D:\\history\\main.rs",
+      log_status: "done",
+      display_status: "done",
+      lifecycle: "Historical",
+      last_active_at_ms: 20,
+    }],
+    session_list: [{ id: "legacy", name: "Wrong fallback", log_status: "idle" }],
+  }]);
+
+  assert.equal(row.id, "codex::completed-session");
+  assert.equal(row.status, "done");
+  assert.equal(row.output, "completed");
+  assert.equal(row.cwd, "D:\\history");
+  assert.equal(row.file, "D:\\history\\main.rs");
+});
+
 test("stable session keys isolate duplicate names and session ids", () => {
   const session = { id: "current" };
   const first = { id: "claude", name: "Assistant" };

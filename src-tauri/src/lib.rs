@@ -1275,11 +1275,37 @@ fn session_scan_from_file(agent_id: &str, path: &Path) -> Option<SessionScan> {
     })
 }
 
+const MAX_DISPLAY_RECORDS: usize = 24;
+const MAX_DISPLAY_RECORD_TEXT_CHARS: usize = 600;
+const MAX_RECENT_OUTPUT_RECORDS: usize = 5;
+const MAX_RECENT_OUTPUT_TEXT_CHARS: usize = 180;
+
 fn chronological_records(
     mut messages: Vec<domain::ConversationMessage>,
 ) -> Vec<domain::ConversationMessage> {
     messages.sort_by_key(|message| message.at_ms);
+    let first_record = messages.len().saturating_sub(MAX_DISPLAY_RECORDS);
+    messages.drain(..first_record);
+    for message in &mut messages {
+        message.text = truncate_display_text(&message.text, MAX_DISPLAY_RECORD_TEXT_CHARS);
+    }
     messages
+}
+
+fn truncate_display_text(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
+}
+
+fn compatibility_output(records: &[domain::ConversationMessage]) -> Vec<String> {
+    records
+        .iter()
+        .rev()
+        .take(MAX_RECENT_OUTPUT_RECORDS)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|record| truncate_display_text(&record.text, MAX_RECENT_OUTPUT_TEXT_CHARS))
+        .collect()
 }
 
 fn snapshot_from_bounded_text(
@@ -1305,7 +1331,7 @@ fn snapshot_from_bounded_text(
         .find_map(|record| extract_paths(&record.text).into_iter().last());
     LogSnapshot {
         path: path.display().to_string(),
-        recent: records.iter().map(|record| record.text.clone()).collect(),
+        recent: compatibility_output(records),
         file,
         cwd,
         log_status: None,
@@ -3925,6 +3951,62 @@ mod tests {
     }
 
     #[test]
+    fn production_scan_bounds_unicode_records_and_compatibility_output() {
+        let path = std::env::temp_dir().join(format!(
+            "agent-island-codex-record-budget-{}.jsonl",
+            std::process::id()
+        ));
+        let mut text = String::from(
+            r#"{"timestamp":"2026-09-04T10:00:00Z","type":"session_meta","payload":{"id":"bounded-records","cwd":"D:\\work\\bounded"}}"#,
+        );
+        text.push('\n');
+        for index in 0..30 {
+            text.push_str(&format!(
+                r#"{{"timestamp":"2026-09-04T10:00:{index:02}Z","type":"event_msg","payload":{{"type":"user_message","message":"message-{index}-{}","turn_id":"turn-{index}"}}}}"#,
+                "🦀".repeat(700),
+            ));
+            text.push('\n');
+        }
+        fs::write(&path, text).unwrap();
+
+        let scan = session_scan_from_file("codex", &path).unwrap();
+        let view = &scan.candidates[0].view;
+
+        assert_eq!(view.records.len(), 24);
+        assert!(view
+            .records
+            .iter()
+            .all(|record| record.text.chars().count() <= 600));
+        assert_eq!(view.records.first().unwrap().at_ms, view.records[0].at_ms);
+        assert!(view
+            .records
+            .windows(2)
+            .all(|pair| pair[0].at_ms <= pair[1].at_ms));
+        assert_eq!(
+            view.records.first().unwrap().text.starts_with("message-6-"),
+            true
+        );
+        assert_eq!(view.recent_output.len(), 5);
+        assert!(view
+            .recent_output
+            .iter()
+            .all(|text| text.chars().count() <= 180));
+        assert_eq!(
+            view.recent_output,
+            view.records
+                .iter()
+                .rev()
+                .take(5)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .map(|record| record.text.chars().take(180).collect::<String>())
+                .collect::<Vec<_>>()
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn claude_file_scan_uses_adapter_session_shape() {
         let fixture =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude/current-turn.jsonl");
@@ -4088,6 +4170,100 @@ mod tests {
         assert_eq!(json["active_session"]["id"], "matching-active");
         assert_eq!(json["history_sessions"].as_array().unwrap().len(), 1);
         assert_eq!(json["history_sessions"][0]["id"], "older");
+    }
+
+    #[test]
+    fn stopped_production_scan_projection_serializes_typed_history_without_legacy_fallback() {
+        use crate::domain::{DisplayStatus, ProcessIdentity, ProcessState};
+        use crate::interface::snapshot::ProcessFact;
+
+        let path = std::env::temp_dir().join(format!(
+            "agent-island-stopped-history-{}.jsonl",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            concat!(
+                r#"{"timestamp":"2026-09-04T10:00:00Z","type":"session_meta","payload":{"id":"stopped-history","cwd":"D:\\work\\history"}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-04T10:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"saved prompt","turn_id":"turn-1"}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-04T10:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"saved answer"}]}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-04T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let scan = session_scan_from_file("codex", &path).unwrap();
+        let snapshot = interface::snapshot::build_snapshot(
+            scan.candidates[0]
+                .identity
+                .last_event_at_ms
+                .saturating_add(1),
+            &[ProcessFact {
+                name: "Codex CLI".into(),
+                identity: ProcessIdentity {
+                    agent_id: "codex".into(),
+                    project_path: None,
+                    process_ids: Vec::new(),
+                    started_at_ms: 0,
+                },
+                process_state: ProcessState::Stopped,
+            }],
+            &scan.candidates,
+        );
+        let mut agents = vec![AgentInfo {
+            id: "codex".into(),
+            name: "Codex CLI".into(),
+            status: "stopped".into(),
+            display_status: DisplayStatus::Stopped,
+            pid: None,
+            cpu: None,
+            memory: None,
+            uptime: None,
+            cwd: None,
+            sessions: 0,
+            last_active_secs: None,
+            log_path: None,
+            recent_output: Vec::new(),
+            current_file: None,
+            log_status: None,
+            alert: None,
+            can_restart: false,
+            stats: None,
+            session_count: 1,
+            session_list: scan.legacy_sessions,
+            active_session: None,
+            history_sessions: None,
+            freshness: domain::Freshness {
+                observed_at_ms: snapshot.generated_at_ms,
+                stale: false,
+            },
+            usage: None,
+        }];
+
+        apply_snapshot_projection(&mut agents, &snapshot);
+        let agent = serde_json::to_value(&agents[0]).unwrap();
+
+        assert!(agent["active_session"].is_null());
+        assert_eq!(agent["session_list"], serde_json::json!([]));
+        assert_eq!(agent["history_sessions"][0]["display_status"], "done");
+        assert_eq!(
+            agent["history_sessions"][0]["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|record| record["text"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["saved prompt", "saved answer"]
+        );
+        assert_eq!(agent["history_sessions"][0]["lifecycle"], "Historical");
+        assert_eq!(
+            agent["history_sessions"][0]["last_active_at_ms"],
+            snapshot.generated_at_ms.saturating_sub(1)
+        );
+        let _ = fs::remove_file(path);
     }
 
     #[test]
