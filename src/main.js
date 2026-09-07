@@ -1,14 +1,14 @@
 // v10 — resident island: hover expansion, drag persistence, official Tauri API
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import {
+  invoke,
+  listen,
   getCurrentWindow,
   currentMonitor,
   primaryMonitor,
   availableMonitors,
   LogicalPosition,
   LogicalSize,
-} from "@tauri-apps/api/window";
+} from "./bridge/tauri";
 import { clampIslandX, getSafeIslandHeight, getSafeIslandWidth } from "./layout.js";
 import {
   agentKey,

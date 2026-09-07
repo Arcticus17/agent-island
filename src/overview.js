@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./bridge/tauri";
 import { overviewRows } from "./session-view.js";
 
 const listEl = document.getElementById("session-list");
