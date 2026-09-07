@@ -198,6 +198,13 @@ export function createAgentStore(bridge: AgentIslandBridge): AgentStore {
       candidate.snapshot.generated_at_ms === newestKnown.snapshot.generated_at_ms &&
       structurallyEqual(candidate.snapshot, newestKnown.snapshot)
     ) {
+      if (
+        state.refreshError !== null &&
+        candidate.order > latestRefreshErrorOrder
+      ) {
+        publish({ ...state, refreshError: null });
+        return true;
+      }
       return false;
     }
     if (!isNewer(candidate, newestKnown)) return false;

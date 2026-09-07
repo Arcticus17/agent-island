@@ -380,6 +380,59 @@ describe("agent snapshot reconciliation", () => {
     expect(store.current().selectedAgent?.name).toBe("Same millisecond update");
     expect(seen).toHaveBeenCalledTimes(3);
   });
+
+  it("clears a refresh error when a later success repeats the current snapshot", async () => {
+    const original = snapshot(10, agent("a"));
+    const store = createAgentStore(
+      queuedBridge([original, new Error("invalid_snapshot_shape"), structuredClone(original)]),
+    );
+    const seen = vi.fn();
+    store.subscribe(seen);
+
+    await store.refresh();
+    const retainedSnapshot = store.current().snapshot;
+    const retainedAgent = store.current().selectedAgent;
+    await store.refresh();
+    await expect(store.refresh()).resolves.toBe(true);
+
+    expect(store.current().refreshError).toBeNull();
+    expect(store.current().snapshot).toBe(retainedSnapshot);
+    expect(store.current().selectedAgent).toBe(retainedAgent);
+    expect(seen).toHaveBeenCalledTimes(4);
+  });
+
+  it("clears a refresh error from a duplicate success while interaction remains active", async () => {
+    const original = snapshot(10, agent("a"));
+    const store = createAgentStore(
+      queuedBridge([original, new Error("invalid_snapshot_shape"), structuredClone(original)]),
+    );
+    await store.refresh();
+    const retainedSnapshot = store.current().snapshot;
+    store.beginInteraction("input");
+    await store.refresh();
+
+    await expect(store.refresh()).resolves.toBe(true);
+
+    expect(store.interaction.current().interacting).toBe(true);
+    expect(store.current().refreshError).toBeNull();
+    expect(store.current().snapshot).toBe(retainedSnapshot);
+    store.endInteraction("input");
+    expect(store.current().snapshot).toBe(retainedSnapshot);
+  });
+
+  it("gives direct apply the same duplicate-success error clearing semantics", async () => {
+    const original = snapshot(10, agent("a"));
+    const store = createAgentStore(
+      queuedBridge([original, new Error("invalid_snapshot_shape")]),
+    );
+    await store.refresh();
+    const retainedSnapshot = store.current().snapshot;
+    await store.refresh();
+
+    expect(store.applySnapshot(structuredClone(original))).toBe(true);
+    expect(store.current().refreshError).toBeNull();
+    expect(store.current().snapshot).toBe(retainedSnapshot);
+  });
 });
 
 describe("interaction coordination", () => {
