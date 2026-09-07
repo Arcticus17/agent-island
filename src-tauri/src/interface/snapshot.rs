@@ -7,6 +7,7 @@ use crate::domain::{
     SessionIdentity, SessionLifecycle, TurnState,
 };
 use crate::interface::diagnostics::DiagnosticView;
+use crate::UsageInfo;
 
 #[derive(Debug, Clone)]
 pub struct ProcessFact {
@@ -57,6 +58,7 @@ pub struct AgentView {
     pub history_sessions: Vec<SessionSummary>,
     pub diagnostic: Option<DiagnosticView>,
     pub freshness: Freshness,
+    pub usage: Option<UsageInfo>,
 }
 
 /// Structured turn identity for downstream transition consumers; never inferred from text.
@@ -254,6 +256,7 @@ fn build_agent_view(
         history_sessions,
         diagnostic,
         freshness,
+        usage: None,
     }
 }
 
@@ -471,6 +474,27 @@ mod tests {
                 kind,
             }],
         }
+    }
+
+    #[test]
+    fn schema_v1_serializes_missing_usage_as_null() {
+        let process = ProcessFact {
+            name: "Codex CLI".into(),
+            identity: ProcessIdentity {
+                agent_id: "codex".into(),
+                project_path: None,
+                process_ids: Vec::new(),
+                started_at_ms: 0,
+            },
+            process_state: ProcessState::Stopped,
+            activity: ProcessActivity::Unknown,
+        };
+
+        let snapshot = build_snapshot(31_000, &[process], &[]);
+        let serialized = serde_json::to_value(&snapshot).unwrap();
+
+        assert_eq!(serialized["schema_version"], 1);
+        assert!(serialized["agents"][0]["usage"].is_null());
     }
 
     #[test]

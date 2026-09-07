@@ -14,6 +14,7 @@ export interface MockAgentIslandBridge extends AgentIslandBridge {
   commands(): readonly AgentCommand[];
   emitHookEvent(event: HookEvent): void;
   listenerCount(): number;
+  windowSizes(): readonly { width: number; height: number }[];
 }
 
 function clone<T>(value: T): T {
@@ -28,6 +29,7 @@ export function createMockBridge(
   const resultQueue = (options.commandResults ?? []).map(clone);
   const commandLog: AgentCommand[] = [];
   const handlers = new Set<(event: HookEvent) => void>();
+  const resizeLog: Array<{ width: number; height: number }> = [];
 
   return {
     async getSnapshot() {
@@ -50,6 +52,9 @@ export function createMockBridge(
         handlers.delete(handler);
       };
     },
+    async resizeWindow(size) {
+      resizeLog.push(clone(size));
+    },
     commands() {
       return commandLog.map(clone);
     },
@@ -58,6 +63,9 @@ export function createMockBridge(
     },
     listenerCount() {
       return handlers.size;
+    },
+    windowSizes() {
+      return resizeLog.map(clone);
     },
   };
 }

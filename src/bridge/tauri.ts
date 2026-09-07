@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 
 // Temporary raw exports keep the reversible legacy UI working while all new
 // Svelte code consumes only AgentIslandBridge.
@@ -142,6 +143,9 @@ export function createTauriBridge(): AgentIslandBridge {
         listening = false;
         rawUnlisten();
       };
+    },
+    async resizeWindow({ width, height }) {
+      await getCurrentWindow().setSize(new LogicalSize(width, height));
     },
   };
 }

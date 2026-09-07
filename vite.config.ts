@@ -6,7 +6,7 @@ export default defineConfig({
   clearScreen: false,
   plugins: [svelte()],
   test: {
-    include: ["tests/**/*.test.ts"],
+    include: ["tests/*.test.ts"],
   },
   build: {
     rollupOptions: {

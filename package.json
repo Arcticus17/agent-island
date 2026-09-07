@@ -11,7 +11,8 @@
     "tauri": "tauri",
     "test:frontend": "node --test tests/*.test.mjs",
     "test:unit": "vitest run",
-    "test": "npm run test:frontend && npm run test:unit && cargo test --manifest-path src-tauri/Cargo.toml --lib"
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "test": "npm run test:frontend && npm run test:unit && npm run test:browser && cargo test --manifest-path src-tauri/Cargo.toml --lib"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.1.1",

@@ -13,14 +13,26 @@ import type {
 const tauri = vi.hoisted(() => ({
   invoke: vi.fn(),
   listen: vi.fn(),
+  setSize: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauri.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauri.listen }));
+vi.mock("@tauri-apps/api/window", () => ({
+  availableMonitors: vi.fn(),
+  currentMonitor: vi.fn(),
+  getCurrentWindow: () => ({ setSize: tauri.setSize }),
+  LogicalPosition: class LogicalPosition {},
+  LogicalSize: class LogicalSize {
+    constructor(public width: number, public height: number) {}
+  },
+  primaryMonitor: vi.fn(),
+}));
 
 beforeEach(() => {
   tauri.invoke.mockReset();
   tauri.listen.mockReset();
+  tauri.setSize.mockReset();
 });
 
 const emptySnapshot = (schemaVersion = 1, generatedAtMs = 1): AgentViewSnapshot => ({
@@ -90,6 +102,17 @@ const populatedSnapshot = (): AgentViewSnapshot => ({
         skipped_lines: 1,
       },
       freshness: { observed_at_ms: 90, stale: false },
+      usage: {
+        tokens_total: 6_337_526,
+        tokens_output: 24_262,
+        cost_usd: null,
+        used_percent: 42,
+        window_secs: 18_000,
+        resets_at_secs: 1_789_130_031,
+        credits: null,
+        unlimited: true,
+        stale: false,
+      },
     },
   ],
 });
@@ -176,6 +199,15 @@ describe("Agent Island bridge contract", () => {
         },
       ],
     },
+    {
+      ...populatedSnapshot(),
+      agents: [
+        {
+          ...populatedSnapshot().agents[0],
+          usage: { ...populatedSnapshot().agents[0].usage, tokens_total: -1 },
+        },
+      ],
+    },
   ])("rejects malformed schema-v1 snapshots with a stable shape error", async (snapshot) => {
     const bridge = createMockBridge(snapshot as AgentViewSnapshot);
 
@@ -195,6 +227,16 @@ describe("Agent Island bridge contract", () => {
       "unsupported_snapshot_schema",
     );
     expect(tauri.invoke).toHaveBeenCalledWith("get_agent_snapshot");
+  });
+
+  it("resizes the native window through the typed bridge", async () => {
+    tauri.setSize.mockResolvedValueOnce(undefined);
+
+    await createTauriBridge().resizeWindow?.({ width: 420, height: 60 });
+
+    expect(tauri.setSize).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 420, height: 60 }),
+    );
   });
 
   it("maps typed commands to the existing Tauri command names and arguments", async () => {

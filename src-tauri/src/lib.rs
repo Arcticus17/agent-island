@@ -665,12 +665,13 @@ fn scan_agents(
         process_facts.push(process_fact);
     }
     let generated_at_ms = epoch_millis();
-    let snapshot = interface::snapshot::build_snapshot_with_acquisition(
+    let mut snapshot = interface::snapshot::build_snapshot_with_acquisition(
         generated_at_ms,
         &process_facts,
         &session_candidates,
         &acquisition_issues,
     );
+    attach_usage_to_snapshot(&mut snapshot, &agents);
     for agent in &snapshot.agents {
         if let Some(view) = &agent.diagnostic {
             diagnostic_records.push(interface::diagnostics::DiagnosticRecord {
@@ -699,6 +700,19 @@ fn scan_agents(
         agent.stats = session.stats.get(&agent.name).cloned();
     }
     (agents, snapshot, diagnostics, stats_changed)
+}
+
+fn attach_usage_to_snapshot(
+    snapshot: &mut interface::snapshot::AgentViewSnapshot,
+    agents: &[AgentInfo],
+) {
+    for view in &mut snapshot.agents {
+        view.usage = agents
+            .iter()
+            .find(|agent| agent.id == view.id)
+            .or_else(|| agents.iter().find(|agent| agent.name == view.name))
+            .and_then(|agent| agent.usage.clone());
+    }
 }
 
 fn refresh_agent_processes(sys: &mut System) {
@@ -4199,6 +4213,7 @@ mod tests {
                     observed_at_ms: result_at_ms,
                     stale,
                 },
+                usage: None,
             }],
         }
     }
@@ -5374,6 +5389,7 @@ mod tests {
                     observed_at_ms: 10,
                     stale: false,
                 },
+                usage: None,
             }],
         };
 
@@ -5389,6 +5405,75 @@ mod tests {
         assert_eq!(json["active_session"]["id"], "matching-active");
         assert_eq!(json["history_sessions"].as_array().unwrap().len(), 1);
         assert_eq!(json["history_sessions"][0]["id"], "older");
+    }
+
+    #[test]
+    fn production_snapshot_reuses_usage_from_same_scan_by_stable_agent_id() {
+        use crate::domain::{DisplayStatus, ProcessIdentity, ProcessState};
+        use crate::interface::snapshot::{build_snapshot, ProcessActivity, ProcessFact};
+
+        let usage = UsageInfo {
+            tokens_total: 12_345,
+            tokens_output: 2_345,
+            cost_usd: Some(1.25),
+            used_percent: Some(42.0),
+            window_secs: 18_000,
+            resets_at_secs: Some(50_000),
+            credits: Some(8.75),
+            unlimited: Some(false),
+            stale: false,
+        };
+        let agents = vec![AgentInfo {
+            id: "codex".into(),
+            name: "Codex CLI".into(),
+            status: "stopped".into(),
+            display_status: DisplayStatus::Stopped,
+            pid: None,
+            cpu: None,
+            memory: None,
+            uptime: None,
+            cwd: None,
+            sessions: 0,
+            last_active_secs: None,
+            log_path: None,
+            recent_output: Vec::new(),
+            current_file: None,
+            log_status: None,
+            alert: None,
+            can_restart: false,
+            stats: None,
+            session_count: 0,
+            session_list: Vec::new(),
+            active_session: None,
+            history_sessions: None,
+            freshness: domain::Freshness {
+                observed_at_ms: 40_000,
+                stale: false,
+            },
+            usage: Some(usage),
+        }];
+        let mut snapshot = build_snapshot(
+            40_000,
+            &[ProcessFact {
+                name: "Display name may change".into(),
+                identity: ProcessIdentity {
+                    agent_id: "codex".into(),
+                    project_path: None,
+                    process_ids: Vec::new(),
+                    started_at_ms: 0,
+                },
+                process_state: ProcessState::Stopped,
+                activity: ProcessActivity::Unknown,
+            }],
+            &[],
+        );
+
+        attach_usage_to_snapshot(&mut snapshot, &agents);
+        let serialized = serde_json::to_value(&snapshot.agents[0]).unwrap();
+
+        assert_eq!(serialized["usage"]["tokens_total"], 12_345);
+        assert_eq!(serialized["usage"]["used_percent"], 42.0);
+        assert_eq!(serialized["usage"]["stale"], false);
     }
 
     #[test]

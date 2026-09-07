@@ -55,6 +55,7 @@ function agent(id: string, activeSessionId = `${id}-active`): AgentView {
     ],
     diagnostic: null,
     freshness: { observed_at_ms: 1, stale: false },
+    usage: null,
   };
 }
 

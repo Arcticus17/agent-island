@@ -60,6 +60,18 @@ export interface DiagnosticView {
   candidate_count?: number;
 }
 
+export interface UsageInfo {
+  tokens_total: number;
+  tokens_output: number;
+  cost_usd: number | null;
+  used_percent: number | null;
+  window_secs: number;
+  resets_at_secs: number | null;
+  credits: number | null;
+  unlimited: boolean | null;
+  stale: boolean;
+}
+
 export interface AgentView {
   id: string;
   name: string;
@@ -70,6 +82,7 @@ export interface AgentView {
   history_sessions: SessionSummary[];
   diagnostic: DiagnosticView | null;
   freshness: Freshness;
+  usage: UsageInfo | null;
 }
 
 /** Rust's serialized `AgentViewSnapshot`. The bridge narrows the version to 1. */
@@ -192,6 +205,26 @@ function isDiagnosticView(value: unknown): value is DiagnosticView {
   );
 }
 
+function isNullableNonnegativeNumber(value: unknown): value is number | null {
+  return value === null ||
+    (typeof value === "number" && Number.isFinite(value) && value >= 0);
+}
+
+function isUsageInfo(value: unknown): value is UsageInfo {
+  return (
+    isObject(value) &&
+    isNonnegativeInteger(value.tokens_total) &&
+    isNonnegativeInteger(value.tokens_output) &&
+    isNullableNonnegativeNumber(value.cost_usd) &&
+    isNullableNonnegativeNumber(value.used_percent) &&
+    isNonnegativeInteger(value.window_secs) &&
+    (value.resets_at_secs === null || isNonnegativeInteger(value.resets_at_secs)) &&
+    isNullableNonnegativeNumber(value.credits) &&
+    (value.unlimited === null || typeof value.unlimited === "boolean") &&
+    typeof value.stale === "boolean"
+  );
+}
+
 function isAgentView(value: unknown): value is AgentView {
   return (
     isObject(value) &&
@@ -204,7 +237,8 @@ function isAgentView(value: unknown): value is AgentView {
     Array.isArray(value.history_sessions) &&
     value.history_sessions.every(isSessionView) &&
     (value.diagnostic === null || isDiagnosticView(value.diagnostic)) &&
-    isFreshness(value.freshness)
+    isFreshness(value.freshness) &&
+    (value.usage === null || isUsageInfo(value.usage))
   );
 }
 
@@ -303,4 +337,5 @@ export interface AgentIslandBridge {
   getSnapshot(): Promise<AgentViewSnapshot>;
   runCommand(command: AgentCommand): Promise<CommandResult>;
   listenHookEvents(handler: (event: HookEvent) => void): Promise<() => void>;
+  resizeWindow?(size: { width: number; height: number }): Promise<void>;
 }
