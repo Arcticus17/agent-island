@@ -1,0 +1,270 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type {
+  AgentIslandBridge,
+  AgentView,
+  AgentViewSnapshot,
+} from "../src/bridge/types";
+import { createAgentStore } from "../src/stores/agent-store";
+import {
+  createInteractionStore,
+  shouldFollowLog,
+} from "../src/stores/interaction-store";
+
+function agent(id: string, activeSessionId = `${id}-active`): AgentView {
+  return {
+    id,
+    name: `Agent ${id}`,
+    state: {
+      process: "running",
+      turn: "executing",
+      attention: "none",
+      result_at_ms: null,
+    },
+    display_status: "working",
+    active_session: {
+      id: activeSessionId,
+      name: `Session ${activeSessionId}`,
+      cwd: null,
+      log_path: null,
+      records: [],
+      recent_output: [],
+      current_file: null,
+      log_status: null,
+      alert: null,
+      lifecycle: "Active",
+      last_active_at_ms: 1,
+      display_status: "working",
+    },
+    active_turn: null,
+    history_sessions: [
+      {
+        id: `${id}-history`,
+        name: `History ${id}`,
+        cwd: null,
+        log_path: null,
+        records: [],
+        recent_output: [],
+        current_file: null,
+        log_status: null,
+        alert: null,
+        lifecycle: "Historical",
+        last_active_at_ms: 0,
+        display_status: "done",
+      },
+    ],
+    diagnostic: null,
+    freshness: { observed_at_ms: 1, stale: false },
+  };
+}
+
+function snapshot(generatedAtMs: number, ...agents: AgentView[]): AgentViewSnapshot {
+  return { schema_version: 1, generated_at_ms: generatedAtMs, agents };
+}
+
+function queuedBridge(values: Array<AgentViewSnapshot | Error>): AgentIslandBridge {
+  const queue = [...values];
+  return {
+    async getSnapshot() {
+      const value = queue.shift();
+      if (!value) throw new Error("empty_queue");
+      if (value instanceof Error) throw value;
+      return structuredClone(value);
+    },
+    async runCommand() {
+      return { ok: true };
+    },
+    async listenHookEvents() {
+      return () => undefined;
+    },
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("agent snapshot reconciliation", () => {
+  it("preserves agent and session selection by stable ID across reorder and rename", async () => {
+    const firstB = agent("b");
+    const renamedB = { ...agent("b"), name: "Renamed B" };
+    const store = createAgentStore(
+      queuedBridge([snapshot(10, agent("a"), firstB), snapshot(20, renamedB, agent("a"))]),
+    );
+
+    await store.refresh();
+    store.selectAgent("b");
+    store.selectSession("b-history");
+    await store.refresh();
+
+    expect(store.current().selectedAgentId).toBe("b");
+    expect(store.current().selectedSessionId).toBe("b-history");
+    expect(store.current().selectedAgent?.name).toBe("Renamed B");
+  });
+
+  it("defers snapshots during nested interactions and applies only the newest on idle", () => {
+    const store = createAgentStore(queuedBridge([]));
+    store.applySnapshot(snapshot(10, agent("a")));
+    store.beginInteraction("input");
+    store.beginInteraction("drag");
+
+    store.applySnapshot(snapshot(20, agent("b")));
+    store.applySnapshot(snapshot(30, agent("c")));
+    store.endInteraction("input");
+    expect(store.current().snapshot?.generated_at_ms).toBe(10);
+
+    store.endInteraction("drag");
+    expect(store.current().snapshot?.generated_at_ms).toBe(30);
+    expect(store.current().selectedAgentId).toBe("c");
+  });
+
+  it("falls back only to the same agent active session when a selected session disappears", () => {
+    const store = createAgentStore(queuedBridge([]));
+    store.applySnapshot(snapshot(10, agent("a"), agent("b")));
+    store.selectAgent("a");
+    store.selectSession("a-history");
+
+    const updatedA = { ...agent("a", "a-new-active"), history_sessions: agent("a").history_sessions.slice(0, 0) };
+    store.applySnapshot(snapshot(20, updatedA, agent("b")));
+
+    expect(store.current().selectedAgentId).toBe("a");
+    expect(store.current().selectedSessionId).toBe("a-new-active");
+    expect(store.current().selectedSession?.id).not.toBe("b-active");
+  });
+
+  it("selects the deterministic first agent, then null, when the selected agent disappears", () => {
+    const store = createAgentStore(queuedBridge([]));
+    store.applySnapshot(snapshot(10, agent("a"), agent("b")));
+    store.selectAgent("b");
+    store.selectSession("b-history");
+
+    const firstReplacement = agent("c");
+    firstReplacement.history_sessions[0] = {
+      ...firstReplacement.history_sessions[0],
+      id: "b-history",
+    };
+
+    store.applySnapshot(snapshot(20, firstReplacement, agent("a")));
+    expect(store.current().selectedAgentId).toBe("c");
+    expect(store.current().selectedSessionId).toBe("c-active");
+
+    store.applySnapshot(snapshot(30));
+    expect(store.current().selectedAgentId).toBeNull();
+    expect(store.current().selectedSessionId).toBeNull();
+  });
+
+  it("does not let an older concurrent refresh response overwrite a newer snapshot", async () => {
+    const oldResponse = deferred<AgentViewSnapshot>();
+    const newResponse = deferred<AgentViewSnapshot>();
+    const getSnapshot = vi
+      .fn<() => Promise<AgentViewSnapshot>>()
+      .mockReturnValueOnce(oldResponse.promise)
+      .mockReturnValueOnce(newResponse.promise);
+    const bridge = {
+      ...queuedBridge([]),
+      getSnapshot,
+    };
+    const store = createAgentStore(bridge);
+
+    const oldRefresh = store.refresh();
+    const newRefresh = store.refresh();
+    newResponse.resolve(snapshot(20, agent("new")));
+    await newRefresh;
+    oldResponse.resolve(snapshot(10, agent("old")));
+    await oldRefresh;
+
+    expect(store.current().snapshot?.generated_at_ms).toBe(20);
+    expect(store.current().selectedAgentId).toBe("new");
+  });
+
+  it("retains current state and exposes a structured error when refresh rejects", async () => {
+    const store = createAgentStore(
+      queuedBridge([snapshot(10, agent("a")), new Error("invalid_snapshot_shape")]),
+    );
+    await store.refresh();
+
+    await expect(store.refresh()).resolves.toBe(false);
+
+    expect(store.current().snapshot?.generated_at_ms).toBe(10);
+    expect(store.current().selectedAgentId).toBe("a");
+    expect(store.current().refreshError).toMatchObject({
+      code: "invalid_snapshot_shape",
+      message: "invalid_snapshot_shape",
+    });
+  });
+
+  it("does not hide a newer refresh error when an older deferred snapshot is released", async () => {
+    const store = createAgentStore(queuedBridge([new Error("invalid_snapshot_shape")]));
+    store.applySnapshot(snapshot(10, agent("a")));
+    store.beginInteraction("approval");
+    store.applySnapshot(snapshot(20, agent("b")));
+
+    await store.refresh();
+    store.endInteraction("approval");
+
+    expect(store.current().snapshot?.generated_at_ms).toBe(20);
+    expect(store.current().refreshError?.code).toBe("invalid_snapshot_shape");
+  });
+
+  it("notifies subscribers immutably and supports unsubscribe", () => {
+    const store = createAgentStore(queuedBridge([]));
+    const seen = vi.fn();
+    const unsubscribe = store.subscribe(seen);
+
+    store.applySnapshot(snapshot(10, agent("a")));
+    unsubscribe();
+    store.selectAgent("a");
+
+    expect(seen).toHaveBeenCalledTimes(2);
+    expect(seen.mock.calls[0][0]).not.toBe(seen.mock.calls[1][0]);
+  });
+});
+
+describe("interaction coordination", () => {
+  it("tracks input, drag, and approval independently and never underflows", () => {
+    const interactions = createInteractionStore();
+    interactions.beginInteraction("input");
+    interactions.beginInteraction("input");
+    interactions.beginInteraction("drag");
+    interactions.beginInteraction("approval");
+
+    expect(interactions.current()).toMatchObject({
+      totalDepth: 4,
+      depths: { input: 2, drag: 1, approval: 1 },
+    });
+
+    interactions.endInteraction("input");
+    interactions.endInteraction("input");
+    interactions.endInteraction("input");
+    interactions.endInteraction("drag");
+    interactions.endInteraction("approval");
+    interactions.endInteraction("approval");
+    expect(interactions.current()).toMatchObject({
+      totalDepth: 0,
+      interacting: false,
+      depths: { input: 0, drag: 0, approval: 0 },
+    });
+  });
+
+  it("returns an idempotent release function from beginInteraction", () => {
+    const interactions = createInteractionStore();
+    const release = interactions.beginInteraction("approval");
+    release();
+    release();
+    expect(interactions.current().totalDepth).toBe(0);
+  });
+});
+
+describe("log follow policy", () => {
+  it("follows only when the pre-refresh viewport is within 24px of the bottom", () => {
+    expect(shouldFollowLog({ scrollTop: 76, clientHeight: 100, scrollHeight: 200 })).toBe(true);
+    expect(shouldFollowLog({ scrollTop: 75, clientHeight: 100, scrollHeight: 200 })).toBe(false);
+    expect(shouldFollowLog({ scrollTop: 120, clientHeight: 100, scrollHeight: 200 })).toBe(true);
+  });
+});
