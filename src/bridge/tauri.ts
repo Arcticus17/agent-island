@@ -80,6 +80,12 @@ function commandError(error: unknown): Exclude<CommandResult, { ok: true }> {
   const normalized = message.toLowerCase();
   const [code, retryable] = normalized.includes("prompt is empty")
     ? ["prompt_empty", false]
+    : normalized.includes("empty path")
+      ? ["path_empty", false]
+      : normalized.includes("unknown agent")
+        ? ["unknown_agent", false]
+        : normalized.includes("no command recorded")
+          ? ["command_unavailable", false]
     : normalized.includes("task not found")
       ? ["task_not_found", false]
       : normalized.includes("not supported")
@@ -94,7 +100,7 @@ function commandError(error: unknown): Exclude<CommandResult, { ok: true }> {
                 ? ["session_not_found", true]
                 : normalized.includes("state lock error")
                   ? ["state_unavailable", true]
-                  : ["command_failed", true];
+                  : ["command_failed", false];
   return { ok: false, code, message, retryable };
 }
 
@@ -117,19 +123,25 @@ export function createTauriBridge(): AgentIslandBridge {
     async runCommand(command) {
       const invocation = commandInvocation(command);
       try {
-        const value = await invoke<CommandValue | undefined>(
+        const value = await invoke<CommandValue | null | undefined>(
           invocation.commandName,
           invocation.args,
         );
-        return value === undefined ? { ok: true } : { ok: true, value };
+        return value == null ? { ok: true } : { ok: true, value };
       } catch (error) {
         return commandError(error);
       }
     },
     async listenHookEvents(handler) {
-      return listen<unknown>("hook-event", ({ payload }) => {
+      const rawUnlisten = await listen<unknown>("hook-event", ({ payload }) => {
         if (isHookEvent(payload)) handler(payload);
       });
+      let listening = true;
+      return () => {
+        if (!listening) return;
+        listening = false;
+        rawUnlisten();
+      };
     },
   };
 }

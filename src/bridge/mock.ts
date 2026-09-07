@@ -2,7 +2,6 @@ import {
   assertSupportedSnapshot,
   type AgentCommand,
   type AgentIslandBridge,
-  type AgentViewSnapshot,
   type CommandResult,
   type HookEvent,
 } from "./types";
@@ -22,7 +21,7 @@ function clone<T>(value: T): T {
 }
 
 export function createMockBridge(
-  snapshots: AgentViewSnapshot | AgentViewSnapshot[],
+  snapshots: unknown | unknown[],
   options: MockBridgeOptions = {},
 ): MockAgentIslandBridge {
   const snapshotQueue = (Array.isArray(snapshots) ? snapshots : [snapshots]).map(clone);
@@ -32,8 +31,8 @@ export function createMockBridge(
 
   return {
     async getSnapshot() {
+      if (snapshotQueue.length === 0) throw new Error("mock_snapshot_queue_empty");
       const snapshot = snapshotQueue.shift();
-      if (!snapshot) throw new Error("mock_snapshot_queue_empty");
       return assertSupportedSnapshot(clone(snapshot));
     },
     async runCommand(command) {
