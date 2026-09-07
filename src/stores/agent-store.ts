@@ -42,6 +42,48 @@ interface SnapshotCandidate {
   readonly order: number;
 }
 
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) deepFreeze(child, seen);
+  return Object.freeze(value);
+}
+
+function ownSnapshot(snapshot: AgentViewSnapshot): AgentViewSnapshot {
+  return deepFreeze(structuredClone(snapshot));
+}
+
+function structurallyEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (
+    left === null ||
+    right === null ||
+    typeof left !== "object" ||
+    typeof right !== "object"
+  ) {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => structurallyEqual(value, right[index]))
+    );
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).sort();
+  const rightKeys = Object.keys(rightRecord).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] && structurallyEqual(leftRecord[key], rightRecord[key]),
+    )
+  );
+}
+
 function sessionsFor(agent: AgentView): readonly SessionView[] {
   return agent.active_session
     ? [agent.active_session, ...agent.history_sessions]
@@ -66,12 +108,12 @@ function stateWithSelection(
   selectedAgentId: string | null,
   selectedSessionId: string | null,
 ): AgentStoreState {
-  return {
+  return deepFreeze({
     ...state,
     selectedAgentId,
     selectedSessionId,
     ...selectedEntities(state.snapshot, selectedAgentId, selectedSessionId),
-  };
+  });
 }
 
 function reconcile(
@@ -136,8 +178,14 @@ export function createAgentStore(bridge: AgentIslandBridge): AgentStore {
   let latestRefreshErrorOrder = 0;
 
   function publish(next: AgentStoreState): void {
-    state = next;
-    for (const subscriber of [...subscribers]) subscriber(state);
+    state = deepFreeze(next);
+    for (const subscriber of [...subscribers]) {
+      try {
+        subscriber(state);
+      } catch {
+        subscribers.delete(subscriber);
+      }
+    }
   }
 
   function applyCandidate(candidate: SnapshotCandidate): boolean {
@@ -145,6 +193,13 @@ export function createAgentStore(bridge: AgentIslandBridge): AgentStore {
       pendingCandidate && isNewer(pendingCandidate, currentCandidate)
         ? pendingCandidate
         : currentCandidate;
+    if (
+      newestKnown &&
+      candidate.snapshot.generated_at_ms === newestKnown.snapshot.generated_at_ms &&
+      structurallyEqual(candidate.snapshot, newestKnown.snapshot)
+    ) {
+      return false;
+    }
     if (!isNewer(candidate, newestKnown)) return false;
     if (interaction.current().interacting) {
       pendingCandidate = candidate;
@@ -176,16 +231,18 @@ export function createAgentStore(bridge: AgentIslandBridge): AgentStore {
     current: () => state,
     subscribe(subscriber) {
       subscribers.add(subscriber);
-      subscriber(state);
+      try {
+        subscriber(state);
+      } catch {
+        subscribers.delete(subscriber);
+      }
       return () => subscribers.delete(subscriber);
     },
     async refresh() {
       const requestId = ++refreshRequest;
+      let snapshot: AgentViewSnapshot;
       try {
-        const snapshot = await bridge.getSnapshot();
-        if (requestId < latestSettledRefresh) return false;
-        latestSettledRefresh = requestId;
-        return applyCandidate({ snapshot, order: ++candidateOrder });
+        snapshot = await bridge.getSnapshot();
       } catch (error) {
         if (requestId < latestSettledRefresh) return false;
         latestSettledRefresh = requestId;
@@ -193,9 +250,18 @@ export function createAgentStore(bridge: AgentIslandBridge): AgentStore {
         publish({ ...state, refreshError: refreshError(error, requestId) });
         return false;
       }
+      if (requestId < latestSettledRefresh) return false;
+      latestSettledRefresh = requestId;
+      return applyCandidate({
+        snapshot: ownSnapshot(snapshot),
+        order: ++candidateOrder,
+      });
     },
     applySnapshot(snapshot) {
-      return applyCandidate({ snapshot, order: ++candidateOrder });
+      return applyCandidate({
+        snapshot: ownSnapshot(snapshot),
+        order: ++candidateOrder,
+      });
     },
     selectAgent(agentId) {
       const selectedAgent = state.snapshot?.agents.find(

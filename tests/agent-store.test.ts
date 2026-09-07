@@ -91,6 +91,42 @@ function deferred<T>() {
 }
 
 describe("agent snapshot reconciliation", () => {
+  it("owns an immutable clone of snapshots passed directly by callers", () => {
+    const store = createAgentStore(queuedBridge([]));
+    const input = snapshot(10, agent("a"));
+    store.applySnapshot(input);
+
+    input.agents[0].name = "Mutated outside";
+    input.agents.push(agent("b"));
+    expect(store.current().snapshot?.agents).toHaveLength(1);
+    expect(store.current().selectedAgent?.name).toBe("Agent a");
+
+    expect(() => {
+      (store.current().snapshot!.agents as AgentView[]).push(agent("c"));
+    }).toThrow();
+    expect(() => {
+      (store.current().selectedAgent as { name: string }).name = "Mutated current";
+    }).toThrow();
+    expect(store.current().selectedAgent?.name).toBe("Agent a");
+  });
+
+  it("owns an immutable clone of snapshots returned by the bridge", async () => {
+    const input = snapshot(10, agent("a"));
+    const bridge = {
+      ...queuedBridge([]),
+      async getSnapshot() {
+        return input;
+      },
+    };
+    const store = createAgentStore(bridge);
+    await store.refresh();
+
+    input.agents[0].name = "Mutated bridge result";
+    expect(store.current().selectedAgent?.name).toBe("Agent a");
+    expect(Object.isFrozen(store.current())).toBe(true);
+    expect(Object.isFrozen(store.current().snapshot!.agents[0])).toBe(true);
+  });
+
   it("preserves agent and session selection by stable ID across reorder and rename", async () => {
     const firstB = agent("b");
     const renamedB = { ...agent("b"), name: "Renamed B" };
@@ -183,6 +219,85 @@ describe("agent snapshot reconciliation", () => {
     expect(store.current().selectedAgentId).toBe("new");
   });
 
+  it("ignores an older success that settles after a newer refresh error", async () => {
+    const older = deferred<AgentViewSnapshot>();
+    const newer = deferred<AgentViewSnapshot>();
+    const store = createAgentStore({
+      ...queuedBridge([]),
+      getSnapshot: vi
+        .fn<() => Promise<AgentViewSnapshot>>()
+        .mockReturnValueOnce(older.promise)
+        .mockReturnValueOnce(newer.promise),
+    });
+    store.applySnapshot(snapshot(5, agent("initial")));
+
+    const olderRefresh = store.refresh();
+    const newerRefresh = store.refresh();
+    newer.reject(new Error("invalid_snapshot_shape"));
+    await newerRefresh;
+    older.resolve(snapshot(20, agent("older-request")));
+    await olderRefresh;
+
+    expect(store.current().selectedAgentId).toBe("initial");
+    expect(store.current().refreshError?.code).toBe("invalid_snapshot_shape");
+  });
+
+  it("ignores an older error that settles after a newer refresh success", async () => {
+    const older = deferred<AgentViewSnapshot>();
+    const newer = deferred<AgentViewSnapshot>();
+    const store = createAgentStore({
+      ...queuedBridge([]),
+      getSnapshot: vi
+        .fn<() => Promise<AgentViewSnapshot>>()
+        .mockReturnValueOnce(older.promise)
+        .mockReturnValueOnce(newer.promise),
+    });
+
+    const olderRefresh = store.refresh();
+    const newerRefresh = store.refresh();
+    newer.resolve(snapshot(20, agent("newer-request")));
+    await newerRefresh;
+    older.reject(new Error("invalid_snapshot_shape"));
+    await olderRefresh;
+
+    expect(store.current().selectedAgentId).toBe("newer-request");
+    expect(store.current().refreshError).toBeNull();
+  });
+
+  it("keeps an earlier success when a newer refresh later fails", async () => {
+    const earlier = deferred<AgentViewSnapshot>();
+    const later = deferred<AgentViewSnapshot>();
+    const store = createAgentStore({
+      ...queuedBridge([]),
+      getSnapshot: vi
+        .fn<() => Promise<AgentViewSnapshot>>()
+        .mockReturnValueOnce(earlier.promise)
+        .mockReturnValueOnce(later.promise),
+    });
+
+    const earlierRefresh = store.refresh();
+    const laterRefresh = store.refresh();
+    earlier.resolve(snapshot(10, agent("earlier-success")));
+    await earlierRefresh;
+    later.reject(new Error("invalid_snapshot_shape"));
+    await laterRefresh;
+
+    expect(store.current().selectedAgentId).toBe("earlier-success");
+    expect(store.current().refreshError?.code).toBe("invalid_snapshot_shape");
+  });
+
+  it("clears an earlier refresh error after a newer success", async () => {
+    const store = createAgentStore(
+      queuedBridge([new Error("invalid_snapshot_shape"), snapshot(10, agent("recovered"))]),
+    );
+    await store.refresh();
+    expect(store.current().refreshError?.code).toBe("invalid_snapshot_shape");
+
+    await store.refresh();
+    expect(store.current().selectedAgentId).toBe("recovered");
+    expect(store.current().refreshError).toBeNull();
+  });
+
   it("retains current state and exposes a structured error when refresh rejects", async () => {
     const store = createAgentStore(
       queuedBridge([snapshot(10, agent("a")), new Error("invalid_snapshot_shape")]),
@@ -224,6 +339,47 @@ describe("agent snapshot reconciliation", () => {
     expect(seen).toHaveBeenCalledTimes(2);
     expect(seen.mock.calls[0][0]).not.toBe(seen.mock.calls[1][0]);
   });
+
+  it("isolates failing subscribers and does not misreport render errors as refresh errors", async () => {
+    const store = createAgentStore(queuedBridge([snapshot(10, agent("a"))]));
+    const throwsInitially = vi.fn(() => {
+      throw new Error("render_failed");
+    });
+    const throwsOnUpdate = vi.fn().mockImplementationOnce(() => undefined).mockImplementation(() => {
+      throw new Error("render_failed");
+    });
+    const healthy = vi.fn();
+
+    expect(() => store.subscribe(throwsInitially)).not.toThrow();
+    store.subscribe(throwsOnUpdate);
+    store.subscribe(healthy);
+    await expect(store.refresh()).resolves.toBe(true);
+
+    expect(throwsInitially).toHaveBeenCalledTimes(1);
+    expect(throwsOnUpdate).toHaveBeenCalledTimes(2);
+    expect(healthy).toHaveBeenCalledTimes(2);
+    expect(store.current().refreshError).toBeNull();
+
+    store.applySnapshot(snapshot(20, agent("b")));
+    expect(throwsOnUpdate).toHaveBeenCalledTimes(2);
+    expect(healthy).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not republish an identical same-generation snapshot but accepts a real same-ms change", () => {
+    const store = createAgentStore(queuedBridge([]));
+    const seen = vi.fn();
+    store.subscribe(seen);
+    const original = snapshot(10, agent("a"));
+
+    expect(store.applySnapshot(original)).toBe(true);
+    expect(store.applySnapshot(structuredClone(original))).toBe(false);
+    expect(seen).toHaveBeenCalledTimes(2);
+
+    const changed = snapshot(10, { ...agent("a"), name: "Same millisecond update" });
+    expect(store.applySnapshot(changed)).toBe(true);
+    expect(store.current().selectedAgent?.name).toBe("Same millisecond update");
+    expect(seen).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("interaction coordination", () => {
@@ -259,6 +415,32 @@ describe("interaction coordination", () => {
     release();
     expect(interactions.current().totalDepth).toBe(0);
   });
+
+  it("isolates listener errors so begin always returns a usable release", () => {
+    const interactions = createInteractionStore();
+    const throwsInitially = vi.fn(() => {
+      throw new Error("initial_render_failed");
+    });
+    expect(() => interactions.subscribe(throwsInitially)).not.toThrow();
+
+    const throwsOnUpdate = vi
+      .fn()
+      .mockImplementationOnce(() => undefined)
+      .mockImplementation(() => {
+        throw new Error("update_render_failed");
+      });
+    const healthy = vi.fn();
+    interactions.subscribe(throwsOnUpdate);
+    interactions.subscribe(healthy);
+
+    const release = interactions.beginInteraction("input");
+    expect(interactions.current().totalDepth).toBe(1);
+    expect(() => release()).not.toThrow();
+    expect(interactions.current().totalDepth).toBe(0);
+    expect(throwsInitially).toHaveBeenCalledTimes(1);
+    expect(throwsOnUpdate).toHaveBeenCalledTimes(2);
+    expect(healthy).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("log follow policy", () => {
@@ -266,5 +448,13 @@ describe("log follow policy", () => {
     expect(shouldFollowLog({ scrollTop: 76, clientHeight: 100, scrollHeight: 200 })).toBe(true);
     expect(shouldFollowLog({ scrollTop: 75, clientHeight: 100, scrollHeight: 200 })).toBe(false);
     expect(shouldFollowLog({ scrollTop: 120, clientHeight: 100, scrollHeight: 200 })).toBe(true);
+  });
+
+  it.each([
+    { scrollTop: -1, clientHeight: 100, scrollHeight: 200 },
+    { scrollTop: 0, clientHeight: -1, scrollHeight: 200 },
+    { scrollTop: 0, clientHeight: 100, scrollHeight: -1 },
+  ])("rejects negative viewport metrics: %o", (viewport) => {
+    expect(shouldFollowLog(viewport)).toBe(false);
   });
 });

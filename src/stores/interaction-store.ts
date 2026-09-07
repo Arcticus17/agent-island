@@ -35,7 +35,13 @@ export function createInteractionStore(): InteractionStore {
 
   function publish(depths: InteractionDepths): void {
     state = nextState(depths);
-    for (const subscriber of [...subscribers]) subscriber(state);
+    for (const subscriber of [...subscribers]) {
+      try {
+        subscriber(state);
+      } catch {
+        subscribers.delete(subscriber);
+      }
+    }
   }
 
   function endInteraction(kind: InteractionKind): void {
@@ -50,7 +56,11 @@ export function createInteractionStore(): InteractionStore {
     current: () => state,
     subscribe(subscriber) {
       subscribers.add(subscriber);
-      subscriber(state);
+      try {
+        subscriber(state);
+      } catch {
+        subscribers.delete(subscriber);
+      }
       return () => subscribers.delete(subscriber);
     },
     beginInteraction(kind) {
@@ -82,6 +92,9 @@ export function shouldFollowLog(viewport: LogViewport, thresholdPx = 24): boolea
     !Number.isFinite(viewport.clientHeight) ||
     !Number.isFinite(viewport.scrollHeight) ||
     !Number.isFinite(thresholdPx) ||
+    viewport.scrollTop < 0 ||
+    viewport.clientHeight < 0 ||
+    viewport.scrollHeight < 0 ||
     thresholdPx < 0
   ) {
     return false;
