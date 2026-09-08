@@ -17,7 +17,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_tabindex (keyboard users need to focus and scroll this log region) -->
   <div class="log" data-testid="log-scroll" bind:this={scroller} role="log" aria-label="当前会话日志" tabindex="0">
     {#each session.records as record (record.event_id)}
-      <div class={`record role-${record.role.toLowerCase()}`} data-event-id={record.event_id}><span class="role">{record.role}</span><span class="text">{record.text}</span></div>
+      <div class={`record role-${record.role.toLowerCase()}`} data-event-id={record.event_id}><span class="role">{record.role}</span><span class="text sensitive">{record.text}</span></div>
     {/each}
   </div>
 </article>

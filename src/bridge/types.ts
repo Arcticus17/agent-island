@@ -75,6 +75,7 @@ export interface UsageInfo {
 export interface AgentView {
   id: string;
   name: string;
+  can_restart?: boolean;
   state: AgentState;
   display_status: DisplayStatus;
   active_session: SessionView | null;
@@ -230,6 +231,7 @@ function isAgentView(value: unknown): value is AgentView {
     isObject(value) &&
     typeof value.id === "string" &&
     typeof value.name === "string" &&
+    (value.can_restart === undefined || typeof value.can_restart === "boolean") &&
     isAgentState(value.state) &&
     isEnumValue(value.display_status, DISPLAY_STATUSES) &&
     (value.active_session === null || isSessionView(value.active_session)) &&
@@ -264,7 +266,8 @@ export function assertSupportedSnapshot(snapshot: unknown): AgentViewSnapshot {
 
 export type HookEvent =
   | { kind: "stop"; session: string }
-  | { kind: "notification"; message: string; session: string };
+  | { kind: "notification"; message: string; session: string }
+  | { kind: "approval"; approval: HookApproval };
 
 export interface HookApproval {
   id: string;

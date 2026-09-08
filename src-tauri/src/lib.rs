@@ -671,7 +671,7 @@ fn scan_agents(
         &session_candidates,
         &acquisition_issues,
     );
-    attach_usage_to_snapshot(&mut snapshot, &agents);
+    attach_runtime_metadata_to_snapshot(&mut snapshot, &agents);
     for agent in &snapshot.agents {
         if let Some(view) = &agent.diagnostic {
             diagnostic_records.push(interface::diagnostics::DiagnosticRecord {
@@ -702,16 +702,17 @@ fn scan_agents(
     (agents, snapshot, diagnostics, stats_changed)
 }
 
-fn attach_usage_to_snapshot(
+fn attach_runtime_metadata_to_snapshot(
     snapshot: &mut interface::snapshot::AgentViewSnapshot,
     agents: &[AgentInfo],
 ) {
     for view in &mut snapshot.agents {
-        view.usage = agents
+        let agent = agents
             .iter()
             .find(|agent| agent.id == view.id)
-            .or_else(|| agents.iter().find(|agent| agent.name == view.name))
-            .and_then(|agent| agent.usage.clone());
+            .or_else(|| agents.iter().find(|agent| agent.name == view.name));
+        view.can_restart = agent.is_some_and(|agent| agent.can_restart);
+        view.usage = agent.and_then(|agent| agent.usage.clone());
     }
 }
 
@@ -3107,9 +3108,18 @@ fn respond_hook_approval(
         .approvals
         .lock()
         .map_err(|_| "state lock error".to_string())?;
-    if let Some(approval) = approvals.get_mut(&id) {
-        approval.decision = Some(if allow { "allow" } else { "deny" }.to_string());
-    }
+    set_hook_approval_decision(&mut approvals, &id, if allow { "allow" } else { "deny" })
+}
+
+fn set_hook_approval_decision(
+    approvals: &mut HashMap<String, HookApproval>,
+    id: &str,
+    decision: &str,
+) -> Result<(), String> {
+    let approval = approvals
+        .get_mut(id)
+        .ok_or_else(|| "approval_not_found".to_string())?;
+    approval.decision = Some(decision.to_string());
     Ok(())
 }
 
@@ -4166,6 +4176,15 @@ fn start_global_hotkeys(app: tauri::AppHandle) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn hook_approval_decision_rejects_unknown_id() {
+        let mut approvals = HashMap::new();
+        assert_eq!(
+            set_hook_approval_decision(&mut approvals, "missing", "allow"),
+            Err("approval_not_found".to_string())
+        );
+    }
+
     fn terminal_snapshot(
         turn_id: &str,
         turn: domain::TurnState,
@@ -4194,6 +4213,7 @@ mod tests {
             agents: vec![interface::snapshot::AgentView {
                 id: "codex".into(),
                 name: "Codex CLI".into(),
+                can_restart: false,
                 state: domain::AgentState {
                     process,
                     turn,
@@ -5366,6 +5386,7 @@ mod tests {
             agents: vec![AgentView {
                 id: "codex".into(),
                 name: "Renamed Codex".into(),
+                can_restart: false,
                 state: AgentState::running(TurnState::Executing, AttentionState::None),
                 display_status: DisplayStatus::Working,
                 active_session: Some(active_session),
@@ -5440,7 +5461,7 @@ mod tests {
             current_file: None,
             log_status: None,
             alert: None,
-            can_restart: false,
+            can_restart: true,
             stats: None,
             session_count: 0,
             session_list: Vec::new(),
@@ -5468,12 +5489,13 @@ mod tests {
             &[],
         );
 
-        attach_usage_to_snapshot(&mut snapshot, &agents);
+        attach_runtime_metadata_to_snapshot(&mut snapshot, &agents);
         let serialized = serde_json::to_value(&snapshot.agents[0]).unwrap();
 
         assert_eq!(serialized["usage"]["tokens_total"], 12_345);
         assert_eq!(serialized["usage"]["used_percent"], 42.0);
         assert_eq!(serialized["usage"]["stale"], false);
+        assert_eq!(serialized["can_restart"], true);
     }
 
     #[test]

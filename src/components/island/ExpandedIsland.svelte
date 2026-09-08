@@ -5,18 +5,18 @@
   import SessionCard from "../cards/SessionCard.svelte";
   import StatusCard from "../cards/StatusCard.svelte";
   import UsageCard from "../cards/UsageCard.svelte";
-  let { agents, selectedAgent, session, refreshError, onSelectAgent }: { agents: readonly AgentView[]; selectedAgent: AgentView | null; session: SessionView | null; refreshError: SnapshotRefreshError | null; onSelectAgent: (id: string) => void } = $props();
+  let { agents, selectedAgent, session, refreshError, privacy, onSelectAgent }: { agents: readonly AgentView[]; selectedAgent: AgentView | null; session: SessionView | null; refreshError: SnapshotRefreshError | null; privacy: boolean; onSelectAgent: (id: string) => void } = $props();
 </script>
 
 <section id="expanded-island" class="expanded" aria-label="Agent 详情">
   <nav class="agent-strip" aria-label="切换 Agent">
     {#each agents as agent (agent.id)}
-      <button type="button" class:active={agent.id === selectedAgent?.id} data-agent-id={agent.id} aria-pressed={agent.id === selectedAgent?.id} onclick={() => onSelectAgent(agent.id)}><span class={`mini-dot status-${agent.display_status}`} aria-hidden="true"></span>{agent.name}</button>
+      <button type="button" class:active={agent.id === selectedAgent?.id} data-agent-id={agent.id} aria-pressed={agent.id === selectedAgent?.id} onclick={() => onSelectAgent(agent.id)}><span class={`mini-dot status-${agent.display_status}`} aria-hidden="true"></span><span class="sensitive">{agent.name}</span></button>
     {/each}
   </nav>
   {#if refreshError}<p class="refresh-note" role="status">数据刷新暂时失败，已保留最近状态。</p>{/if}
   {#if selectedAgent && session}
-    <div class="card-grid" data-testid="card-grid"><StatusCard agent={selectedAgent} {session} /><UsageCard agent={selectedAgent} refreshFailed={refreshError !== null} /><SessionCard {session} /><LogCard {session} /></div>
+    <div class="card-grid" data-testid="card-grid"><StatusCard agent={selectedAgent} {session} /><UsageCard agent={selectedAgent} refreshFailed={refreshError !== null} /><SessionCard {session} {privacy} /><LogCard {session} /></div>
   {:else}
     <div class="empty" data-testid="empty-session" role="status"><strong>无法确认当前会话</strong><span>为避免串入历史对话，灵动岛不会显示其他会话内容。</span></div>
   {/if}

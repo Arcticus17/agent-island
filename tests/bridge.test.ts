@@ -48,6 +48,7 @@ const populatedSnapshot = (): AgentViewSnapshot => ({
     {
       id: "codex",
       name: "Codex CLI",
+      can_restart: true,
       state: {
         process: "running",
         turn: "executing",
@@ -133,6 +134,10 @@ describe("Agent Island bridge contract", () => {
     {
       ...populatedSnapshot(),
       agents: [{ ...populatedSnapshot().agents[0], display_status: "busy" }],
+    },
+    {
+      ...populatedSnapshot(),
+      agents: [{ ...populatedSnapshot().agents[0], can_restart: "yes" }],
     },
     {
       ...populatedSnapshot(),
@@ -288,6 +293,7 @@ describe("Agent Island bridge contract", () => {
     ["empty path", "empty path"],
     ["unknown agent", "unknown agent: Other"],
     ["missing command", "no command recorded for this agent"],
+    ["missing approval", "approval_not_found"],
     ["unclassified", "unexpected backend rejection"],
   ])("does not mark deterministic %s failures retryable", async (_case, error) => {
     tauri.invoke.mockRejectedValueOnce(error);
@@ -376,25 +382,64 @@ describe("Agent Island bridge contract", () => {
     expect(bridge.listenerCount()).toBe(0);
   });
 
-  it("filters production hook payloads and calls raw cleanup only once", async () => {
-    const rawUnlisten = vi.fn();
-    let listener: ((event: { payload: unknown }) => void) | undefined;
-    tauri.listen.mockImplementationOnce(async (_name, handler) => {
-      listener = handler;
-      return rawUnlisten;
+  it("filters both production hook channels and calls raw cleanup only once", async () => {
+    const unlistenEvents = vi.fn();
+    const unlistenApprovals = vi.fn();
+    let eventListener: ((event: { payload: unknown }) => void) | undefined;
+    let approvalListener: ((event: { payload: unknown }) => void) | undefined;
+    tauri.listen.mockImplementation(async (name, handler) => {
+      if (name === "hook-event") {
+        eventListener = handler;
+        return unlistenEvents;
+      }
+      approvalListener = handler;
+      return unlistenApprovals;
     });
     const handler = vi.fn<(event: HookEvent) => void>();
     const unlisten = await createTauriBridge().listenHookEvents(handler);
     const event: HookEvent = { kind: "stop", session: "session-1" };
 
-    listener?.({ payload: event });
-    listener?.({ payload: { kind: "notification", session: 7, message: "bad" } });
-    expect(handler).toHaveBeenCalledOnce();
-    expect(handler).toHaveBeenCalledWith(event);
+    eventListener?.({ payload: event });
+    eventListener?.({ payload: { kind: "notification", session: 7, message: "bad" } });
+    approvalListener?.({
+      payload: {
+        id: "approval-1",
+        session: "session-1",
+        tool: "Bash",
+        command: "npm test",
+        cwd: "D:\\work",
+      },
+    });
+    approvalListener?.({ payload: { id: "approval-invalid", command: 7 } });
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenNthCalledWith(1, event);
+    expect(handler).toHaveBeenNthCalledWith(2, {
+      kind: "approval",
+      approval: {
+        id: "approval-1",
+        session: "session-1",
+        tool: "Bash",
+        command: "npm test",
+        cwd: "D:\\work",
+      },
+    });
 
     unlisten();
     unlisten();
-    expect(rawUnlisten).toHaveBeenCalledOnce();
+    expect(unlistenEvents).toHaveBeenCalledOnce();
+    expect(unlistenApprovals).toHaveBeenCalledOnce();
+  });
+
+  it("cleans the event listener when approval listener registration fails", async () => {
+    const unlistenEvents = vi.fn();
+    tauri.listen
+      .mockResolvedValueOnce(unlistenEvents)
+      .mockRejectedValueOnce(new Error("approval_listener_failed"));
+
+    await expect(
+      createTauriBridge().listenHookEvents(vi.fn()),
+    ).rejects.toThrow("approval_listener_failed");
+    expect(unlistenEvents).toHaveBeenCalledOnce();
   });
 
   it("keeps every Tauri API import inside bridge/tauri.ts", () => {

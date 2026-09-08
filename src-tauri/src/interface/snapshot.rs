@@ -51,6 +51,7 @@ pub struct AgentViewSnapshot {
 pub struct AgentView {
     pub id: String,
     pub name: String,
+    pub can_restart: bool,
     pub state: AgentState,
     pub display_status: DisplayStatus,
     pub active_session: Option<SessionView>,
@@ -249,6 +250,7 @@ fn build_agent_view(
     AgentView {
         id: process.identity.agent_id.clone(),
         name: process.name.clone(),
+        can_restart: false,
         display_status: derive_display_status(&state, now_ms),
         state,
         active_session,

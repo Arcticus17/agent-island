@@ -6,7 +6,7 @@
 
 <button class="compact" type="button" data-testid="compact-toggle" aria-expanded={expanded} aria-controls="expanded-island" onclick={onToggle}>
   <span class="orb" aria-hidden="true"></span>
-  <span class="identity"><strong>{agent?.name ?? "暂无 Agent"}</strong><span class="session">{agent?.active_session?.name ?? "当前会话未确认"}</span></span>
+  <span class="identity sensitive"><strong>{agent?.name ?? "暂无 Agent"}</strong><span class="session">{agent?.active_session?.name ?? "当前会话未确认"}</span></span>
   <span class="status" role="status" data-testid="compact-status">{labels[agent?.display_status ?? "idle"]}</span>
   <span class="chevron" aria-hidden="true">{expanded ? "⌃" : "⌄"}</span>
 </button>

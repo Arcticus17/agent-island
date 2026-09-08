@@ -21,6 +21,7 @@ import {
   type AgentViewSnapshot,
   type CommandValue,
   type CommandResult,
+  type HookApproval,
   type HookEvent,
 } from "./types";
 
@@ -79,29 +80,22 @@ function commandInvocation(command: AgentCommand): {
 function commandError(error: unknown): Exclude<CommandResult, { ok: true }> {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
-  const [code, retryable] = normalized.includes("prompt is empty")
-    ? ["prompt_empty", false]
-    : normalized.includes("empty path")
-      ? ["path_empty", false]
-      : normalized.includes("unknown agent")
-        ? ["unknown_agent", false]
-        : normalized.includes("no command recorded")
-          ? ["command_unavailable", false]
-    : normalized.includes("task not found")
-      ? ["task_not_found", false]
-      : normalized.includes("not supported")
-        ? ["not_supported", false]
-        : normalized.includes("permission denied")
-          ? ["permission_denied", false]
-          : normalized.includes("no process found")
-            ? ["no_process_found", true]
-            : normalized.includes("agent is not running")
-              ? ["agent_not_running", true]
-              : normalized.includes("session not found")
-                ? ["session_not_found", true]
-                : normalized.includes("state lock error")
-                  ? ["state_unavailable", true]
-                  : ["command_failed", false];
+  const classifications: ReadonlyArray<readonly [string, string, boolean]> = [
+    ["prompt is empty", "prompt_empty", false],
+    ["empty path", "path_empty", false],
+    ["unknown agent", "unknown_agent", false],
+    ["no command recorded", "command_unavailable", false],
+    ["approval_not_found", "approval_not_found", false],
+    ["task not found", "task_not_found", false],
+    ["not supported", "not_supported", false],
+    ["permission denied", "permission_denied", false],
+    ["no process found", "no_process_found", true],
+    ["agent is not running", "agent_not_running", true],
+    ["session not found", "session_not_found", true],
+    ["state lock error", "state_unavailable", true],
+  ];
+  const [, code, retryable] = classifications.find(([needle]) => normalized.includes(needle))
+    ?? ["", "command_failed", false];
   return { ok: false, code, message, retryable };
 }
 
@@ -112,6 +106,18 @@ function isHookEvent(payload: unknown): payload is HookEvent {
   return (
     value.kind === "stop" ||
     (value.kind === "notification" && typeof value.message === "string")
+  );
+}
+
+function isHookApproval(payload: unknown): payload is HookApproval {
+  if (!payload || typeof payload !== "object") return false;
+  const value = payload as Record<string, unknown>;
+  return (
+    typeof value.id === "string" && value.id.length > 0 &&
+    typeof value.session === "string" &&
+    typeof value.tool === "string" &&
+    typeof value.command === "string" &&
+    typeof value.cwd === "string"
   );
 }
 
@@ -134,14 +140,27 @@ export function createTauriBridge(): AgentIslandBridge {
       }
     },
     async listenHookEvents(handler) {
-      const rawUnlisten = await listen<unknown>("hook-event", ({ payload }) => {
+      const unlistenEvents = await listen<unknown>("hook-event", ({ payload }) => {
         if (isHookEvent(payload)) handler(payload);
       });
+      let unlistenApprovals: () => void;
+      try {
+        unlistenApprovals = await listen<unknown>("hook-approval", ({ payload }) => {
+          if (isHookApproval(payload)) handler({ kind: "approval", approval: payload });
+        });
+      } catch (error) {
+        unlistenEvents();
+        throw error;
+      }
       let listening = true;
       return () => {
         if (!listening) return;
         listening = false;
-        rawUnlisten();
+        try {
+          unlistenApprovals();
+        } finally {
+          unlistenEvents();
+        }
       };
     },
     async resizeWindow({ width, height }) {

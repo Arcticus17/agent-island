@@ -1,13 +1,13 @@
 <script lang="ts">
   import type { SessionView } from "../../bridge/types";
-  let { session }: { session: SessionView } = $props();
+  let { session, privacy }: { session: SessionView; privacy: boolean } = $props();
 </script>
 
 <article class="card session-card">
   <span class="eyebrow">活动会话</span>
-  <strong data-testid="active-session-id">{session.id}</strong>
-  <span class="path" data-testid="session-path" title={session.cwd ?? ""}>{session.cwd ?? "未提供工作目录"}</span>
-  {#if session.current_file}<span class="file" title={session.current_file}>{session.current_file}</span>{/if}
+  <strong class="sensitive" data-testid="active-session-id">{session.id}</strong>
+  <span class="path sensitive" data-testid="session-path" title={privacy ? undefined : (session.cwd ?? "")}>{session.cwd ?? "未提供工作目录"}</span>
+  {#if session.current_file}<span class="file sensitive" title={privacy ? undefined : session.current_file}>{session.current_file}</span>{/if}
 </article>
 
 <style>

@@ -7,7 +7,7 @@
 <article class="card status-card">
   <span class="eyebrow">当前状态</span>
   <strong data-testid="expanded-status">{labels[agent.display_status]}</strong>
-  <span data-testid="status-session">{agent.name} · {session.id}</span>
+  <span class="sensitive" data-testid="status-session">{agent.name} · {session.id}</span>
 </article>
 
 <style>
