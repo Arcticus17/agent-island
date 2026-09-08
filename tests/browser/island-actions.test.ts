@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { page } from "vitest/browser";
 
 import App from "../../src/app/App.svelte";
+import type { DiagnosticsBridge, DiagnosticsResponse } from "../../src/bridge/diagnostics";
 import type {
   AgentCommand,
   AgentIslandBridge,
@@ -145,7 +146,7 @@ async function waitFor(check: () => boolean, timeoutMs = 1_000) {
 
 async function renderIsland(
   harness: BridgeHarness,
-  options: { pollIntervalMs?: number } = {},
+  options: { pollIntervalMs?: number; diagnosticsBridge?: DiagnosticsBridge } = {},
 ) {
   const target = document.createElement("div");
   document.body.append(target);
@@ -153,6 +154,7 @@ async function renderIsland(
     target,
     props: {
       bridge: harness.bridge,
+      diagnosticsBridge: options.diagnosticsBridge,
       pollIntervalMs: options.pollIntervalMs ?? 0,
       initiallyExpanded: true,
     },
@@ -160,6 +162,12 @@ async function renderIsland(
   mounted.push(component);
   await waitFor(() => target.querySelector('[data-testid="agent-island"]') !== null);
   return target;
+}
+
+function diagnosticsBridgeFrom(
+  getDiagnostics: () => Promise<DiagnosticsResponse>,
+): DiagnosticsBridge {
+  return { getDiagnostics, exportDiagnostics: async () => undefined };
 }
 
 function approvalEvent(id = "approval-1"): Extract<HookEvent, { kind: "approval" }> {
@@ -257,6 +265,90 @@ describe("Agent Island commands", () => {
     await waitFor(() => stop!.dataset.actionState === "succeeded");
     await waitFor(() => target.querySelector('[data-testid="compact-status"]')?.textContent === "已停止");
     expect(target.textContent).toContain("Stopped snapshot marker");
+  });
+
+  it("finishes a successful stop even while the supplementary diagnostics request is pending", async () => {
+    const pendingDiagnostics = deferred<DiagnosticsResponse>();
+    const postStopDiagnostics = deferred<DiagnosticsResponse>();
+    let diagnosticCalls = 0;
+    const harness = createBridgeHarness(
+      [snapshot(100), snapshot(200, "stopped", "Stopped without diagnostics")],
+      [{ ok: true }],
+    );
+    const target = await renderIsland(harness, {
+      diagnosticsBridge: diagnosticsBridgeFrom(() => {
+        diagnosticCalls += 1;
+        return diagnosticCalls === 1
+          ? pendingDiagnostics.promise
+          : postStopDiagnostics.promise;
+      }),
+    });
+    await waitFor(() => diagnosticCalls === 1);
+
+    const stop = target.querySelector<HTMLButtonElement>('[data-testid="action-stop"]')!;
+    stop.click();
+    await waitFor(() => stop.dataset.actionState === "confirming");
+    stop.click();
+
+    await waitFor(() => stop.dataset.actionState === "succeeded");
+    await waitFor(() => target.querySelector('[data-testid="compact-status"]')?.textContent === "已停止");
+    expect(target.textContent).toContain("Stopped without diagnostics");
+    expect(diagnosticCalls).toBe(1);
+
+    pendingDiagnostics.resolve({
+      generated_at_ms: 100,
+      issues: [{
+        adapter: "codex",
+        code: "pre_stop_diagnostic",
+        freshness: { observed_at_ms: 100, stale: false },
+        event_type: null,
+        event_count: 0,
+        message_count: 0,
+      }],
+    });
+    await waitFor(() => diagnosticCalls === 2);
+    expect(target.textContent).not.toContain("pre_stop_diagnostic");
+    expect(target.textContent).toContain("正在读取诊断信息");
+
+    postStopDiagnostics.resolve({
+      generated_at_ms: 201,
+      issues: [{
+        adapter: "codex",
+        code: "post_stop_diagnostic",
+        freshness: { observed_at_ms: 201, stale: false },
+        event_type: null,
+        event_count: 0,
+        message_count: 0,
+      }],
+    });
+    await waitFor(() => target.textContent?.includes("post_stop_diagnostic") === true);
+    expect(target.textContent).not.toContain("pre_stop_diagnostic");
+  });
+
+  it("keeps diagnostics polling single-flight when a request does not settle", async () => {
+    const firstDiagnostics = deferred<DiagnosticsResponse>();
+    const trailingDiagnostics = deferred<DiagnosticsResponse>();
+    let diagnosticCalls = 0;
+    const harness = createBridgeHarness([snapshot(100)]);
+    await renderIsland(harness, {
+      pollIntervalMs: 20,
+      diagnosticsBridge: diagnosticsBridgeFrom(() => {
+        diagnosticCalls += 1;
+        return diagnosticCalls === 1
+          ? firstDiagnostics.promise
+          : trailingDiagnostics.promise;
+      }),
+    });
+
+    await waitFor(() => diagnosticCalls === 1);
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    expect(harness.snapshotCalls()).toBeGreaterThan(1);
+    expect(diagnosticCalls).toBe(1);
+
+    firstDiagnostics.resolve({ generated_at_ms: 100, issues: [] });
+    await waitFor(() => diagnosticCalls === 2);
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    expect(diagnosticCalls).toBe(2);
   });
 
   it("cancels stop confirmation when the selected agent changes", async () => {

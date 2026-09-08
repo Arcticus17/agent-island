@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { AgentView, SessionView } from "../../bridge/types";
   import type { SnapshotRefreshError } from "../../stores/agent-store";
+  import CardBoundary from "../common/CardBoundary.svelte";
   import LogCard from "../cards/LogCard.svelte";
   import SessionCard from "../cards/SessionCard.svelte";
   import StatusCard from "../cards/StatusCard.svelte";
@@ -16,7 +17,20 @@
   </nav>
   {#if refreshError}<p class="refresh-note" role="status">数据刷新暂时失败，已保留最近状态。</p>{/if}
   {#if selectedAgent && session}
-    <div class="card-grid" data-testid="card-grid"><StatusCard agent={selectedAgent} {session} /><UsageCard agent={selectedAgent} refreshFailed={refreshError !== null} /><SessionCard {session} {privacy} /><LogCard {session} /></div>
+    <div class="card-grid" data-testid="card-grid">
+      <CardBoundary cardName="状态卡片" errorCode="status_card_render_failed">
+        <StatusCard agent={selectedAgent} {session} />
+      </CardBoundary>
+      <CardBoundary cardName="用量卡片" errorCode="usage_card_render_failed">
+        <UsageCard agent={selectedAgent} refreshFailed={refreshError !== null} />
+      </CardBoundary>
+      <CardBoundary cardName="会话卡片" errorCode="session_card_render_failed" wide>
+        <SessionCard {session} {privacy} />
+      </CardBoundary>
+      <CardBoundary cardName="日志卡片" errorCode="log_card_render_failed" wide>
+        <LogCard {session} />
+      </CardBoundary>
+    </div>
   {:else}
     <div class="empty" data-testid="empty-session" role="status"><strong>无法确认当前会话</strong><span>为避免串入历史对话，灵动岛不会显示其他会话内容。</span></div>
   {/if}

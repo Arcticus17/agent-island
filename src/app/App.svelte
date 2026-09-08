@@ -5,18 +5,22 @@
   import ExpandedIsland from "../components/island/ExpandedIsland.svelte";
   import ApprovalStack from "../components/approvals/ApprovalStack.svelte";
   import ActionBar from "../components/controls/ActionBar.svelte";
+  import DiagnosticsPanel from "../components/diagnostics/DiagnosticsPanel.svelte";
   import NotificationStack from "../components/notifications/NotificationStack.svelte";
   import type { ApprovalItem, CommandFailure, CommandUiState, NotificationItem } from "../components/events/types";
   import { tauriBridge } from "../bridge/tauri";
-  import type { AgentIslandBridge, CommandResult, HookEvent } from "../bridge/types";
+  import { tauriDiagnosticsBridge, type DiagnosticsBridge } from "../bridge/diagnostics";
+  import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent } from "../bridge/types";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
 
   let {
     bridge = tauriBridge,
+    diagnosticsBridge = tauriDiagnosticsBridge,
     pollIntervalMs = 1_500,
     initiallyExpanded = false,
   }: {
     bridge?: AgentIslandBridge;
+    diagnosticsBridge?: DiagnosticsBridge;
     pollIntervalMs?: number;
     initiallyExpanded?: boolean;
   } = $props();
@@ -45,11 +49,55 @@
   let hookState = $state<CommandUiState>("idle");
   let hookError = $state<CommandFailure | null>(null);
   let listenerError = $state(false);
+  let diagnosticIssues = $state<DiagnosticView[]>([]);
+  let diagnosticStatus = $state<"loading" | "ready" | "failed">("loading");
+  let diagnosticRequest = 0;
+  let diagnosticInFlight: Promise<void> | null = null;
+  let diagnosticRefreshQueued = false;
+  let disposed = false;
   let resizeRevision = 0;
   let notificationSequence = 0;
   let notificationAutoExpanded = false;
   const notificationTimers = new Map<string, { handle: number; remainingMs: number; startedAt: number; pauseCount: number }>();
   const collapsedWindowHeight = 60;
+
+  async function loadDiagnostics(): Promise<void> {
+    if (disposed) return;
+    if (diagnosticInFlight) {
+      diagnosticRefreshQueued = true;
+      diagnosticStatus = "loading";
+      void syncWindowSize();
+      return;
+    }
+    diagnosticRefreshQueued = false;
+    const request = ++diagnosticRequest;
+    if (diagnosticStatus !== "ready") diagnosticStatus = "loading";
+    const operation = (async () => {
+      try {
+        const response = await diagnosticsBridge.getDiagnostics();
+        if (disposed || request !== diagnosticRequest || diagnosticRefreshQueued) return;
+        diagnosticIssues = response.issues;
+        diagnosticStatus = "ready";
+      } catch {
+        if (disposed || request !== diagnosticRequest || diagnosticRefreshQueued) return;
+        diagnosticIssues = [];
+        diagnosticStatus = "failed";
+      }
+      void syncWindowSize();
+    })();
+    diagnosticInFlight = operation;
+    try {
+      await operation;
+    } finally {
+      if (diagnosticInFlight === operation) diagnosticInFlight = null;
+      if (diagnosticRefreshQueued && !disposed) void loadDiagnostics();
+    }
+  }
+
+  async function refreshAll(): Promise<void> {
+    await store.refresh();
+    if (!disposed) void loadDiagnostics();
+  }
 
   async function syncWindowSize(): Promise<void> {
     const revision = ++resizeRevision;
@@ -186,7 +234,7 @@
 
   function handleHookEvent(event: HookEvent): void {
     if (event.kind === "stop") {
-      void store.refresh();
+      void refreshAll();
     } else if (event.kind === "notification") {
       pushNotification(event);
     } else {
@@ -220,7 +268,7 @@
         : item);
     }
     release();
-    if (result.ok) void store.refresh();
+    if (result.ok) void refreshAll();
     void syncWindowSize();
   }
 
@@ -228,6 +276,7 @@
     const result = await bridge.runCommand(command);
     if (result.ok && (command.name === "stop_agent" || command.name === "restart_agent")) {
       await store.refresh();
+      if (!disposed) void loadDiagnostics();
     }
     return result;
   }
@@ -306,7 +355,6 @@
 
   onMount(() => {
     let stopListening: (() => void) | undefined;
-    let disposed = false;
     const unsubscribe = store.subscribe((next) => {
       if (focusMode === "errors") {
         const errorAgent = next.snapshot?.agents.find((agent) =>
@@ -329,12 +377,14 @@
       expanded = true;
       void syncWindowSize();
     });
-    void store.refresh();
+    void refreshAll();
     const timer = pollIntervalMs > 0
-      ? window.setInterval(() => void store.refresh(), pollIntervalMs)
+      ? window.setInterval(() => void refreshAll(), pollIntervalMs)
       : undefined;
     return () => {
       disposed = true;
+      diagnosticRequest += 1;
+      diagnosticRefreshQueued = false;
       resizeRevision += 1;
       stopListening?.();
       for (const timer of notificationTimers.values()) window.clearTimeout(timer.handle);
@@ -365,6 +415,12 @@
         refreshError={viewState.refreshError}
         {privacy}
         onSelectAgent={(id) => store.selectAgent(id)}
+      />
+      <DiagnosticsPanel
+        issues={diagnosticIssues}
+        status={diagnosticStatus}
+        exportDiagnostics={(destination) => diagnosticsBridge.exportDiagnostics(destination)}
+        onLayoutChange={() => void syncWindowSize()}
       />
       {#key viewState.selectedAgent?.id}
         <ActionBar
