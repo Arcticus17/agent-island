@@ -4,7 +4,7 @@
 
 ## 功能
 
-- 常驻灵动岛：悬停展开、拖拽记忆、多显示器、托盘、开机自启
+- 常驻灵动岛：点击顶部展开/收起，支持托盘和全局呼出
 - Agent 监控：Claude Code、Codex CLI、OpenCode、Hermes
 - 会话一致性：灵动岛仅显示可靠匹配的当前会话；历史会话仅在总览中显示。匹配不明确时会显示“无法确认当前会话”，不会选择最新的历史记录代替。
 - 事件通知：报错/完成/等待通知卡，按 Agent 分组折叠，自动展开与收起
@@ -13,39 +13,43 @@
 - 终端跳回：一键跳回 Agent 所在终端窗口
 - 会话总览：独立窗口实时列出会话、日志、统计，可发消息、恢复、停止、重启
 - 全局快捷键：`Ctrl+Alt+I` 呼出/隐藏小岛，`Ctrl+Alt+O` 打开总览
-- 隐私遮罩：录屏/共享时自动模糊日志与路径
-- 专注模式：仅报错、仅固定 Agent、静音、勿扰时段
-- 主题定制：透明度、圆角、宽度、位置吸附、任务栏显示
+- 隐私遮罩：在设置中手动开启，模糊日志与路径
+- 专注模式：全部状态、聚焦错误、静音通知
+- 自适应布局：卡片拖拽或按钮排序，尺寸切换、隐藏与恢复，自动保存
+- 主题：石墨玻璃与纯黑；尊重系统减少动画偏好，总览保留系统浅色模式
 - 统计报表：按天/周查看各 Agent 用时、报错数、完成数
 
 ## 安装
 
 从 GitHub Release 下载：
 
-- `Agent.Island_1.6.1_x64-setup.exe`：Windows 安装器
-- `Agent.Island_1.6.1_x64_en-US.msi`：MSI 安装包
+- `*-setup.exe`：Windows 安装器
+- `*.msi`：MSI 安装包
 
 日常使用直接运行安装后的 `Agent Island` 即可。
+
+仓库当前版本为 1.8.2，仓库进度不代表对应安装包已经发布。当前分支的原生 DPI、多显示器及安装/卸载验收仍待完成，详见[验收记录](docs/verification/2026-09-04-adaptive-ui.md)。
+
+## 布局与外观
+
+展开小岛后点击“编辑”，通过拖拽或每张卡的上移/下移按钮调整顺序，并选择紧凑、标准或宽版尺寸。用量、会话、统计卡可隐藏，在“已隐藏”区恢复；状态和日志卡始终保留。身份栏、审批与核心操作不参加卡片排序。
+
+提供“极简”“监控”“调试”三个预设；“重置”恢复当前选中的预设，自定义配置重新启动后默认以监控作为重置目标。窄窗口自动变成单列，保存的顺序与尺寸不会被覆盖。
+
+布局更改自动保存在当前应用的本地存储。配置损坏时尝试保留原文备份并回退监控预设；存储失败会提示“已应用，但暂时未保存”，下次调整会重试。在“设置 → 外观”切换石墨玻璃/纯黑，在同一菜单开启隐私遮罩或专注模式。
 
 ## 快捷键
 
 | 按键 | 功能 |
 | --- | --- |
-| 滚轮 | 切换 Agent |
-| `空格` | 展开/收起 |
-| `1-9` | 直达指定 Agent |
-| `方向键` | 切换 Agent / 会话 |
-| `P` | 隐私遮罩 |
-| `F` | 专注模式 |
-| `Q` | 自动勿扰开关 |
-| `M` | 快捷菜单 |
-| `V` | 显示字段 |
+| `Tab`、`Enter` / `空格` | 聚焦并操作按钮；在顶部按钮上展开/收起 |
+| 总览会话列表中的方向键、`Home` / `End` | 切换会话 |
 | `Ctrl+Alt+I` | 全局呼出/隐藏小岛 |
 | `Ctrl+Alt+O` | 全局打开总览 |
 
-右键或长按小岛也会弹出快捷菜单。
+以上以默认 Svelte 界面为准；旧界面特有的单字母快捷键和右键菜单不属于当前默认入口。
 
-点击展开面板的“事件”按钮即可接入 Claude hooks（会写入 `~/.claude/settings.json`，原文件自动备份为 `settings.json.agent-island.bak`）。
+在“设置 → Claude 事件”检查或切换 hooks 接入（会写入 `~/.claude/settings.json`，原文件自动备份为 `settings.json.agent-island.bak`）。
 
 ## 配置
 
@@ -62,8 +66,13 @@
 
 ## 开发
 
+技术栈为 Tauri 2 / Rust + Svelte 5 / TypeScript + Vite。前端通过 `src/bridge` 与后端通信，状态协调、布局模型和主题令牌分别独立维护，方便局部替换。当前验收目标是 Windows，不代表已支持 macOS。
+
+准备 Node.js 22.12+（22.x）、Rust MSVC 工具链、Visual Studio C++ Build Tools 和 WebView2。首次安装测试浏览器需要联网。
+
 ```bash
-npm install
+npm ci
+npx playwright install chromium
 npm run tauri dev
 ```
 
@@ -71,10 +80,16 @@ npm run tauri dev
 
 ```bash
 npm run tauri build
+npm run check
+npm test
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
-GitHub Actions 会在推送 `v*` 标签时自动构建 EXE/MSI 并发布到 Release。
+`npm test` 包含旧前端测试、单元测试、浏览器交互、视觉比对和 Rust 测试。Windows 终端须先加载 Visual Studio 开发环境。打包可能需要联网下载 NSIS/WiX 工具；构建产物位于 `src-tauri/target/release/bundle`。
+
+视觉回归使用 Windows 与依赖锁定的 Playwright Chromium；运行 `npm run test:visual` 比对。仅在人工检查确认界面变化后执行 `npm run test:visual:update` 更新基线。不同操作系统或字体环境的截图不能直接当作同一验收环境。
+
+GitHub Actions 在推送 `v*` 标签时，先执行构建、类型检查与完整回归，再构建 EXE/MSI 并发布到 Release。本地验证不会自动发布。
 
 ### 临时回退旧界面
 

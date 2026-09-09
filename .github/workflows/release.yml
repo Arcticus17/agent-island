@@ -18,7 +18,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Setup Rust
@@ -35,8 +35,14 @@ jobs:
       - name: Frontend build
         run: npm run build
 
-      - name: Backend tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+      - name: Install pinned test browser
+        run: npx playwright install chromium
+
+      - name: Type and Svelte checks
+        run: npm run check
+
+      - name: Full regression including visual comparison
+        run: npm test
 
       - name: Build and publish installers
         uses: tauri-apps/tauri-action@v0
