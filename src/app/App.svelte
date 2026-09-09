@@ -21,6 +21,7 @@
   import { loadLayout, saveLayout } from "../layout/persistence";
   import type { CardPlacement, LayoutConfigV1 } from "../layout/schema";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
+  import { preferredAgent } from "../models/agent-priority";
 
   let {
     bridge = tauriBridge,
@@ -148,8 +149,18 @@
 
   function toggleExpanded(): void {
     notificationAutoExpanded = false;
+    if (!expanded) selectDefaultAgent();
     expanded = !expanded;
     void syncWindowSize();
+  }
+
+  function selectDefaultAgent(): void {
+    const current = store.current();
+    // Explicit error focus keeps its existing behavior. Failed refreshes do not
+    // provide new evidence for automatically switching the displayed agent.
+    if (focusMode === "errors" || current.refreshError || !current.snapshot) return;
+    const preferred = preferredAgent(current.snapshot, current.selectedAgentId);
+    if (preferred) store.selectAgent(preferred.id);
   }
 
   function notificationAgent(event: Extract<HookEvent, { kind: "notification" }>) {
@@ -389,6 +400,7 @@
   onMount(() => {
     let stopListening: (() => void) | undefined;
     const unsubscribe = store.subscribe((next) => {
+      const firstAgents = !viewState.snapshot?.agents.length && !!next.snapshot?.agents.length;
       if (focusMode === "errors") {
         const errorAgent = next.snapshot?.agents.find((agent) =>
           agent.display_status === "error" && !agent.freshness.stale,
@@ -399,6 +411,7 @@
         }
       }
       viewState = next;
+      if (firstAgents) selectDefaultAgent();
       void syncWindowSize();
     });
     void bridge.listenHookEvents(handleHookEvent).then((unlisten) => {

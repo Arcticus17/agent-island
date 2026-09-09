@@ -144,6 +144,38 @@ afterEach(async () => {
 });
 
 describe("read-only Agent Island", () => {
+  it("initially selects the working agent even when another agent is listed first", async () => {
+    const { target } = await renderIsland([snapshot(100, ["beta", "alpha"])]);
+    expect(target.querySelector('[data-testid="active-session-id"]')?.textContent).toBe("alpha-live");
+    expect(target.querySelector('[data-testid="compact-status"]')?.textContent).toBe("工作中");
+  });
+
+  it("selects the most recently finished task when nobody is working", async () => {
+    const data = snapshot(1000);
+    for (const [index, agent] of data.agents.entries()) {
+      agent.state.turn = "succeeded";
+      agent.state.result_at_ms = 100 + index * 500;
+      agent.display_status = "idle";
+      agent.active_session!.display_status = "idle";
+    }
+    const { target } = await renderIsland([data]);
+    expect(target.querySelector('[data-testid="active-session-id"]')?.textContent).toBe("beta-live");
+  });
+
+  it("retains manual selection through polling and reapplies priority on reopening", async () => {
+    const { target } = await renderIsland(
+      [snapshot(100), snapshot(200, ["beta", "alpha"], true)], { pollIntervalMs: 120 },
+    );
+    target.querySelector<HTMLButtonElement>('[data-agent-id="beta"]')!.click();
+    await waitFor(() => target.querySelector('[data-event-id="beta-live-event-new"]') !== null);
+    expect(target.querySelector('[data-testid="active-session-id"]')?.textContent).toBe("beta-live");
+    const toggle = target.querySelector<HTMLButtonElement>('[data-testid="compact-toggle"]')!;
+    toggle.click();
+    await waitFor(() => toggle.getAttribute("aria-expanded") === "false");
+    toggle.click();
+    await waitFor(() => target.querySelector('[data-testid="active-session-id"]')?.textContent === "alpha-live");
+  });
+
   it("starts in the system Chrome provider and renders the active display status", async () => {
     await page.viewport(1_440, 900);
     const { target } = await renderIsland([snapshot(100)]);
