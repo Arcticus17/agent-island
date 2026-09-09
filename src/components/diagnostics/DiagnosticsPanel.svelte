@@ -320,7 +320,10 @@
     flex: 0 0 auto;
     padding: 6px 11px;
     cursor: pointer;
-    transition: background .15s ease, border-color .15s ease, transform .1s ease;
+    transition:
+      background var(--duration-normal) var(--motion-spring),
+      border-color var(--duration-normal) var(--motion-spring),
+      transform var(--duration-fast) var(--motion-spring);
   }
 
   button:hover:not(:disabled) {

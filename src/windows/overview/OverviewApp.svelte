@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
+  import "../../themes/tokens.css";
+  import "../../themes/graphite.css";
+  import "../../themes/pure-black.css";
   import type {
     AgentCommand,
     AgentIslandBridge,
@@ -319,7 +322,7 @@
   });
 </script>
 
-<div class="overview" data-testid="overview-app">
+<div class="overview" data-testid="overview-app" data-theme-style="graphite">
   <header>
     <div><span class="eyebrow">AGENT ISLAND</span><h1>会话总览</h1></div>
     <div class="header-actions">
@@ -413,14 +416,14 @@
   :global(html), :global(body), :global(#overview-root) { height: 100%; }
   :global(body) { margin: 0; }
   :global(*) { box-sizing: border-box; }
-  .overview { --bg:#12151b; --surface:#1b2029; --raised:#252b36; --border:rgba(255,255,255,.1); --text:#f5f7fb; --muted:#9da6b5; --accent:#7dd3fc; --green:#4ade80; --yellow:#fbbf24; --red:#fb7185; --error-text:#fecdd3; --error-surface:rgba(190,18,60,.14); display:flex; flex-direction:column; height:100%; overflow:hidden; color:var(--text); background:radial-gradient(circle at 50% -20%,rgba(56,189,248,.14),transparent 45%),var(--bg); font:500 13px/1.45 Inter,system-ui,"Segoe UI",sans-serif; }
+  .overview { --bg:var(--surface-island); --surface:var(--surface-card); --raised:var(--surface-raised); --border:var(--border-subtle); --text:var(--text-primary); --muted:var(--text-secondary); --accent:var(--accent-primary); --green:var(--status-done); --yellow:var(--status-waiting); --red:var(--status-error); --error-text:var(--refresh-error-text); --error-surface:var(--refresh-error-surface); display:flex; flex-direction:column; height:100%; overflow:hidden; color:var(--text); background:var(--island-background); font:500 13px/1.45 Inter,system-ui,"Segoe UI",sans-serif; }
   header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:15px 18px 12px; border-bottom:1px solid var(--border); }
   h1,h2,h3,p { margin:0; } h1 { font-size:16px; } h2 { font-size:14px; } h3 { padding:9px 11px; font-size:12px; border-bottom:1px solid var(--border); }
   .eyebrow { display:block; color:var(--muted); font-size:9px; letter-spacing:.14em; }
   .header-actions,.detail-actions,.composer,.stats-toolbar { display:flex; align-items:center; gap:8px; }
   .header-actions { justify-content:flex-end; } .summary,time { color:var(--muted); font-size:10px; }
-  button,input { min-height:34px; border:1px solid var(--border); border-radius:9px; color:var(--text); background:rgba(255,255,255,.06); font:inherit; }
-  button { padding:6px 11px; cursor:pointer; } button:hover:not(:disabled),button.active { background:rgba(255,255,255,.11); border-color:color-mix(in srgb,var(--accent) 40%,transparent); } button:disabled { opacity:.4; cursor:default; } button:focus-visible,input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  button,input { min-height:34px; border:1px solid var(--border); border-radius:var(--radius-control); color:var(--text); background:var(--control-surface); font:inherit; }
+  button { padding:6px 11px; cursor:pointer; } button:hover:not(:disabled),button.active { background:var(--control-hover); border-color:color-mix(in srgb,var(--accent) 40%,transparent); } button:disabled { opacity:.4; cursor:default; } button:focus-visible,input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   main { min-height:0; flex:1; display:grid; grid-template-columns:minmax(210px,.8fr) minmax(0,1.4fr); }
   .session-list { min-height:0; overflow:auto; padding:10px; border-right:1px solid var(--border); }
   .session-row { width:100%; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:9px; margin-bottom:5px; padding:10px; text-align:left; background:transparent; border-color:transparent; }
@@ -432,7 +435,7 @@
   .path { overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
   .detail-actions { flex-wrap:wrap; } .danger { color:var(--error-text); } .action-error { color:var(--error-text); font-size:10px; }
   .composer input { min-width:0; flex:1; padding:7px 10px; }
-  .log { min-height:0; flex:1; overflow:auto; display:flex; flex-direction:column; gap:7px; padding:9px; border:1px solid var(--border); border-radius:12px; background:rgba(0,0,0,.18); overscroll-behavior:contain; }
+  .log { min-height:0; flex:1; overflow:auto; display:flex; flex-direction:column; gap:7px; padding:9px; border:1px solid var(--border); border-radius:12px; background:var(--surface-log); overscroll-behavior:contain; }
   .message { max-width:88%; padding:8px 10px; border:1px solid var(--border); border-radius:11px; background:var(--surface); white-space:pre-wrap; overflow-wrap:anywhere; } .message span { display:block; margin-bottom:2px; color:var(--accent); font-size:9px; } .message.role-user { align-self:flex-end; background:color-mix(in srgb,var(--accent) 12%,var(--surface)); } .message.role-user span { text-align:right; } .message p { font-size:12px; } .send-output { opacity:.86; }
   .empty,.notice { padding:20px; color:var(--muted); text-align:center; } .notice.error { color:var(--error-text); }
   .refresh-warning { padding:7px 14px; color:var(--error-text); background:var(--error-surface); font-size:11px; }
@@ -440,6 +443,4 @@
   .sr-only { position:absolute; width:1px; height:1px; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
   @media (max-width:620px) { main { grid-template-columns:1fr; grid-template-rows:minmax(120px,36%) minmax(0,1fr); } .session-list { border-right:0; border-bottom:1px solid var(--border); } }
   @media (max-width:420px) { header { align-items:flex-start; flex-direction:column; padding-inline:13px; } .header-actions { width:100%; justify-content:flex-start; flex-wrap:wrap; } .detail { padding-inline:11px; } .composer { align-items:stretch; flex-direction:column; } .composer button { width:100%; } .stat-row { grid-template-columns:1fr 1fr; } }
-  @media (prefers-color-scheme:light) { .overview { --bg:#f4f4f7; --surface:#fff; --raised:#e9eef6; --border:rgba(0,0,0,.1); --text:#1c1c1e; --muted:#6b7280; --error-text:#9f1239; --error-surface:#ffe4e6; } }
-  @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto!important; transition:none!important; } }
 </style>

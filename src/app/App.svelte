@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
-  import "../themes/graphite-glass.css";
+  import "../themes/tokens.css";
+  import "../themes/graphite.css";
+  import "../themes/pure-black.css";
   import CompactIsland from "../components/island/CompactIsland.svelte";
   import ApprovalStack from "../components/approvals/ApprovalStack.svelte";
   import LogCard from "../components/cards/LogCard.svelte";
@@ -537,7 +539,7 @@
     </aside>
   {/if}
 {:else}
-  <div class="island-loading" aria-live="polite" bind:this={islandElement}>正在连接 Agent Island…</div>
+  <div class="island-loading" data-theme-style={themeStyle} aria-live="polite" bind:this={islandElement}>正在连接 Agent Island…</div>
 {/if}
 
 <style>
@@ -550,14 +552,14 @@
   .agent-island {
     overflow: hidden;
     border: 1px solid var(--island-border-subtle);
-    border-radius: 24px;
+    border-radius: var(--radius-island);
     background: var(--island-background);
     box-shadow: var(--island-shadow);
-    backdrop-filter: blur(22px) saturate(125%);
+    backdrop-filter: var(--effect-backdrop);
   }
   .agent-island.expanded { max-height: 100vh; overflow-y: auto; scrollbar-color: var(--island-scrollbar-thumb) var(--island-scrollbar-track); }
-  :global(.agent-island.expanded > .compact) { position: sticky; top: 0; z-index: 7; background: color-mix(in srgb, var(--island-surface) 94%, transparent); backdrop-filter: blur(18px); }
-  :global(.agent-island.expanded > .action-bar) { position: sticky; bottom: 0; z-index: 7; background: color-mix(in srgb, var(--island-surface) 94%, transparent); backdrop-filter: blur(18px); }
+  :global(.agent-island.expanded > .compact) { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface-sticky); backdrop-filter: var(--effect-backdrop); }
+  :global(.agent-island.expanded > .action-bar) { position: sticky; bottom: 0; z-index: var(--z-sticky); background: var(--surface-sticky); backdrop-filter: var(--effect-backdrop); }
   .adaptive-details { min-width: 0; border-top: 1px solid var(--island-border-subtle); padding: 12px; }
   .agent-strip { display: flex; gap: 7px; padding: 0 0 11px; overflow-x: auto; scrollbar-width: none; }
   .agent-strip button { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid transparent; border-radius: 999px; color: var(--island-text-secondary); background: transparent; cursor: pointer; }
@@ -582,7 +584,7 @@
   :global(.adaptive-details .layout-card .card) { width: 100%; height: 100%; box-sizing: border-box; border: 0; padding: 0; background: transparent; }
   :global(.adaptive-details .layout-card .session-card),
   :global(.adaptive-details .layout-card .log-card) { grid-column: auto; }
-  .event-layer { position: fixed; top: 66px; left: 50%; z-index: 20; width: min(696px, calc(100vw - 48px)); max-height: calc(100dvh - 78px); overflow-y: auto; overscroll-behavior: contain; transform: translateX(-50%); pointer-events: auto; scrollbar-color: var(--island-scrollbar-thumb) transparent; }
+  .event-layer { position: fixed; top: 66px; left: 50%; z-index: var(--z-event); width: min(696px, calc(100vw - 48px)); max-height: calc(100dvh - 78px); overflow-y: auto; overscroll-behavior: contain; transform: translateX(-50%); pointer-events: auto; scrollbar-color: var(--island-scrollbar-thumb) transparent; }
   .listener-error { margin: 7px 0 0; padding: 10px 12px; border: 1px solid var(--island-border-subtle); border-radius: 12px; color: var(--island-refresh-error-text); background: var(--island-refresh-error-surface); font-size: 11px; }
   :global(.privacy .sensitive) { filter: blur(5px); user-select: none; pointer-events: none; }
   .island-loading { padding: 12px 18px; border: 1px solid var(--island-border-subtle); border-radius: 999px; background: var(--island-surface); }

@@ -1,0 +1,57 @@
+.agent-island[data-theme-style="graphite"],
+.event-layer[data-theme-style="graphite"],
+.overview[data-theme-style="graphite"],
+.island-loading[data-theme-style="graphite"] {
+  --surface-island: rgba(18, 22, 28, 0.96);
+  --surface-card: rgba(31, 37, 46, 0.92);
+  --surface-raised: rgba(39, 45, 56, 0.76);
+  --surface-log: rgba(4, 8, 14, 0.56);
+  --surface-event: rgba(25, 30, 38, 0.98);
+  --surface-notification: rgba(26, 31, 39, 0.96);
+  --surface-sticky: rgba(18, 22, 28, 0.98);
+  --text-primary: #f5f7fb;
+  --text-secondary: #aab4c3;
+  --text-tertiary: #7f8a9a;
+  --text-log: #dce4ef;
+  --text-error: #fecdd3;
+  --border-subtle: rgba(255, 255, 255, 0.11);
+  --border-event: rgba(125, 211, 252, 0.26);
+  --border-log-divider: rgba(255, 255, 255, 0.06);
+  --accent-primary: #7dd3fc;
+  --status-idle: #94a3b8;
+  --status-working: #38bdf8;
+  --status-error: #fb7185;
+  --status-done: #4ade80;
+  --status-waiting: #fbbf24;
+  --status-stopped: #78869a;
+  --refresh-error-text: #fecdd3;
+  --refresh-error-surface: rgba(190, 18, 60, 0.18);
+  --control-surface: rgba(255, 255, 255, 0.065);
+  --control-hover: rgba(255, 255, 255, 0.12);
+  --scrollbar-thumb: rgba(148, 163, 184, 0.38);
+  --scrollbar-track: transparent;
+  --elevation-island: 0 18px 56px rgba(0, 0, 0, 0.4), inset 0 1px rgba(255, 255, 255, 0.065);
+  --elevation-event: 0 14px 32px rgba(0, 0, 0, 0.36);
+  --effect-backdrop: blur(22px) saturate(125%);
+  --log-role-user: #c4b5fd;
+  --island-background: radial-gradient(circle at 14% -20%, color-mix(in srgb, var(--island-status-current) 22%, transparent), transparent 42%), var(--surface-island);
+}
+
+/* Preserve the overview window's existing system light-mode preference. */
+@media (prefers-color-scheme: light) {
+  .overview[data-theme-style="graphite"] {
+    --surface-island: #f4f4f7;
+    --surface-card: #ffffff;
+    --surface-raised: #e9eef6;
+    --surface-log: #edf0f5;
+    --text-primary: #1c1c1e;
+    --text-secondary: #6b7280;
+    --text-tertiary: #6b7280;
+    --border-subtle: rgba(0, 0, 0, 0.1);
+    --accent-primary: #0a63d6;
+    --refresh-error-text: #9f1239;
+    --refresh-error-surface: #ffe4e6;
+    --control-surface: rgba(0, 0, 0, 0.045);
+    --control-hover: rgba(0, 0, 0, 0.08);
+  }
+}

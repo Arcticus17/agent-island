@@ -205,6 +205,44 @@ describe("adaptive island responsive layout", () => {
     expect(target.querySelector('[aria-label="当前 Agent 统计"]')?.textContent).toContain("1会话");
   });
 
+  it("switches from graphite glass to a solid pure-black theme", async () => {
+    await page.viewport(520, 900);
+    const { target } = await renderIsland();
+    const island = target.querySelector<HTMLElement>('[data-testid="agent-island"]')!;
+
+    expect(island.dataset.themeStyle).toBe("graphite");
+    expect(getComputedStyle(island).getPropertyValue("--surface-island").trim()).not.toBe("");
+    expect(getComputedStyle(island).backdropFilter).not.toBe("none");
+    if (import.meta.env.VITE_CAPTURE_UI === "1") {
+      await page.screenshot({
+        path: "../../.superpowers/sdd/2026-09-04-adaptive-island-ui/task5-graphite.png",
+      });
+    }
+
+    const settings = target.querySelector<HTMLDetailsElement>("details.settings")!;
+    settings.open = true;
+    settings.dispatchEvent(new Event("toggle"));
+    const theme = settings.querySelectorAll<HTMLSelectElement>("select")[1];
+    theme.value = "pure-black";
+    theme.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitFor(() => island.dataset.themeStyle === "pure-black");
+    settings.open = false;
+    settings.dispatchEvent(new Event("toggle"));
+
+    expect(getComputedStyle(island).getPropertyValue("--surface-island").trim()).toBe("#050506");
+    expect(getComputedStyle(island).backdropFilter).toBe("none");
+    expect(getComputedStyle(island).backgroundImage).toBe("none");
+    if (import.meta.env.VITE_CAPTURE_UI === "1") {
+      await page.screenshot({
+        path: "../../.superpowers/sdd/2026-09-04-adaptive-island-ui/task5-pure-black.png",
+      });
+      await page.viewport(360, 720);
+      await page.screenshot({
+        path: "../../.superpowers/sdd/2026-09-04-adaptive-island-ui/task5-pure-black-narrow.png",
+      });
+    }
+  });
+
   it("keeps edit mode through polling and reports persistence failure without blocking actions", async () => {
     const snapshots = Array.from({ length: 8 }, (_, index) => snapshot(100 + index));
     const originalSetItem = Storage.prototype.setItem;

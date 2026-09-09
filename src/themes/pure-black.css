@@ -1,0 +1,38 @@
+.agent-island[data-theme-style="pure-black"],
+.event-layer[data-theme-style="pure-black"],
+.overview[data-theme-style="pure-black"],
+.island-loading[data-theme-style="pure-black"] {
+  --surface-island: #050506;
+  --surface-card: #101012;
+  --surface-raised: #161619;
+  --surface-log: #09090b;
+  --surface-event: #0c0c0e;
+  --surface-notification: #0d0d0f;
+  --surface-sticky: #050506;
+  --text-primary: #f7f7f8;
+  --text-secondary: #b4b4bd;
+  --text-tertiary: #85858f;
+  --text-log: #e4e4e7;
+  --text-error: #fecdd3;
+  --border-subtle: #29292e;
+  --border-event: #294453;
+  --border-log-divider: #202024;
+  --accent-primary: #7dd3fc;
+  --status-idle: #a1a1aa;
+  --status-working: #38bdf8;
+  --status-error: #fb7185;
+  --status-done: #4ade80;
+  --status-waiting: #fbbf24;
+  --status-stopped: #85858f;
+  --refresh-error-text: #fecdd3;
+  --refresh-error-surface: #2b1119;
+  --control-surface: #18181b;
+  --control-hover: #26262b;
+  --scrollbar-thumb: #46464f;
+  --scrollbar-track: #0a0a0c;
+  --elevation-island: 0 16px 48px rgba(0, 0, 0, 0.62);
+  --elevation-event: 0 14px 32px rgba(0, 0, 0, 0.68);
+  --effect-backdrop: none;
+  --log-role-user: #c4b5fd;
+  --island-background: var(--surface-island);
+}

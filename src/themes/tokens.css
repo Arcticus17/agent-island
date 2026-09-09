@@ -1,0 +1,82 @@
+:root {
+  --space-card: 10px;
+  --space-section: 12px;
+  --space-control: 6px;
+  --radius-island: 24px;
+  --radius-card: 16px;
+  --radius-control: 9px;
+  --radius-event: 15px;
+  --z-sticky: 7;
+  --z-event: 20;
+  --motion-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-fast: 100ms;
+  --duration-normal: 180ms;
+  --duration-slow: 320ms;
+}
+
+.agent-island,
+.island-loading,
+.event-layer,
+.overview {
+  --island-surface: var(--surface-island);
+  --island-surface-card: var(--surface-card);
+  --island-surface-raised: var(--surface-raised);
+  --island-text-primary: var(--text-primary);
+  --island-text-secondary: var(--text-secondary);
+  --island-text-tertiary: var(--text-tertiary);
+  --island-border-subtle: var(--border-subtle);
+  --island-accent-primary: var(--accent-primary);
+  --island-status-idle: var(--status-idle);
+  --island-status-working: var(--status-working);
+  --island-status-error: var(--status-error);
+  --island-status-done: var(--status-done);
+  --island-status-waiting: var(--status-waiting);
+  --island-status-stopped: var(--status-stopped);
+  --island-status-current: var(--status-idle);
+  --island-status-halo: color-mix(in srgb, var(--island-status-current) 24%, transparent);
+  --island-status-glow: 0 0 18px color-mix(in srgb, var(--island-status-current) 72%, transparent);
+  --island-refresh-error-text: var(--refresh-error-text);
+  --island-refresh-error-surface: var(--refresh-error-surface);
+  --island-log-surface: var(--surface-log);
+  --island-log-divider: var(--border-log-divider);
+  --island-log-text: var(--text-log);
+  --island-log-role-default: var(--accent-primary);
+  --island-log-role-tool: var(--status-waiting);
+  --island-log-role-user: var(--log-role-user);
+  --island-scrollbar-thumb: var(--scrollbar-thumb);
+  --island-scrollbar-track: var(--scrollbar-track);
+  --island-control-surface: var(--control-surface);
+  --island-control-hover: var(--control-hover);
+  --island-event-surface: var(--surface-event);
+  --island-event-border: var(--border-event);
+  --island-notification-surface: var(--surface-notification);
+  --island-event-shadow: var(--elevation-event);
+  --island-shadow: var(--elevation-island);
+  --island-space-card: var(--space-card);
+  --island-radius-card: var(--radius-card);
+  --island-radius-control: var(--radius-control);
+}
+
+.agent-island.status-working { --island-status-current: var(--status-working); }
+.agent-island.status-error { --island-status-current: var(--status-error); }
+.agent-island.status-done { --island-status-current: var(--status-done); }
+.agent-island.status-waiting { --island-status-current: var(--status-waiting); }
+.agent-island.status-stopped { --island-status-current: var(--status-stopped); }
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 1ms;
+    --duration-normal: 1ms;
+    --duration-slow: 1ms;
+  }
+
+  .agent-island *,
+  .event-layer *,
+  .island-loading *,
+  .overview * {
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
