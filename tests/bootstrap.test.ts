@@ -37,14 +37,26 @@ describe("frontendMode", () => {
     vi.unstubAllGlobals();
   });
 
-  it("defaults to legacy until migration is complete", () => {
-    localStorage.removeItem("agent-island-ui-v2");
+  it("defaults to Svelte after migration", () => {
+    localStorage.removeItem("agent-island-ui-legacy");
+
+    expect(frontendMode()).toBe("svelte");
+  });
+
+  it("uses legacy only through the reversible rollback flag", () => {
+    localStorage.setItem("agent-island-ui-legacy", "1");
 
     expect(frontendMode()).toBe("legacy");
   });
 
-  it("enables Svelte only through the reversible opt-in flag", () => {
-    localStorage.setItem("agent-island-ui-v2", "1");
+  it("ignores the retired Svelte opt-in flag", () => {
+    localStorage.setItem("agent-island-ui-v2", "0");
+
+    expect(frontendMode()).toBe("svelte");
+  });
+
+  it("requires the exact rollback value", () => {
+    localStorage.setItem("agent-island-ui-legacy", "0");
 
     expect(frontendMode()).toBe("svelte");
   });
@@ -128,5 +140,45 @@ describe("createFrontendBootstrap", () => {
     expect(first).toBe(second);
     expect(loadSvelte).toHaveBeenCalledOnce();
     expect(mountSvelteIsland).toHaveBeenCalledOnce();
+  });
+
+  it("loads legacy directly without attempting Svelte in rollback mode", async () => {
+    const svelteRoot = container(false);
+    const legacyIsland = container(true);
+    const loadSvelte = vi.fn(async () => ({ mountSvelteIsland: vi.fn() }));
+    const loadLegacy = vi.fn(async () => undefined);
+    const start = createFrontendBootstrap({
+      mode: "legacy",
+      svelteRoot,
+      legacyIsland,
+      loadSvelte,
+      loadLegacy,
+    });
+
+    await expect(start()).resolves.toBe("legacy");
+
+    expect(legacyIsland.hidden).toBe(false);
+    expect(svelteRoot.hidden).toBe(true);
+    expect(loadSvelte).not.toHaveBeenCalled();
+    expect(loadLegacy).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to legacy when the Svelte root is missing", async () => {
+    const legacyIsland = container(true);
+    const loadSvelte = vi.fn(async () => ({ mountSvelteIsland: vi.fn() }));
+    const loadLegacy = vi.fn(async () => undefined);
+    const start = createFrontendBootstrap({
+      mode: "svelte",
+      svelteRoot: null,
+      legacyIsland,
+      loadSvelte,
+      loadLegacy,
+    });
+
+    await expect(start()).resolves.toBe("legacy");
+
+    expect(legacyIsland.hidden).toBe(false);
+    expect(loadSvelte).not.toHaveBeenCalled();
+    expect(loadLegacy).toHaveBeenCalledOnce();
   });
 });

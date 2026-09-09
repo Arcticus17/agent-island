@@ -40,6 +40,18 @@ body {
   overflow: hidden;
 }
 
+#overview-root:not([hidden]),
+#overview-legacy:not([hidden]) {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+#overview-legacy:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+}
+
 header {
   display: flex;
   align-items: center;

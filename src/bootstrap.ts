@@ -58,13 +58,17 @@ export function createFrontendBootstrap({
 }
 
 if (typeof document !== "undefined") {
-  const startFrontend = createFrontendBootstrap({
-    mode: frontendMode(),
-    svelteRoot: document.getElementById("island-root"),
-    legacyIsland: document.getElementById("island"),
-    loadSvelte: () => import("./app/main"),
-    loadLegacy: () => import("./main.js"),
-  });
+  const svelteRoot = document.getElementById("island-root");
+  const legacyIsland = document.getElementById("island");
+  if (svelteRoot || legacyIsland) {
+    const startFrontend = createFrontendBootstrap({
+      mode: frontendMode(),
+      svelteRoot,
+      legacyIsland,
+      loadSvelte: () => import("./app/main"),
+      loadLegacy: () => import("./main.js"),
+    });
 
-  void startFrontend();
+    void startFrontend();
+  }
 }

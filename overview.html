@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="/src/overview.css" />
 </head>
 <body>
+  <div id="overview-root" hidden></div>
+  <div id="overview-legacy">
   <header>
     <h1>会话总览</h1>
     <div id="header-right">
@@ -38,6 +40,7 @@
       <button id="scroll-bottom" title="回到底部" class="hidden">↓</button>
     </section>
   </main>
-  <script type="module" src="/src/overview.js"></script>
+  </div>
+  <script type="module" src="/src/windows/overview/main.ts"></script>
 </body>
 </html>

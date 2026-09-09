@@ -76,6 +76,24 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 
 GitHub Actions 会在推送 `v*` 标签时自动构建 EXE/MSI 并发布到 Release。
 
+### 临时回退旧界面
+
+Svelte 界面现为默认实现，主灵动岛与会话总览共用同一个临时回退开关。若升级后需要排查兼容问题，可在开发者控制台执行：
+
+```js
+localStorage.setItem("agent-island-ui-legacy", "1");
+location.reload();
+```
+
+恢复默认 Svelte 界面：
+
+```js
+localStorage.removeItem("agent-island-ui-legacy");
+location.reload();
+```
+
+旧界面只作为迁移期应急回退路径保留。
+
 ## 文档
 
 - [开发路线图](ROADMAP.md)
