@@ -122,6 +122,8 @@
 
 <style>
   .card-grid {
+    width: 100%;
+    max-width: 100%;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--island-space-card, 10px);
@@ -135,7 +137,7 @@
     border: 1px solid var(--island-border-subtle, ButtonBorder);
     border-radius: var(--island-radius-card, 16px);
     color: var(--island-text-primary, CanvasText);
-    background: var(--island-surface-card, Canvas);
+    background: var(--island-surface-card, var(--island-surface-raised, Canvas));
   }
 
   .layout-card.size-compact {
@@ -163,5 +165,19 @@
     opacity: 0.62;
     outline: 2px solid var(--island-accent-primary, Highlight);
     outline-offset: 2px;
+  }
+
+  @media (max-width: 420px) {
+    .card-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .layout-card,
+    .layout-card.size-compact,
+    .layout-card.size-standard,
+    .layout-card.size-wide {
+      grid-column: auto;
+      max-width: 100%;
+    }
   }
 </style>

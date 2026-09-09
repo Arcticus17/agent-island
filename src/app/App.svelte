@@ -2,15 +2,22 @@
   import { onMount, tick, untrack } from "svelte";
   import "../themes/graphite-glass.css";
   import CompactIsland from "../components/island/CompactIsland.svelte";
-  import ExpandedIsland from "../components/island/ExpandedIsland.svelte";
   import ApprovalStack from "../components/approvals/ApprovalStack.svelte";
+  import LogCard from "../components/cards/LogCard.svelte";
+  import SessionCard from "../components/cards/SessionCard.svelte";
+  import StatusCard from "../components/cards/StatusCard.svelte";
+  import UsageCard from "../components/cards/UsageCard.svelte";
+  import CardBoundary from "../components/common/CardBoundary.svelte";
   import ActionBar from "../components/controls/ActionBar.svelte";
   import DiagnosticsPanel from "../components/diagnostics/DiagnosticsPanel.svelte";
+  import LayoutEditor from "../components/layout/LayoutEditor.svelte";
   import NotificationStack from "../components/notifications/NotificationStack.svelte";
   import type { ApprovalItem, CommandFailure, CommandUiState, NotificationItem } from "../components/events/types";
   import { tauriBridge } from "../bridge/tauri";
   import { tauriDiagnosticsBridge, type DiagnosticsBridge } from "../bridge/diagnostics";
   import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent } from "../bridge/types";
+  import { loadLayout, saveLayout } from "../layout/persistence";
+  import type { CardPlacement, LayoutConfigV1 } from "../layout/schema";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
 
   let {
@@ -45,6 +52,9 @@
       ? "pure-black"
       : "graphite",
   );
+  let layout = $state<LayoutConfigV1>(loadLayout(localStorage));
+  let layoutPersistenceFailed = $state(false);
+  let releaseLayoutDrag: (() => void) | null = null;
   let hookEnabled = $state<boolean | null>(null);
   let hookState = $state<CommandUiState>("idle");
   let hookError = $state<CommandFailure | null>(null);
@@ -60,6 +70,8 @@
   let notificationAutoExpanded = false;
   const notificationTimers = new Map<string, { handle: number; remainingMs: number; startedAt: number; pauseCount: number }>();
   const collapsedWindowHeight = 60;
+  let selectedAgent = $derived(viewState.selectedAgent);
+  let selectedSession = $derived(selectedAgent?.active_session ?? null);
 
   async function loadDiagnostics(): Promise<void> {
     if (disposed) return;
@@ -303,6 +315,25 @@
     void syncWindowSize();
   }
 
+  function beginLayoutInteraction(): void {
+    if (releaseLayoutDrag) return;
+    releaseLayoutDrag = store.beginInteraction("drag");
+  }
+
+  function endLayoutInteraction(): void {
+    const release = releaseLayoutDrag;
+    releaseLayoutDrag = null;
+    release?.();
+  }
+
+  function persistLayout(next: LayoutConfigV1): void {
+    layout = next;
+    const result = saveLayout(localStorage, next);
+    layoutPersistenceFailed = !result.ok;
+    if (result.ok) layout = result.value;
+    void syncWindowSize();
+  }
+
   async function safeRunCommand(command: Parameters<AgentIslandBridge["runCommand"]>[0]): Promise<CommandResult> {
     try {
       return await bridge.runCommand(command);
@@ -389,6 +420,7 @@
       stopListening?.();
       for (const timer of notificationTimers.values()) window.clearTimeout(timer.handle);
       notificationTimers.clear();
+      endLayoutInteraction();
       unsubscribe();
       if (timer !== undefined) window.clearInterval(timer);
     };
@@ -408,14 +440,62 @@
     <span class="sr-only" data-testid="selected-agent-id">{viewState.selectedAgentId ?? ""}</span>
     <CompactIsland agent={viewState.selectedAgent} {expanded} onToggle={toggleExpanded} />
     {#if expanded}
-      <ExpandedIsland
-        agents={viewState.snapshot.agents}
-        selectedAgent={viewState.selectedAgent}
-        session={viewState.selectedAgent?.active_session ?? null}
-        refreshError={viewState.refreshError}
-        {privacy}
-        onSelectAgent={(id) => store.selectAgent(id)}
-      />
+      <section id="expanded-island" class="adaptive-details" aria-label="Agent 详情">
+        <nav class="agent-strip" aria-label="切换 Agent">
+          {#each viewState.snapshot.agents as agent (agent.id)}
+            <button
+              type="button"
+              class:active={agent.id === selectedAgent?.id}
+              data-agent-id={agent.id}
+              aria-pressed={agent.id === selectedAgent?.id}
+              onclick={() => store.selectAgent(agent.id)}
+            ><span class={`mini-dot status-${agent.display_status}`} aria-hidden="true"></span><span class="sensitive">{agent.name}</span></button>
+          {/each}
+        </nav>
+        {#if viewState.refreshError}<p class="refresh-note" role="status">数据刷新暂时失败，已保留最近状态。</p>{/if}
+        {#if selectedAgent && selectedSession}
+          <LayoutEditor
+            bind:layout
+            onLayoutChange={persistLayout}
+            beginInteraction={beginLayoutInteraction}
+            endInteraction={endLayoutInteraction}
+          >
+            {#snippet content(placement: CardPlacement)}
+              {#if placement.id === "status"}
+                <CardBoundary cardName="状态卡片" errorCode="status_card_render_failed">
+                  <StatusCard agent={selectedAgent} session={selectedSession} />
+                </CardBoundary>
+              {:else if placement.id === "usage"}
+                <CardBoundary cardName="用量卡片" errorCode="usage_card_render_failed">
+                  <UsageCard agent={selectedAgent} refreshFailed={viewState.refreshError !== null} />
+                </CardBoundary>
+              {:else if placement.id === "session"}
+                <CardBoundary cardName="会话卡片" errorCode="session_card_render_failed">
+                  <SessionCard session={selectedSession} {privacy} />
+                </CardBoundary>
+              {:else if placement.id === "log"}
+                <CardBoundary cardName="日志卡片" errorCode="log_card_render_failed">
+                  <LogCard session={selectedSession} />
+                </CardBoundary>
+              {:else}
+                <article class="stats-card" aria-label="当前 Agent 统计">
+                  <span class="stats-eyebrow">当前快照统计</span>
+                  <div class="stats-values">
+                    <span><strong data-testid="stats-event-count">{selectedAgent.diagnostic?.event_count ?? "—"}</strong>事件</span>
+                    <span><strong data-testid="stats-message-count">{selectedAgent.diagnostic?.message_count ?? "—"}</strong>消息</span>
+                    <span><strong>{selectedAgent.history_sessions.length + 1}</strong>会话</span>
+                  </div>
+                </article>
+              {/if}
+            {/snippet}
+          </LayoutEditor>
+          {#if layoutPersistenceFailed}
+            <p class="layout-persistence-status" data-testid="layout-persistence-status" role="status">布局已应用，但暂时未保存；下次调整时会重试。</p>
+          {/if}
+        {:else}
+          <div class="empty" data-testid="empty-session" role="status"><strong>无法确认当前会话</strong><span>为避免串入历史对话，灵动岛不会显示其他会话内容。</span></div>
+        {/if}
+      </section>
       <DiagnosticsPanel
         issues={diagnosticIssues}
         status={diagnosticStatus}
@@ -476,10 +556,36 @@
     backdrop-filter: blur(22px) saturate(125%);
   }
   .agent-island.expanded { max-height: 100vh; overflow-y: auto; scrollbar-color: var(--island-scrollbar-thumb) var(--island-scrollbar-track); }
+  :global(.agent-island.expanded > .compact) { position: sticky; top: 0; z-index: 7; background: color-mix(in srgb, var(--island-surface) 94%, transparent); backdrop-filter: blur(18px); }
+  :global(.agent-island.expanded > .action-bar) { position: sticky; bottom: 0; z-index: 7; background: color-mix(in srgb, var(--island-surface) 94%, transparent); backdrop-filter: blur(18px); }
+  .adaptive-details { min-width: 0; border-top: 1px solid var(--island-border-subtle); padding: 12px; }
+  .agent-strip { display: flex; gap: 7px; padding: 0 0 11px; overflow-x: auto; scrollbar-width: none; }
+  .agent-strip button { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid transparent; border-radius: 999px; color: var(--island-text-secondary); background: transparent; cursor: pointer; }
+  .agent-strip button.active { color: var(--island-text-primary); border-color: var(--island-border-subtle); background: var(--island-surface-raised); }
+  .agent-strip button:focus-visible { outline: 2px solid var(--island-accent-primary); }
+  .mini-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--island-status-idle); }
+  .mini-dot.status-working { background: var(--island-status-working); }
+  .mini-dot.status-error { background: var(--island-status-error); }
+  .mini-dot.status-done { background: var(--island-status-done); }
+  .mini-dot.status-waiting { background: var(--island-status-waiting); }
+  .mini-dot.status-stopped { background: var(--island-status-stopped); }
+  .refresh-note,
+  .layout-persistence-status { margin: 0 0 10px; padding: 7px 10px; border-radius: 10px; color: var(--island-refresh-error-text); background: var(--island-refresh-error-surface); font-size: 12px; overflow-wrap: anywhere; }
+  .layout-persistence-status { margin: 10px 0 0; }
+  .empty { display: grid; gap: 5px; padding: 28px 20px; text-align: center; color: var(--island-text-secondary); }
+  .empty strong { color: var(--island-text-primary); }
+  .stats-card { min-width: 0; height: 100%; box-sizing: border-box; display: grid; align-content: center; gap: 10px; }
+  .stats-eyebrow { color: var(--island-text-secondary); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+  .stats-values { min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+  .stats-values span { min-width: 0; display: grid; gap: 2px; color: var(--island-text-secondary); font-size: 10px; }
+  .stats-values strong { overflow: hidden; color: var(--island-accent-primary); font-size: 18px; text-overflow: ellipsis; }
+  :global(.adaptive-details .layout-card .card) { width: 100%; height: 100%; box-sizing: border-box; border: 0; padding: 0; background: transparent; }
+  :global(.adaptive-details .layout-card .session-card),
+  :global(.adaptive-details .layout-card .log-card) { grid-column: auto; }
   .event-layer { position: fixed; top: 66px; left: 50%; z-index: 20; width: min(696px, calc(100vw - 48px)); max-height: calc(100dvh - 78px); overflow-y: auto; overscroll-behavior: contain; transform: translateX(-50%); pointer-events: auto; scrollbar-color: var(--island-scrollbar-thumb) transparent; }
   .listener-error { margin: 7px 0 0; padding: 10px 12px; border: 1px solid var(--island-border-subtle); border-radius: 12px; color: var(--island-refresh-error-text); background: var(--island-refresh-error-surface); font-size: 11px; }
   :global(.privacy .sensitive) { filter: blur(5px); user-select: none; pointer-events: none; }
   .island-loading { padding: 12px 18px; border: 1px solid var(--island-border-subtle); border-radius: 999px; background: var(--island-surface); }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-  @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } }
+  @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
