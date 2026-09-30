@@ -22,6 +22,22 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
+/// Recovers shared state even when another thread panicked while holding it.
+///
+/// The release profile used to abort the whole process on any panic, so one bad
+/// hook request or log record could take the resident island down. Locks now
+/// recover the value instead of propagating the panic, and unwinding stays
+/// contained to the failing thread.
+trait LockRecover<T> {
+    fn lock_recover(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+impl<T> LockRecover<T> for Mutex<T> {
+    fn lock_recover(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentInfo {
     pub id: String,
@@ -2691,7 +2707,7 @@ fn install_hooks(state: &AppState) -> Result<(), String> {
     }
     merge_hooks_settings(&settings_path, &hook_script_path())?;
 
-    *state.hook_token.lock().unwrap() = token;
+    *state.hook_token.lock_recover() = token;
     state.hook_enabled.store(true, Ordering::SeqCst);
     Ok(())
 }
@@ -2788,7 +2804,7 @@ fn handle_hook_conn(mut stream: std::net::TcpStream, app: tauri::AppHandle) {
         return;
     };
     let state = app.state::<AppState>();
-    let valid = !token.is_empty() && *state.hook_token.lock().unwrap() == token;
+    let valid = !token.is_empty() && *state.hook_token.lock_recover() == token;
     if !valid {
         write_http_json(&mut stream, "403 Forbidden", "{}");
         return;
@@ -2840,7 +2856,7 @@ fn handle_hook_conn(mut stream: std::net::TcpStream, app: tauri::AppHandle) {
                 cwd: approval.cwd.clone(),
             };
             {
-                let mut approvals = state.approvals.lock().unwrap();
+                let mut approvals = state.approvals.lock_recover();
                 approvals.retain(|_, a| a.decision.is_none() && a.id != id);
                 while approvals.len() > 5 {
                     let oldest = approvals
@@ -3132,8 +3148,8 @@ where
 fn collect_agent_data(
     state: &AppState,
 ) -> (Vec<AgentInfo>, interface::snapshot::AgentViewSnapshot) {
-    let mut sys = state.sys.lock().unwrap();
-    let mut session = state.session.lock().unwrap();
+    let mut sys = state.sys.lock_recover();
+    let mut session = state.session.lock_recover();
     let mut cache = session.cache.take();
     let (agents, snapshot, _diagnostics, scan_result) =
         collect_cached_with(&mut cache, Instant::now, || {
@@ -3185,14 +3201,14 @@ fn export_diagnostics_snapshot(
 
 #[tauri::command]
 fn get_diagnostics(state: tauri::State<AppState>) -> interface::diagnostics::DiagnosticsResponse {
-    let session = state.session.lock().unwrap();
+    let session = state.session.lock_recover();
     diagnostics_from_cache(&session.cache)
 }
 
 #[tauri::command]
 fn export_diagnostics(destination: String, state: tauri::State<AppState>) -> Result<(), String> {
     let snapshot = {
-        let session = state.session.lock().unwrap();
+        let session = state.session.lock_recover();
         session
             .cache
             .as_ref()
@@ -3223,7 +3239,7 @@ struct StatsReport {
 
 #[tauri::command]
 fn get_stats_report(state: tauri::State<AppState>, days: u32) -> StatsReport {
-    let session = state.session.lock().unwrap();
+    let session = state.session.lock_recover();
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -3612,7 +3628,7 @@ fn fallback_send_command(
             args.push("-z".into());
             args.push(prompt.into());
         }
-        _ => unreachable!(),
+        _ => return Err("该 Agent 暂不支持发消息".into()),
     }
     let mut cmd = vec!["cmd.exe".into()];
     cmd.extend(args);
@@ -3868,7 +3884,7 @@ fn get_send_output(task_id: String, state: tauri::State<AppState>) -> Result<Sen
         .get(&task_id)
         .ok_or_else(|| "task not found".to_string())?;
     let done = task.done.load(Ordering::SeqCst);
-    let lines = task.lines.lock().unwrap().clone();
+    let lines = task.lines.lock_recover().clone();
     if done {
         tasks.remove(&task_id);
     }
@@ -4001,7 +4017,7 @@ const RECORDING_KEYWORDS: &[&str] = &[
 
 #[tauri::command]
 fn privacy_active(state: tauri::State<AppState>) -> bool {
-    let mut sys = state.sys.lock().unwrap();
+    let mut sys = state.sys.lock_recover();
     sys.refresh_processes(ProcessesToUpdate::All, false);
     sys.processes().values().any(|p| {
         let name = p.name().to_string_lossy().to_lowercase();
@@ -5517,6 +5533,31 @@ mod tests {
         assert_eq!(serialized["usage"]["used_percent"], 42.0);
         assert_eq!(serialized["usage"]["stale"], false);
         assert_eq!(serialized["can_restart"], true);
+    }
+
+    #[test]
+    fn locks_recover_after_a_panicking_holder() {
+        let state = Mutex::new(7_u32);
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = state.lock().unwrap();
+            panic!("holder failed");
+        }));
+
+        assert!(panicked.is_err(), "the holder must have panicked");
+        assert!(state.is_poisoned(), "the mutex must actually be poisoned");
+        assert_eq!(*state.lock_recover(), 7);
+    }
+
+    #[test]
+    fn fallback_send_command_accepts_known_agents_and_rejects_unknown_ones() {
+        for name in ["Claude Code", "Codex CLI", "OpenCode", "Hermes"] {
+            let command = fallback_send_command(name, "session-1", "你好")
+                .unwrap_or_else(|error| panic!("{name} must build a command: {error}"));
+            assert_eq!(command[0], "cmd.exe");
+            assert!(command.iter().any(|part| part == "你好"));
+        }
+
+        assert!(fallback_send_command("自定义 Agent", "session-1", "hi").is_err());
     }
 
     #[test]

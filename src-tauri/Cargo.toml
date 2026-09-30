@@ -27,4 +27,6 @@ tauri-build = { version = "2", features = [] }
 strip = true
 lto = true
 codegen-units = 1
-panic = "abort"
+# No `panic = "abort"`: the island spawns worker threads (hook connections, log
+# scans, the Win32 window thread) and must not disappear because one of them
+# panicked. Shared state recovers from poisoning via `LockRecover`.
