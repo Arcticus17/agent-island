@@ -2,6 +2,8 @@ mod adapters;
 mod application;
 mod domain;
 pub mod interface;
+#[cfg(target_os = "windows")]
+mod single_instance;
 
 use adapters::AgentAdapter;
 use serde::{Deserialize, Serialize};
@@ -5747,6 +5749,18 @@ mod tests {
 }
 
 pub fn run() {
+    // A resident island must stay single-instance: the duplicate would double the
+    // window, the poller and the statistics writes, and it could never receive
+    // hook events because the hook server port belongs to the first process.
+    // The guard lives for the whole event loop.
+    #[cfg(target_os = "windows")]
+    let _instance_guard = match single_instance::acquire(single_instance::ISLAND_MUTEX) {
+        Ok(guard) => guard,
+        Err(single_instance::AlreadyRunning) => {
+            single_instance::focus_running_island();
+            return;
+        }
+    };
     let stats_path = stats_path();
     let daily_path = daily_path();
     let hook_cfg = load_hook_config();
