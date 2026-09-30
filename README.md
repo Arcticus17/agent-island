@@ -107,6 +107,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 
 `npm test` 包含旧前端测试、单元测试、浏览器交互、视觉比对和 Rust 测试。Windows 终端须先加载 Visual Studio 开发环境。打包可能需要联网下载 NSIS/WiX 工具；构建产物位于 `src-tauri/target/release/bundle`。
 
+若 `npx playwright install chromium` 长时间无进展（官方地址会跳转到 Google 存储，实测只有几十到两百 KB/s），可用 npmmirror 镜像装同一版本：从 `npx playwright install --dry-run chromium` 读出版本号与目录名，下载 `https://cdn.npmmirror.com/binaries/chrome-for-testing/<版本>/win64/chrome-win64.zip`，解压到 `%LOCALAPPDATA%\ms-playwright\chromium-<revision>\`，确认 `chrome-win64\chrome.exe` 存在，再在该目录下创建空的 `INSTALLATION_COMPLETE` 文件。实测镜像速度约为官方路径的 26 倍。
+
 视觉回归使用 Windows 与依赖锁定的 Playwright Chromium；运行 `npm run test:visual` 比对。仅在人工检查确认界面变化后执行 `npm run test:visual:update` 更新基线。不同操作系统或字体环境的截图不能直接当作同一验收环境。
 
 GitHub Actions 在推送 `v*` 标签时，先执行构建、类型检查与完整回归，再构建 EXE/MSI 并发布到 Release。本地验证不会自动发布。
