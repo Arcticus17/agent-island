@@ -27,11 +27,10 @@
 
 - 无 `tauri-plugin-single-instance`，代码内也未发现 `CreateMutex` 一类互斥：常驻置顶应用被启动两次时的行为未定义。
 - 无 `tauri-plugin-updater`（`main` 与分支都没有）：用户升级只能手动重新安装。
-- 无通知插件：`ROADMAP.md` 声称实现了 `tauri-plugin-notification`，但 `Cargo.toml` 中不存在该依赖，属文档与代码不一致。
+- 无通知插件：`ROADMAP.md` 在 v0.5 记为已实现、在 v1.1 明确记录已按"鸡肋即砍"移除，`Cargo.toml` 与"已移除"一致——这是时间线记录，不是文档漂移。
 - 开机自启仍通过 spawn `reg.exe` 读写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`。
 
 ## 未验证
 
-- 未运行视觉回归（既有记录：缺少锁定版 Chromium）。
-- 未做原生窗口层级、虚化、真实目录与终端的人工验收。
-- 未提交；工作区保留了此前已有的未提交改动。
+- 原生窗口层级、虚化、真实目录与终端未做人工验收。
+- 视觉回归在本轮稍后已跑通（见 `2026-09-30-visual-baseline-refresh.md`），本次改动未单独比对截图。
