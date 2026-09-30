@@ -256,6 +256,37 @@ describe("Svelte session overview", () => {
     expect(target.querySelector<HTMLButtonElement>('[data-testid="overview-restart"]')!.disabled).toBe(true);
   });
 
+  it("allows built-in historical recovery without a captured launch command and reports only terminal launch", async () => {
+    const data = snapshot(100);
+    data.agents.forEach((agent) => { agent.can_restart = false; });
+    const harness = createBridgeHarness([data]);
+    const target = await renderOverview(harness);
+    row(target, "beta", "beta-history").click();
+    await waitFor(() => target.querySelector('[data-testid="overview-selected-session-id"]')?.textContent === "beta-history");
+    const restart = target.querySelector<HTMLButtonElement>('[data-testid="overview-restart"]')!;
+    expect(restart.disabled).toBe(false);
+    restart.click();
+    await waitFor(() => target.textContent?.includes("已打开恢复终端") === true);
+    expect(harness.commands).toEqual([{ name: "restart_session", agentName: "Codex CLI", sessionId: "beta-history" }]);
+    expect(target.textContent).not.toContain("重启成功");
+    row(target, "alpha", "alpha-live").click();
+    await waitFor(() => target.querySelector('[data-testid="overview-selected-session-id"]')?.textContent === "alpha-live");
+    expect(target.textContent).not.toContain("已打开恢复终端");
+  });
+
+  it("keeps recovery unavailable for unknown agents without commands and sessions without a directory", async () => {
+    const data = snapshot(100);
+    data.agents[1].name = "Unknown";
+    data.agents[1].can_restart = false;
+    data.agents[0].history_sessions[0].cwd = null;
+    const target = await renderOverview(createBridgeHarness([data]));
+    for (const [agent, id] of [["beta", "beta-history"], ["alpha", "alpha-history"]]) {
+      row(target, agent, id).click();
+      await waitFor(() => target.querySelector('[data-testid="overview-selected-session-id"]')?.textContent === id);
+      expect(target.querySelector<HTMLButtonElement>('[data-testid="overview-restart"]')!.disabled).toBe(true);
+    }
+  });
+
   it("sends the draft to the selected session without borrowing another row", async () => {
     const harness = createBridgeHarness([snapshot(100)]);
     const target = await renderOverview(harness);

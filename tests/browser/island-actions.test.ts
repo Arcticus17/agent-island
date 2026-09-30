@@ -213,6 +213,155 @@ afterEach(async () => {
 });
 
 describe("Agent Island commands", () => {
+  it("waits for window restoration before auto-sizing and exposes width controls", async () => {
+    const ready = deferred<() => void>();
+    const harness = createBridgeHarness([snapshot(100)]);
+    let sizes = 0;
+    const widths: number[] = [];
+    harness.bridge.initializeWindowPlacement = () => ready.promise;
+    harness.bridge.resizeWindow = async () => { sizes++; };
+    harness.bridge.adjustWindowWidth = async (delta) => { widths.push(delta); };
+    harness.bridge.startWindowDrag = async () => { throw new Error('drag rejected'); };
+    const target = await renderIsland(harness);
+    expect(sizes).toBe(0);
+    ready.resolve(() => {});
+    await waitFor(() => sizes > 0);
+    target.querySelector<HTMLButtonElement>('[aria-label="加宽窗口"]')!.click();
+    await waitFor(() => widths.length === 1);
+    expect(widths).toEqual([40]);
+    target.querySelector('[aria-label="拖动窗口"]')!.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true }));
+    await waitFor(() => target.textContent?.includes('drag rejected') === true);
+  });
+
+  it("expands settings below the controls instead of overlaying them", async () => {
+    await page.viewport(360, 740);
+    const target = await renderIsland(createBridgeHarness([snapshot(100)], [{ ok: true, value: true }]));
+    const settings = target.querySelector<HTMLDetailsElement>('details.settings')!;
+    settings.open = true;
+    await waitFor(() => settings.querySelector<HTMLElement>('.popover')!.getBoundingClientRect().height > 0);
+    const panel = settings.querySelector<HTMLElement>('.popover')!;
+    const controls = target.querySelector<HTMLElement>('.actions')!;
+    expect(getComputedStyle(panel).position).toBe('static');
+    expect(panel.getBoundingClientRect().top).toBeGreaterThanOrEqual(controls.getBoundingClientRect().bottom);
+    expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(window.innerHeight);
+    if (import.meta.env.VITE_CAPTURE_UI === '1') await page.screenshot({ path: '../../.superpowers/inline-settings.png' });
+  });
+
+  it("does not silently replace a disappearing inspected record with the live conversation", async () => {
+    const value = snapshot(100);
+    const history = structuredClone(value.agents[0].active_session!);
+    history.id = 'removed-history';
+    history.lifecycle = 'Historical';
+    history.records[0].text = 'Selected history only';
+    value.agents[0].history_sessions = [history];
+    const next = snapshot(200, 'working', 'Unrelated live message');
+    const harness = createBridgeHarness([value, next], [{ ok: false, code: 'busy', message: 'Retry later', retryable: true }]);
+    const target = await renderIsland(harness, { pollIntervalMs: 300 });
+    const picker = target.querySelector<HTMLSelectElement>('[data-testid="session-picker"]')!;
+    picker.value = history.id;
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => target.textContent?.includes('Selected history only') === true);
+    target.querySelector<HTMLButtonElement>('[data-testid="action-directory"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="action-retry"]') !== null);
+    await waitFor(() => harness.snapshotCalls() >= 2);
+    await waitFor(() => target.textContent?.includes('该记录已不在当前快照中') === true);
+    expect(target.textContent).not.toContain('Unrelated live message');
+    expect(target.querySelector<HTMLButtonElement>('[data-testid="action-stop"]')!.disabled).toBe(true);
+    expect(target.querySelector('[data-testid="action-retry"]')).toBeNull();
+    expect(harness.commands).toHaveLength(1);
+  });
+
+  it("only shows local history after explicit selection and scopes safe actions to that record", async () => {
+    const value = snapshotWithSecondAgent();
+    const history = structuredClone(value.agents[0].active_session!);
+    history.id = "chosen-history";
+    history.lifecycle = "Historical";
+    history.cwd = "D:\\chosen-project";
+    history.records[0].text = "Explicitly chosen local conversation";
+    value.agents[0].active_session = null;
+    value.agents[0].active_turn = null;
+    value.agents[0].history_sessions = [history];
+    const harness = createBridgeHarness([value], [{ ok: true }, { ok: true }]);
+    const target = await renderIsland(harness);
+    expect(target.textContent).not.toContain("Explicitly chosen local conversation");
+    const picker = target.querySelector<HTMLSelectElement>('[data-testid="session-picker"]')!;
+    picker.value = history.id;
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => target.textContent?.includes("Explicitly chosen local conversation") === true);
+    expect(target.querySelector('[data-testid="expanded-status"]')?.textContent).toBe("本地记录");
+    for (const action of ['stop', 'restart', 'focus']) expect(target.querySelector<HTMLButtonElement>(`[data-testid="action-${action}"]`)!.disabled).toBe(true);
+    target.querySelector<HTMLButtonElement>('[data-testid="action-directory"]')!.click();
+    await waitFor(() => harness.commands.length === 1);
+    target.querySelector<HTMLButtonElement>('[data-testid="action-terminal"]')!.click();
+    await waitFor(() => harness.commands.length === 2);
+    expect(harness.commands).toEqual([
+      { name: 'open_path', path: history.cwd },
+      { name: 'open_session_terminal', agentName: value.agents[0].name, sessionId: history.id },
+    ]);
+    if (import.meta.env.VITE_CAPTURE_UI === "1") await page.screenshot({ path: "../../.superpowers/explicit-history.png" });
+    const privacy = target.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    privacy.checked = true;
+    privacy.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => picker.textContent?.includes('内容已隐藏') === true);
+    expect(picker.textContent).not.toContain(history.id);
+    picker.value = '';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => !target.textContent?.includes("Explicitly chosen local conversation"));
+    picker.value = history.id;
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => target.querySelector('[data-testid="history-inspection-note"]') !== null);
+    target.querySelector<HTMLButtonElement>('[data-agent-id="beta"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="history-inspection-note"]') === null);
+    expect(target.querySelector('[data-testid="session-path"]')?.textContent).not.toBe(history.cwd);
+  });
+
+  it("keeps failure details inside the visible sticky controls in a narrow tall layout", async () => {
+    await page.viewport(360, 740);
+    const value = snapshot(100);
+    value.agents[0].active_session = null;
+    value.agents[0].active_turn = null;
+    const target = await renderIsland(createBridgeHarness([value]));
+    target.querySelector<HTMLButtonElement>('[data-testid="action-directory"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="action-error"]') !== null);
+    const error = target.querySelector<HTMLElement>('[data-testid="action-error"]')!;
+    expect(error.closest('footer')).not.toBeNull();
+    const bounds = error.getBoundingClientRect();
+    expect(bounds.top).toBeGreaterThanOrEqual(0);
+    expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+    if (import.meta.env.VITE_CAPTURE_UI === "1") await page.screenshot({ path: "../../.superpowers/recording-error-visible.png" });
+  });
+
+  it("dismisses settings outside and with Escape and gives native selects a dark scheme", async () => {
+    const target = await renderIsland(createBridgeHarness([snapshot(100)], [{ ok: true }]));
+    const settings = target.querySelector<HTMLDetailsElement>('details.settings')!;
+    settings.open = true;
+    expect(getComputedStyle(settings.querySelector('select')!).colorScheme).toBe('dark');
+    target.querySelector('[data-testid="action-directory"]')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    expect(settings.open).toBe(false);
+    settings.open = true;
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(settings.open).toBe(false);
+    expect(document.activeElement).toBe(settings.querySelector('summary'));
+  });
+
+  it("keeps process focus available without a matched session and explains unsafe actions", async () => {
+    const value = snapshot(100);
+    value.agents[0].active_session = null;
+    value.agents[0].active_turn = null;
+    const harness = createBridgeHarness([value], [{ ok: true }]);
+    const target = await renderIsland(harness);
+    const focus = target.querySelector<HTMLButtonElement>('[data-testid="action-focus"]')!;
+    expect(focus.disabled).toBe(false);
+    focus.click();
+    await waitFor(() => harness.commands.length === 1);
+    expect(harness.commands[0]).toEqual({ name: "focus_agent_terminal", agentName: "Claude Code" });
+    target.querySelector<HTMLButtonElement>('[data-testid="action-directory"]')!.click();
+    await waitFor(() => target.textContent?.includes("尚未确认当前会话的工作目录") === true);
+    target.querySelector<HTMLButtonElement>('[data-testid="action-terminal"]')!.click();
+    await waitFor(() => target.textContent?.includes("无法确定终端应打开的位置") === true);
+    expect(harness.commands).toHaveLength(1);
+  });
+
   it("routes every core action through the typed bridge", async () => {
     const harness = createBridgeHarness(
       [snapshot(100)],

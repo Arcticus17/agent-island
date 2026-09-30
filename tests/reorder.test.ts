@@ -19,8 +19,8 @@ describe("layout reorder operations", () => {
     const first = moveCard(source, "stats", -99);
     const last = moveCard(source, "status", 99);
 
-    expect(ids(first)).toEqual(["stats", "status", "usage", "session", "log"]);
-    expect(ids(last)).toEqual(["usage", "session", "log", "stats", "status"]);
+    expect(ids(first)).toEqual(["stats", "status", "usage", "log", "session"]);
+    expect(ids(last)).toEqual(["usage", "log", "session", "stats", "status"]);
     expect(first.preset).toBe("custom");
     expect(last.preset).toBe("custom");
     expect(validateLayout(first).ok).toBe(true);
@@ -87,7 +87,7 @@ describe("layout reorder operations", () => {
     expect(moveCard(source, "status", Number.NaN)).toBe(source);
     expect(resizeCard(source, "unknown", "wide")).toBe(source);
     expect(resizeCard(source, "usage", "giant")).toBe(source);
-    expect(resizeCard(source, "usage", "standard")).toBe(source);
+    expect(resizeCard(source, "usage", "compact")).toBe(source);
     expect(setCardVisible(source, "unknown", false)).toBe(source);
     expect(setCardVisible(source, "usage", true)).toBe(source);
   });

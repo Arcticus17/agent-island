@@ -1,13 +1,13 @@
 <script lang="ts">
   import type { AgentView, DisplayStatus, SessionView } from "../../bridge/types";
-  let { agent, session }: { agent: AgentView; session: SessionView } = $props();
+  let { agent, session, inspectingHistory = false }: { agent: AgentView; session: SessionView | null; inspectingHistory?: boolean } = $props();
   const labels: Record<DisplayStatus, string> = { stopped: "已停止", idle: "空闲", working: "工作中", done: "已完成", error: "错误", waiting: "等待确认" };
 </script>
 
 <article class="card status-card">
-  <span class="eyebrow">当前状态</span>
-  <strong data-testid="expanded-status">{labels[agent.display_status]}</strong>
-  <span class="sensitive" data-testid="status-session">{agent.name} · {session.id}</span>
+  <span class="eyebrow">{inspectingHistory ? "手动查看 · 非实时状态" : "当前状态"}</span>
+  <strong data-testid="expanded-status">{inspectingHistory ? "本地记录" : labels[agent.display_status]}</strong>
+  <span class="sensitive" data-testid="status-session">{agent.name} · {session?.id ?? "会话尚未确认"}</span>
 </article>
 
 <style>

@@ -109,6 +109,36 @@ afterEach(async () => {
 });
 
 describe("adaptive island responsive layout", () => {
+  it("grows the conversation viewport with a saved custom card height", async () => {
+    await page.viewport(520, 900);
+    const { target } = await renderIsland();
+    target.querySelector<HTMLButtonElement>('[data-testid="layout-edit-toggle"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="card-resize-handle"][data-card-id="log"]') !== null);
+    target.querySelector('[data-testid="card-resize-handle"][data-card-id="log"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    await waitFor(() => target.querySelector<HTMLElement>('[data-card-id="log"][data-testid="layout-card"]')!.style.height === '600px');
+    target.querySelector<HTMLButtonElement>('[data-testid="layout-edit-toggle"]')!.click();
+    await waitFor(() => target.querySelector<HTMLElement>('[data-testid="log-scroll"]')!.clientHeight > 400);
+    const saved = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY)!);
+    expect(saved.cards.find((card: {id: string}) => card.id === 'log').height).toBe(600);
+    assertNoHorizontalOverflow(target);
+    if (import.meta.env.VITE_CAPTURE_UI === '1') await page.screenshot({ path: '../../.superpowers/free-log-height.png' });
+  });
+
+  it("resizes actual log content and keeps native outer surface free of backdrop sampling", async () => {
+    await page.viewport(520, 900);
+    const { target } = await renderIsland();
+    expect(getComputedStyle(target.querySelector<HTMLElement>('[data-testid="agent-island"]')!).backdropFilter).toBe("none");
+    target.querySelector<HTMLButtonElement>('[data-testid="layout-edit-toggle"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="card-size"][data-card-id="log"]') !== null);
+    const size = target.querySelector<HTMLSelectElement>('[data-testid="card-size"][data-card-id="log"]')!;
+    size.value = "compact";
+    size.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitFor(() => getComputedStyle(target.querySelector<HTMLElement>('[data-testid="log-scroll"]')!).height === "96px");
+    size.value = "wide";
+    size.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitFor(() => getComputedStyle(target.querySelector<HTMLElement>('[data-testid="log-scroll"]')!).height === "240px");
+    assertNoHorizontalOverflow(target);
+  });
   it("uses two logical columns around 520px and spans wide cards", async () => {
     await page.viewport(520, 900);
     const { target } = await renderIsland();
@@ -116,7 +146,7 @@ describe("adaptive island responsive layout", () => {
     const columns = getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean);
 
     expect(columns).toHaveLength(2);
-    for (const id of ["session", "log"]) {
+    for (const id of ["log"]) {
       const card = target.querySelector<HTMLElement>(`[data-testid="layout-card"][data-card-id="${id}"]`)!;
       expect(getComputedStyle(card).gridColumnStart).toBe("1");
       expect(getComputedStyle(card).gridColumnEnd).toBe("-1");
@@ -148,7 +178,7 @@ describe("adaptive island responsive layout", () => {
     }
     expect(writes.mock.calls.filter(([key]) => key === LAYOUT_STORAGE_KEY)).toHaveLength(0);
     assertNoHorizontalOverflow(target);
-    expect(getComputedStyle(target.querySelector<HTMLElement>('[data-testid="compact-toggle"]')!).position).toBe("sticky");
+    expect(getComputedStyle(target.querySelector<HTMLElement>('.compact-header')!).position).toBe("sticky");
     expect(getComputedStyle(target.querySelector<HTMLElement>('[aria-label="Agent 操作"]')!).position).toBe("sticky");
 
     await waitFor(() => bridge.listenerCount() === 1);
@@ -212,7 +242,7 @@ describe("adaptive island responsive layout", () => {
 
     expect(island.dataset.themeStyle).toBe("graphite");
     expect(getComputedStyle(island).getPropertyValue("--surface-island").trim()).not.toBe("");
-    expect(getComputedStyle(island).backdropFilter).not.toBe("none");
+    expect(getComputedStyle(island).backdropFilter).toBe("none");
     if (import.meta.env.VITE_CAPTURE_UI === "1") {
       await page.screenshot({
         path: "../../.superpowers/sdd/2026-09-04-adaptive-island-ui/task5-graphite.png",

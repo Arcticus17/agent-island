@@ -341,4 +341,8 @@ export interface AgentIslandBridge {
   runCommand(command: AgentCommand): Promise<CommandResult>;
   listenHookEvents(handler: (event: HookEvent) => void): Promise<() => void>;
   resizeWindow?(size: { width: number; height: number }): Promise<void>;
+  startWindowDrag?(): Promise<void>;
+  startWindowResize?(): Promise<void>;
+  initializeWindowPlacement?(onError?: (error: unknown) => void): Promise<() => void>;
+  adjustWindowWidth?(delta: number): Promise<void>;
 }

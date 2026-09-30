@@ -1,5 +1,6 @@
 :root {
   --space-card: 10px;
+  --island-inset-highlight: inset 0 1px rgba(255, 255, 255, .065);
   --space-section: 12px;
   --space-control: 6px;
   --radius-island: 24px;

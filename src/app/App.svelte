@@ -19,7 +19,7 @@
   import { tauriDiagnosticsBridge, type DiagnosticsBridge } from "../bridge/diagnostics";
   import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent } from "../bridge/types";
   import { loadLayout, saveLayout } from "../layout/persistence";
-  import type { CardPlacement, LayoutConfigV1 } from "../layout/schema";
+  import type { CardId, CardPlacement, LayoutConfigV1 } from "../layout/schema";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
   import { preferredAgent } from "../models/agent-priority";
 
@@ -69,12 +69,18 @@
   let diagnosticRefreshQueued = false;
   let disposed = false;
   let resizeRevision = 0;
+  let windowPlacementReady = untrack(() => !bridge.initializeWindowPlacement);
+  let windowError = $state<string | null>(null);
   let notificationSequence = 0;
   let notificationAutoExpanded = false;
   const notificationTimers = new Map<string, { handle: number; remainingMs: number; startedAt: number; pauseCount: number }>();
   const collapsedWindowHeight = 60;
   let selectedAgent = $derived(viewState.selectedAgent);
-  let selectedSession = $derived(selectedAgent?.active_session ?? null);
+  let inspectedSession = $state<{ agentId: string; sessionId: string } | null>(null);
+  let inspectingHistory = $derived(inspectedSession?.agentId === selectedAgent?.id && inspectedSession !== null);
+  let selectedSession = $derived(inspectingHistory
+    ? selectedAgent?.history_sessions.find((session) => session.id === inspectedSession?.sessionId) ?? null
+    : selectedAgent?.active_session ?? null);
 
   async function loadDiagnostics(): Promise<void> {
     if (disposed) return;
@@ -115,6 +121,7 @@
   }
 
   async function syncWindowSize(): Promise<void> {
+    if (!windowPlacementReady || disposed) return;
     const revision = ++resizeRevision;
     const targetExpanded = expanded;
     await tick();
@@ -145,6 +152,18 @@
     } catch {
       // A browser preview or closing Tauri window may not support resizing.
     }
+  }
+
+  function windowFailure(error: unknown): void {
+    if (disposed) return;
+    windowError = `窗口调整或保存失败：${error instanceof Error ? error.message : String(error)}`;
+    expanded = true;
+  }
+
+  async function windowAction(action: (() => Promise<void>) | undefined): Promise<void> {
+    if (!action) return;
+    windowError = null;
+    try { await action(); } catch (error) { windowFailure(error); }
   }
 
   function toggleExpanded(): void {
@@ -399,6 +418,15 @@
 
   onMount(() => {
     let stopListening: (() => void) | undefined;
+    let stopPlacement: (() => void) | undefined;
+    if (bridge.initializeWindowPlacement) {
+      void bridge.initializeWindowPlacement(windowFailure).then((release) => {
+        if (disposed) release(); else stopPlacement = release;
+      }).catch(windowFailure).finally(() => {
+        windowPlacementReady = true;
+        if (!disposed) void syncWindowSize();
+      });
+    }
     const unsubscribe = store.subscribe((next) => {
       const firstAgents = !viewState.snapshot?.agents.length && !!next.snapshot?.agents.length;
       if (focusMode === "errors") {
@@ -433,6 +461,7 @@
       diagnosticRefreshQueued = false;
       resizeRevision += 1;
       stopListening?.();
+      stopPlacement?.();
       for (const timer of notificationTimers.values()) window.clearTimeout(timer.handle);
       notificationTimers.clear();
       endLayoutInteraction();
@@ -441,6 +470,8 @@
     };
   });
 </script>
+
+<svelte:window onresize={() => void syncWindowSize()} />
 
 {#if viewState.snapshot}
   <main
@@ -453,8 +484,19 @@
     bind:this={islandElement}
   >
     <span class="sr-only" data-testid="selected-agent-id">{viewState.selectedAgentId ?? ""}</span>
-    <CompactIsland agent={viewState.selectedAgent} {expanded} onToggle={toggleExpanded} />
+    <div class="compact-header">
+      <CompactIsland agent={viewState.selectedAgent} {expanded} onToggle={toggleExpanded} />
+      {#if bridge.startWindowDrag}<button class="window-handle" aria-label="拖动窗口" title="按住并拖动窗口" onpointerdown={(event) => { if (event.button === 0) { event.preventDefault(); void windowAction(() => bridge.startWindowDrag!()); } }}>⠿</button>{/if}
+    </div>
     {#if expanded}
+      {#if bridge.adjustWindowWidth || bridge.startWindowResize}
+        <div class="window-tools" aria-label="窗口布局">
+          <span>窗口宽度</span>
+          {#if bridge.adjustWindowWidth}<button aria-label="缩窄窗口" onclick={() => void windowAction(() => bridge.adjustWindowWidth!(-40))}>−</button><button aria-label="加宽窗口" onclick={() => void windowAction(() => bridge.adjustWindowWidth!(40))}>＋</button>{/if}
+          {#if bridge.startWindowResize}<button title="按住拖动，或使用左右方向键" aria-label="拖动调整窗口宽度" onpointerdown={(event) => { if (event.button === 0) { event.preventDefault(); void windowAction(() => bridge.startWindowResize!()); } }} onkeydown={(event) => { if (bridge.adjustWindowWidth && (event.key === "ArrowLeft" || event.key === "ArrowRight")) { event.preventDefault(); void windowAction(() => bridge.adjustWindowWidth!(event.key === "ArrowRight" ? 20 : -20)); } }}>↔</button>{/if}
+        </div>
+      {/if}
+      {#if windowError}<p class="refresh-note" role="alert">{windowError}</p>{/if}
       <section id="expanded-island" class="adaptive-details" aria-label="Agent 详情">
         <nav class="agent-strip" aria-label="切换 Agent">
           {#each viewState.snapshot.agents as agent (agent.id)}
@@ -463,14 +505,30 @@
               class:active={agent.id === selectedAgent?.id}
               data-agent-id={agent.id}
               aria-pressed={agent.id === selectedAgent?.id}
-              onclick={() => store.selectAgent(agent.id)}
+              onclick={() => { inspectedSession = null; store.selectAgent(agent.id); }}
             ><span class={`mini-dot status-${agent.display_status}`} aria-hidden="true"></span><span class="sensitive">{agent.name}</span></button>
           {/each}
         </nav>
+        {#if selectedAgent && (selectedAgent.history_sessions.length > 0 || inspectingHistory)}
+          <label class="session-picker">查看会话
+            <select data-testid="session-picker" value={inspectingHistory ? inspectedSession?.sessionId : ""} onchange={(event) => {
+              inspectedSession = event.currentTarget.value ? { agentId: selectedAgent!.id, sessionId: event.currentTarget.value } : null;
+              void syncWindowSize();
+            }}>
+              <option value="">自动：可靠匹配的当前会话</option>
+              {#if inspectingHistory && !selectedSession}<option value={inspectedSession?.sessionId} disabled>所选记录已不可用</option>{/if}
+              {#each selectedAgent.history_sessions as session (session.id)}
+                <option value={session.id}>本地记录 · {privacy ? "内容已隐藏" : `${session.name} · ${session.id}`}</option>
+              {/each}
+            </select>
+          </label>
+          {#if inspectingHistory}<p class="refresh-note" role="status" data-testid="history-inspection-note">正在查看手动选择的本地会话记录，不代表桌面端当前任务。{selectedSession ? "目录和终端操作使用此会话；停止、重启和跳回已禁用。" : "该记录已不在当前快照中，请重新选择。"}</p>{/if}
+        {/if}
         {#if viewState.refreshError}<p class="refresh-note" role="status">数据刷新暂时失败，已保留最近状态。</p>{/if}
-        {#if selectedAgent && selectedSession}
+        {#if selectedAgent}
           <LayoutEditor
             bind:layout
+            emptyCardIds={[...(!selectedSession ? ["session", "log"] as CardId[] : []), ...(!selectedAgent.usage ? ["usage"] as CardId[] : [])]}
             onLayoutChange={persistLayout}
             beginInteraction={beginLayoutInteraction}
             endInteraction={endLayoutInteraction}
@@ -478,7 +536,7 @@
             {#snippet content(placement: CardPlacement)}
               {#if placement.id === "status"}
                 <CardBoundary cardName="状态卡片" errorCode="status_card_render_failed">
-                  <StatusCard agent={selectedAgent} session={selectedSession} />
+                  <StatusCard agent={selectedAgent} session={selectedSession} {inspectingHistory} />
                 </CardBoundary>
               {:else if placement.id === "usage"}
                 <CardBoundary cardName="用量卡片" errorCode="usage_card_render_failed">
@@ -486,19 +544,21 @@
                 </CardBoundary>
               {:else if placement.id === "session"}
                 <CardBoundary cardName="会话卡片" errorCode="session_card_render_failed">
-                  <SessionCard session={selectedSession} {privacy} />
+                  {#if selectedSession}<SessionCard session={selectedSession} {privacy} />
+                  {:else}<div class="empty" role="status">尚未确认当前会话，目录信息暂不可用。</div>{/if}
                 </CardBoundary>
               {:else if placement.id === "log"}
                 <CardBoundary cardName="日志卡片" errorCode="log_card_render_failed">
-                  <LogCard session={selectedSession} />
+                  {#if selectedSession}<LogCard session={selectedSession} />
+                  {:else}<div class="empty" data-testid="empty-session" role="status"><strong>无法确认当前会话</strong><span>为避免串入历史对话，灵动岛不会显示其他会话内容。可打开总览查看明确标记的历史会话。</span></div>{/if}
                 </CardBoundary>
               {:else}
                 <article class="stats-card" aria-label="当前 Agent 统计">
                   <span class="stats-eyebrow">当前快照统计</span>
                   <div class="stats-values">
-                    <span><strong data-testid="stats-event-count">{selectedAgent.diagnostic?.event_count ?? "—"}</strong>事件</span>
-                    <span><strong data-testid="stats-message-count">{selectedAgent.diagnostic?.message_count ?? "—"}</strong>消息</span>
-                    <span><strong>{selectedAgent.history_sessions.length + 1}</strong>会话</span>
+                    <span><strong data-testid="stats-event-count">{inspectingHistory ? "—" : selectedAgent.diagnostic?.event_count ?? "—"}</strong>事件</span>
+                    <span><strong data-testid="stats-message-count">{inspectingHistory ? selectedSession?.records.length ?? "—" : selectedAgent.diagnostic?.message_count ?? "—"}</strong>消息</span>
+                    <span><strong>{selectedAgent.history_sessions.length + (selectedAgent.active_session ? 1 : 0)}</strong>会话</span>
                   </div>
                 </article>
               {/if}
@@ -517,9 +577,11 @@
         exportDiagnostics={(destination) => diagnosticsBridge.exportDiagnostics(destination)}
         onLayoutChange={() => void syncWindowSize()}
       />
-      {#key viewState.selectedAgent?.id}
+      {#key JSON.stringify([viewState.selectedAgent?.id, inspectingHistory, selectedSession?.id, selectedSession?.cwd])}
         <ActionBar
           agent={viewState.selectedAgent}
+          session={selectedSession}
+          {inspectingHistory}
           runCommand={runActionCommand}
           onLayoutChange={() => void syncWindowSize()}
           {privacy}
@@ -556,6 +618,13 @@
 {/if}
 
 <style>
+  .compact-header { display: flex; align-items: center; }
+  .window-handle, .window-tools button { border: 1px solid var(--island-border-subtle); border-radius: 8px; color: var(--island-text-secondary); background: var(--island-control-surface); min-height: 30px; min-width: 30px; cursor: pointer; }
+  .window-handle { margin-right: 10px; cursor: move; touch-action: none; }
+  .window-tools { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 6px 12px; font-size: 11px; color: var(--island-text-secondary); }
+  .window-tools button:focus-visible, .window-handle:focus-visible { outline: 2px solid var(--island-accent-primary); }
+  .session-picker { display: grid; gap: 5px; margin-bottom: 10px; color: var(--island-text-secondary); font-size: 11px; }
+  .session-picker select { width: 100%; min-width: 0; padding: 8px; border-radius: 8px; color-scheme: dark; color: var(--island-text-primary); background: var(--island-control-surface); border: 1px solid var(--island-border-subtle); }
   .agent-island, .island-loading {
     box-sizing: border-box;
     width: min(720px, calc(100vw - 24px));
@@ -567,11 +636,12 @@
     border: 1px solid var(--island-border-subtle);
     border-radius: var(--radius-island);
     background: var(--island-background);
-    box-shadow: var(--island-shadow);
-    backdrop-filter: var(--effect-backdrop);
+    /* Keep the transparent native window free of an out-of-bounds blur layer. */
+    box-shadow: var(--island-inset-highlight);
+    isolation: isolate;
   }
   .agent-island.expanded { max-height: 100vh; overflow-y: auto; scrollbar-color: var(--island-scrollbar-thumb) var(--island-scrollbar-track); }
-  :global(.agent-island.expanded > .compact) { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface-sticky); backdrop-filter: var(--effect-backdrop); }
+  .agent-island.expanded > .compact-header { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface-sticky); backdrop-filter: var(--effect-backdrop); }
   :global(.agent-island.expanded > .action-bar) { position: sticky; bottom: 0; z-index: var(--z-sticky); background: var(--surface-sticky); backdrop-filter: var(--effect-backdrop); }
   .adaptive-details { min-width: 0; border-top: 1px solid var(--island-border-subtle); padding: 12px; }
   .agent-strip { display: flex; gap: 7px; padding: 0 0 11px; overflow-x: auto; scrollbar-width: none; }
@@ -584,10 +654,18 @@
   .mini-dot.status-done { background: var(--island-status-done); }
   .mini-dot.status-waiting { background: var(--island-status-waiting); }
   .mini-dot.status-stopped { background: var(--island-status-stopped); }
+  .mini-dot.status-working { animation: working-pulse 1.8s ease-in-out infinite; }
+  .adaptive-details { animation: details-enter 180ms ease-out; }
+  .agent-strip button { transition: background 140ms, border-color 140ms, transform 140ms; }
+  .agent-strip button:hover { background: var(--island-control-hover); }
+  .agent-strip button:active { transform: scale(.96); }
+  @keyframes working-pulse { 50% { opacity: .45; transform: scale(.8); } }
+  @keyframes details-enter { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+  @media (prefers-reduced-motion: reduce) { .mini-dot.status-working, .adaptive-details { animation: none; } .agent-strip button { transition: none; } }
   .refresh-note,
   .layout-persistence-status { margin: 0 0 10px; padding: 7px 10px; border-radius: 10px; color: var(--island-refresh-error-text); background: var(--island-refresh-error-surface); font-size: 12px; overflow-wrap: anywhere; }
   .layout-persistence-status { margin: 10px 0 0; }
-  .empty { display: grid; gap: 5px; padding: 28px 20px; text-align: center; color: var(--island-text-secondary); }
+  .empty { display: grid; gap: 5px; padding: 8px 4px; text-align: left; color: var(--island-text-secondary); font-size: 12px; }
   .empty strong { color: var(--island-text-primary); }
   .stats-card { min-width: 0; height: 100%; box-sizing: border-box; display: grid; align-content: center; gap: 10px; }
   .stats-eyebrow { color: var(--island-text-secondary); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
@@ -595,8 +673,11 @@
   .stats-values span { min-width: 0; display: grid; gap: 2px; color: var(--island-text-secondary); font-size: 10px; }
   .stats-values strong { overflow: hidden; color: var(--island-accent-primary); font-size: 18px; text-overflow: ellipsis; }
   :global(.adaptive-details .layout-card .card) { width: 100%; height: 100%; box-sizing: border-box; border: 0; padding: 0; background: transparent; }
+  :global(.adaptive-details .layout-card.custom-height .log-card) { display: flex; flex-direction: column; }
+  :global(.adaptive-details .layout-card.custom-height .log) { height: auto; flex: 1; min-height: 0; }
   :global(.adaptive-details .layout-card .session-card),
   :global(.adaptive-details .layout-card .log-card) { grid-column: auto; }
+  :global(.adaptive-details .layout-card .log) { height: var(--layout-log-height, 164px); }
   .event-layer { position: fixed; top: 66px; left: 50%; z-index: var(--z-event); width: min(696px, calc(100vw - 48px)); max-height: calc(100dvh - 78px); overflow-y: auto; overscroll-behavior: contain; transform: translateX(-50%); pointer-events: auto; scrollbar-color: var(--island-scrollbar-thumb) transparent; }
   .listener-error { margin: 7px 0 0; padding: 10px 12px; border: 1px solid var(--island-border-subtle); border-radius: 12px; color: var(--island-refresh-error-text); background: var(--island-refresh-error-surface); font-size: 11px; }
   :global(.privacy .sensitive) { filter: blur(5px); user-select: none; pointer-events: none; }

@@ -2,7 +2,7 @@
   import type { Snippet } from "svelte";
 
   import { DEFAULT_LAYOUTS, type DefaultLayoutName } from "../../layout/presets";
-  import { moveCard, resizeCard, setCardVisible } from "../../layout/reorder";
+  import { moveCard, resizeCard, setCardVisible, setCardHeight } from "../../layout/reorder";
   import {
     CARD_SIZES,
     REQUIRED_CARD_IDS,
@@ -19,6 +19,7 @@
     onLayoutChange?: (layout: LayoutConfigV1) => void;
     beginInteraction?: () => void;
     endInteraction?: () => void;
+    emptyCardIds?: CardId[];
   }
 
   let {
@@ -27,6 +28,7 @@
     onLayoutChange,
     beginInteraction,
     endInteraction,
+    emptyCardIds = [],
   }: Props = $props();
 
   const cardNames: Record<CardId, string> = {
@@ -63,7 +65,7 @@
     return {
       version: 1,
       preset: value.preset,
-      cards: value.cards.map(({ id, size, visible }) => ({ id, size, visible })),
+      cards: value.cards.map((card) => ({ ...card })),
     };
   }
 
@@ -154,6 +156,8 @@
     {editing}
     {beginInteraction}
     {endInteraction}
+    {emptyCardIds}
+    onResize={(id, height) => apply(setCardHeight(layout, id, height))}
     onMove={move}
   >
     {#snippet children(placement: CardPlacement)}
@@ -163,7 +167,7 @@
             <span class="drag-hint" aria-hidden="true">{editing ? "⋮⋮" : ""}</span>
             <strong>{cardNames[placement.id]}卡片</strong>
           </div>
-          {#if editing}<span class="size-badge">{sizeNames[placement.size]}</span>{/if}
+          {#if editing}<span class="size-badge">{placement.height ? `${placement.height}px` : sizeNames[placement.size]}</span>{/if}
         </div>
 
         <div class="card-content">
@@ -320,11 +324,13 @@
   }
 
   .card-shell {
+    box-sizing: border-box;
+    height: 100%;
     min-height: inherit;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 11px;
+    gap: var(--layout-card-gap, 8px);
+    padding: var(--layout-card-padding, 11px);
   }
 
   .card-heading {
@@ -343,6 +349,8 @@
   .size-badge,
   .restore-tray > span,
   .card-content {
+    min-height: 0;
+    overflow: auto;
     color: var(--island-text-secondary, GrayText);
   }
 

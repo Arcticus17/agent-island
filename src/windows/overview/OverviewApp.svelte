@@ -35,7 +35,7 @@
   };
 
   type ActionUiState = {
-    state: "pending" | "failed";
+    state: "pending" | "failed" | "success";
     code: string | null;
     request: number;
   };
@@ -146,7 +146,10 @@
     if (disposed || actions[key]?.request !== request) return result;
     if (result.ok) {
       if (command.name === "stop_session" || command.name === "restart_session") await refresh();
-      if (!disposed && actions[key]?.request === request) delete actions[key];
+      if (!disposed && actions[key]?.request === request) {
+        if (command.name === "restart_session") actions[key] = { state: "success", code: "已打开恢复终端，请在终端确认会话状态", request };
+        else delete actions[key];
+      }
     } else {
       actions[key] = { state: "failed", code: result.code, request };
     }
@@ -274,7 +277,8 @@
   }
 
   function canRestart(row: OverviewRow): boolean {
-    return row.agent.can_restart === true &&
+    return Boolean(row.session.cwd) &&
+      (row.agent.can_restart === true || ["Claude Code", "Codex CLI", "OpenCode", "Hermes"].includes(row.agent.name)) &&
       (row.session.lifecycle === "Historical" || row.agent.state.process === "stopped");
   }
 
@@ -392,6 +396,7 @@
             <button data-testid="overview-restart" type="button" disabled={!canRestart(selectedRow) || selectedAction?.state === "pending"} onclick={() => void runAction(selectedRow.key, { name: "restart_session", agentName: selectedRow.agent.name, sessionId: selectedRow.session.id })}>恢复</button>
             <button data-testid="overview-stop" class="danger" type="button" disabled={selectedRow.session.lifecycle !== "Active" || selectedRow.session.display_status === "stopped" || selectedAction?.state === "pending"} onclick={stopSelected}>{stopConfirmationKey === selectedRow.key ? "确认停止" : "停止"}</button>
             {#if selectedAction?.state === "failed"}<span class="action-error" role="alert">{selectedAction.code}</span>{/if}
+            {#if selectedAction?.state === "success"}<span role="status">{selectedAction.code}</span>{/if}
           </div>
           <form class="composer" onsubmit={(event) => { event.preventDefault(); void sendPrompt(); }}>
             <input data-testid="overview-prompt" aria-label="给当前会话发消息" value={drafts[selectedRow.key] ?? ""} oninput={(event) => updateDraft(selectedRow.key, event.currentTarget.value)} placeholder="给这个会话发消息…" />

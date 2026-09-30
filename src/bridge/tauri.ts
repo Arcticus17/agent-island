@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { availableMonitors, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
+import { clampWindowPlacement, parseWindowPlacement, WINDOW_PLACEMENT_KEY } from "./window-placement";
 
 // Temporary raw exports keep the reversible legacy UI working while all new
 // Svelte code consumes only AgentIslandBridge.
@@ -122,7 +123,51 @@ function isHookApproval(payload: unknown): payload is HookApproval {
 }
 
 export function createTauriBridge(): AgentIslandBridge {
+  async function placement(delta = 0) {
+    const window = getCurrentWindow();
+    const [position, size, scale, monitors] = await Promise.all([window.outerPosition(), window.innerSize(), window.scaleFactor(), availableMonitors()]);
+    return { window, height: size.height / scale, value: clampWindowPlacement({ x: position.x, y: position.y, width: size.width / scale + delta }, monitors, size.height / scale) };
+  }
   return {
+    async startWindowDrag() { await getCurrentWindow().startDragging(); },
+    async startWindowResize() { await getCurrentWindow().startResizeDragging("East"); },
+    async adjustWindowWidth(delta) {
+      if (!Number.isFinite(delta)) throw new Error("无效窗口宽度");
+      const { window, value, height } = await placement(delta);
+      await window.setSize(new LogicalSize(value.width, height));
+      await window.setPosition(new PhysicalPosition(value.x, value.y));
+    },
+    async initializeWindowPlacement(onError) {
+      const window = getCurrentWindow();
+      const saved = parseWindowPlacement(localStorage.getItem(WINDOW_PLACEMENT_KEY));
+      if (saved) {
+        const [monitors, size, scale] = await Promise.all([availableMonitors(), window.innerSize(), window.scaleFactor()]);
+        const height = size.height / scale;
+        const value = clampWindowPlacement(saved, monitors, height);
+        await window.setSize(new LogicalSize(value.width, height));
+        await window.setPosition(new PhysicalPosition(value.x, value.y));
+      }
+      let disposed = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let saving = false;
+      let again = false;
+      const save = async () => {
+        if (disposed) return;
+        if (saving) { again = true; return; }
+        saving = true;
+        try {
+          const { value } = await placement();
+          if (!disposed) localStorage.setItem(WINDOW_PLACEMENT_KEY, JSON.stringify({ version: 1, ...value }));
+        } catch (error) { if (!disposed) onError?.(error); }
+        finally { saving = false; if (again) { again = false; schedule(); } }
+      };
+      const schedule = () => { clearTimeout(timer); timer = setTimeout(() => { void save(); }, 150); };
+      const moved = await window.onMoved(schedule);
+      let resized: () => void;
+      try { resized = await window.onResized(schedule); }
+      catch (error) { moved(); throw error; }
+      return () => { disposed = true; clearTimeout(timer); moved(); resized(); };
+    },
     async getSnapshot() {
       const snapshot = await invoke<AgentViewSnapshot>("get_agent_snapshot");
       return assertSupportedSnapshot(snapshot);
@@ -164,7 +209,15 @@ export function createTauriBridge(): AgentIslandBridge {
       };
     },
     async resizeWindow({ width, height }) {
-      await getCurrentWindow().setSize(new LogicalSize(width, height));
+      const window = getCurrentWindow();
+      const [size, scale, monitors, position] = await Promise.all([window.innerSize(), window.scaleFactor(), availableMonitors(), window.outerPosition()]);
+      const value = clampWindowPlacement({ x: position.x, y: position.y, width }, monitors, height);
+      const monitor = monitors.find(m => value.x >= m.workArea.position.x && value.x < m.workArea.position.x + m.workArea.size.width && value.y >= m.workArea.position.y && value.y < m.workArea.position.y + m.workArea.size.height) ?? monitors[0];
+      const boundedHeight = Math.min(height, monitor.workArea.size.height / monitor.scaleFactor);
+      if (Math.abs(size.width / scale - value.width) >= 1 || Math.abs(size.height / scale - boundedHeight) >= 1) {
+        await window.setSize(new LogicalSize(value.width, boundedHeight));
+      }
+      if (position.x !== value.x || position.y !== value.y) await window.setPosition(new PhysicalPosition(value.x, value.y));
     },
   };
 }

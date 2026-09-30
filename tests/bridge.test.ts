@@ -14,14 +14,20 @@ const tauri = vi.hoisted(() => ({
   invoke: vi.fn(),
   listen: vi.fn(),
   setSize: vi.fn(),
+  setPosition: vi.fn(),
+  startDragging: vi.fn(),
+  startResizeDragging: vi.fn(),
+  onMoved: vi.fn(),
+  onResized: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauri.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauri.listen }));
 vi.mock("@tauri-apps/api/window", () => ({
-  availableMonitors: vi.fn(),
+  availableMonitors: vi.fn(async () => [{ scaleFactor: 1, workArea: { position: { x: 0, y: 0 }, size: { width: 1920, height: 1040 } } }]),
   currentMonitor: vi.fn(),
-  getCurrentWindow: () => ({ setSize: tauri.setSize }),
+  getCurrentWindow: () => ({ ...tauri, innerSize: async () => ({ width: 400, height: 60 }), scaleFactor: async () => 1, outerPosition: async () => ({ x: 0, y: 0 }) }),
+  PhysicalPosition: class PhysicalPosition { constructor(public x: number, public y: number) {} },
   LogicalPosition: class LogicalPosition {},
   LogicalSize: class LogicalSize {
     constructor(public width: number, public height: number) {}
@@ -33,6 +39,11 @@ beforeEach(() => {
   tauri.invoke.mockReset();
   tauri.listen.mockReset();
   tauri.setSize.mockReset();
+  tauri.setPosition.mockReset();
+  tauri.startDragging.mockReset();
+  tauri.startResizeDragging.mockReset();
+  tauri.onMoved.mockReset();
+  tauri.onResized.mockReset();
 });
 
 const emptySnapshot = (schemaVersion = 1, generatedAtMs = 1): AgentViewSnapshot => ({
@@ -242,6 +253,37 @@ describe("Agent Island bridge contract", () => {
     expect(tauri.setSize).toHaveBeenCalledWith(
       expect.objectContaining({ width: 420, height: 60 }),
     );
+  });
+
+  it("avoids unchanged native dimensions and clamps keyboard width", async () => {
+    const bridge = createTauriBridge();
+    await bridge.resizeWindow?.({ width: 400, height: 60 });
+    expect(tauri.setSize).not.toHaveBeenCalled();
+    await bridge.adjustWindowWidth?.(1000);
+    expect(tauri.setSize).toHaveBeenCalledWith(expect.objectContaining({ width: 744, height: 60 }));
+    await expect(bridge.adjustWindowWidth?.(NaN)).rejects.toThrow();
+  });
+
+  it("delegates native movement and east-only resizing with visible failures", async () => {
+    const bridge = createTauriBridge();
+    await bridge.startWindowDrag?.();
+    await bridge.startWindowResize?.();
+    expect(tauri.startDragging).toHaveBeenCalledOnce();
+    expect(tauri.startResizeDragging).toHaveBeenCalledWith("East");
+    tauri.startDragging.mockRejectedValueOnce(new Error("denied"));
+    await expect(bridge.startWindowDrag?.()).rejects.toThrow("denied");
+  });
+
+  it("restores position and releases subscriptions on partial failure", async () => {
+    const moved = vi.fn();
+    vi.stubGlobal("localStorage", { getItem: () => '{"version":1,"x":3000,"y":2000,"width":600}', setItem: vi.fn() });
+    tauri.onMoved.mockResolvedValueOnce(moved);
+    tauri.onResized.mockRejectedValueOnce(new Error("listener failed"));
+    try {
+      await expect(createTauriBridge().initializeWindowPlacement?.()).rejects.toThrow("listener failed");
+      expect(tauri.setPosition).toHaveBeenCalledWith(expect.objectContaining({ x: 1320, y: 980 }));
+      expect(moved).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("maps typed commands to the existing Tauri command names and arguments", async () => {

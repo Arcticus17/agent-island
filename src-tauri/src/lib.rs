@@ -85,6 +85,7 @@ pub struct AgentSession {
 
 #[derive(Debug, Clone, Default)]
 struct SessionScan {
+    desktop_root_paths: Vec<String>,
     legacy_sessions: Vec<AgentSession>,
     candidates: Vec<interface::snapshot::SessionCandidate>,
     diagnostics: Vec<interface::diagnostics::DiagnosticRecord>,
@@ -361,16 +362,113 @@ fn matching_processes<'a>(sys: &'a System, keyword: &str) -> Vec<&'a sysinfo::Pr
         .iter()
         .filter(|(_pid, process)| {
             let name = process.name().to_string_lossy().to_lowercase();
-            let cmd = process
+            let args = process
                 .cmd()
                 .iter()
                 .map(|s| s.to_string_lossy().to_lowercase())
-                .collect::<Vec<_>>()
-                .join(" ");
-            name.contains(keyword) || cmd.contains(keyword)
+                .collect::<Vec<_>>();
+            matches_agent_process(&name, &args, keyword)
         })
         .map(|(_pid, process)| process)
         .collect()
+}
+
+fn matches_agent_process(name: &str, args: &[String], keyword: &str) -> bool {
+    // A Codex desktop app-server owns many tasks, not a single CLI session.
+    // Never infer CLI ownership from arbitrary prompt text or a parent shell.
+    if keyword.eq_ignore_ascii_case("codex") {
+        if args.iter().skip(1).any(|arg| arg == "app-server") {
+            return false;
+        }
+        if name.eq_ignore_ascii_case("codex.exe") || name.eq_ignore_ascii_case("codex") {
+            return true;
+        }
+        if !matches!(name, "node" | "node.exe") {
+            return false;
+        }
+        return args.get(1).is_some_and(|entrypoint| {
+            let normalized = entrypoint.replace('\\', "/");
+            normalized.ends_with("/@openai/codex/bin/codex.js")
+        });
+    }
+    // Preserve configured keyword matching for other/custom providers.
+    name.contains(keyword) || args.join(" ").contains(keyword)
+}
+
+#[cfg(test)]
+mod process_classifier_tests {
+    use super::matches_agent_process;
+
+    fn matches(name: &str, args: &[&str], keyword: &str) -> bool {
+        matches_agent_process(
+            name,
+            &args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
+            keyword,
+        )
+    }
+
+    #[test]
+    fn excludes_desktop_server_and_code_mode_helpers_from_cli() {
+        assert!(!matches(
+            "codex.exe",
+            &["codex.exe", "app-server", "--listen", "stdio://"],
+            "codex"
+        ));
+        assert!(!matches(
+            "codex-code-mode-host.exe",
+            &["codex-code-mode-host.exe"],
+            "codex"
+        ));
+    }
+
+    #[test]
+    fn ignores_shell_prompts_and_unrelated_node_arguments() {
+        assert!(!matches(
+            "powershell.exe",
+            &["powershell.exe", "-Command", "echo codex"],
+            "codex"
+        ));
+        assert!(!matches(
+            "node.exe",
+            &["node.exe", "server.js", "codex"],
+            "codex"
+        ));
+    }
+
+    #[test]
+    fn accepts_native_cli_and_official_node_entrypoint() {
+        assert!(matches(
+            "codex.exe",
+            &["codex.exe", "resume", "session-id"],
+            "codex"
+        ));
+        assert!(matches(
+            "node.exe",
+            &[
+                "node.exe",
+                r"C:\Users\中文 用户\node_modules\@openai\codex\bin\codex.js"
+            ],
+            "codex"
+        ));
+        assert!(!matches(
+            "node.exe",
+            &[
+                "node.exe",
+                "/node_modules/@openai/codex/bin/codex.js",
+                "app-server"
+            ],
+            "codex"
+        ));
+    }
+
+    #[test]
+    fn preserves_custom_keyword_matching() {
+        assert!(matches(
+            "powershell.exe",
+            &["powershell.exe", "custom-agent-probe"],
+            "custom-agent-probe"
+        ));
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -428,6 +526,26 @@ fn normalize_process_path(path: &str) -> String {
     path.trim_end_matches(['/', '\\'])
         .replace('/', "\\")
         .to_lowercase()
+}
+
+/// Process-fact placeholder for the compatibility `AgentInfo` fields.
+///
+/// The island's authoritative status is derived from structured events in
+/// `interface::snapshot`; `apply_snapshot_projection` writes that back onto
+/// `AgentInfo`. Text heuristics used to feed these fields and were removed so a
+/// message body can never decide a status again.
+fn legacy_process_status(
+    total_cpu: f32,
+    total_mem_mb: f32,
+    busy: bool,
+) -> (&'static str, domain::DisplayStatus) {
+    if busy {
+        ("working", domain::DisplayStatus::Working)
+    } else if total_cpu > 80.0 || total_mem_mb > 1024.0 {
+        ("high_load", domain::DisplayStatus::Working)
+    } else {
+        ("idle", domain::DisplayStatus::Idle)
+    }
 }
 
 fn scan_agents(
@@ -586,19 +704,12 @@ fn scan_agents(
         let idle_secs = now.duration_since(entry.last_active).as_secs();
         let log_status = log.as_ref().and_then(|l| l.log_status.clone());
         let alert = log.as_ref().and_then(|l| l.alert.clone());
-        let status = if log_status.as_deref() == Some("error") {
-            "error"
-        } else if log_status.as_deref() == Some("waiting") {
-            "waiting"
-        } else if busy {
-            "working"
-        } else if log_status.as_deref() == Some("done") {
-            "done"
-        } else if total_cpu > 80.0 || total_mem_mb > 1024.0 {
-            "high_load"
-        } else {
-            "idle"
-        };
+        // Compatibility placeholder only. Structured events are the single source
+        // of the authoritative status and `apply_snapshot_projection` overwrites
+        // both fields as soon as the agent has a snapshot view. Message text never
+        // decides a status here.
+        let (status, placeholder_display_status) =
+            legacy_process_status(total_cpu, total_mem_mb, busy);
 
         if let Some(main_proc) = main {
             let cmd_vec: Vec<String> = main_proc
@@ -637,7 +748,7 @@ fn scan_agents(
             id: agent_id.to_string(),
             name: agent_name.clone(),
             status: status.to_string(),
-            display_status: domain::DisplayStatus::Idle,
+            display_status: placeholder_display_status,
             pid: main.map(|p| p.pid().as_u32()),
             cpu: Some(total_cpu),
             memory: Some(total_mem_mb),
@@ -873,6 +984,17 @@ fn home_dir() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
 }
 
+fn codex_data_root_from(configured: Option<&std::ffi::OsStr>, home: Option<&Path>) -> Option<PathBuf> {
+    configured
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.map(|path| path.join(".codex")))
+}
+
+fn codex_data_root() -> Option<PathBuf> {
+    codex_data_root_from(std::env::var_os("CODEX_HOME").as_deref(), home_dir().as_deref())
+}
+
 fn stats_path() -> PathBuf {
     home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -1050,323 +1172,6 @@ fn extract_paths(text: &str) -> Vec<String> {
         }
     }
     out
-}
-
-#[allow(dead_code)]
-fn text_signal(text: &str) -> Option<(&'static str, &'static str)> {
-    let lower = text.to_lowercase();
-    const ERRORS: &[&str] = &[
-        "error:",
-        "error occurred",
-        "failed to",
-        "exception",
-        "panic",
-        "traceback",
-        "is_error",
-        "报错:",
-        "报错：",
-        "失败:",
-        "失败：",
-        "出错:",
-        "出错：",
-    ];
-    const WAITING: &[&str] = &[
-        "waiting for",
-        "awaiting",
-        "permission required",
-        "approval",
-        "confirm",
-        "确认",
-        "是否继续",
-        "y/n",
-        "yes/no",
-        "需要你",
-        "请确认",
-    ];
-    const DONE: &[&str] = &[
-        "completed",
-        "finished",
-        "successfully",
-        "success",
-        "summary",
-        "完成",
-        "成功",
-        "结束",
-    ];
-    if ERRORS.iter().any(|k| lower.contains(k)) {
-        return Some(("error", "检测到报错"));
-    }
-    if WAITING.iter().any(|k| lower.contains(k)) {
-        return Some(("waiting", "等待确认"));
-    }
-    if DONE.iter().any(|k| lower.contains(k))
-        && !lower.contains("not done")
-        && !lower.contains("undone")
-    {
-        return Some(("done", "已完成"));
-    }
-    None
-}
-
-#[allow(dead_code)]
-fn claude_snapshot(path: &Path) -> Option<LogSnapshot> {
-    let text = read_tail(path, 96 * 1024);
-    let mut recent = Vec::new();
-    let mut file = None;
-    let mut cwd = None;
-    let mut log_status = None;
-    let mut alert = None;
-
-    for line in text.lines().rev() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if cwd.is_none() {
-            cwd = v.get("cwd").and_then(|c| c.as_str()).map(String::from);
-        }
-        if log_status.is_none() && line.contains("subtype\":\"error\"") {
-            log_status = Some("error".to_string());
-            alert = Some("检测到报错".to_string());
-            break;
-        }
-        if v.get("type").and_then(|t| t.as_str()) == Some("assistant") {
-            if let Some(content) = json_text(&v) {
-                let clean = clean_line(&content, 180);
-                if !clean.is_empty() && !recent.contains(&clean) {
-                    recent.push(clean);
-                }
-                if file.is_none() {
-                    file = extract_paths(&content).into_iter().rev().next();
-                }
-                if log_status.is_none() {
-                    let stop_reason = v
-                        .pointer("/message/stop_reason")
-                        .and_then(|s| s.as_str())
-                        .unwrap_or("");
-                    if stop_reason == "end_turn" {
-                        log_status = Some("done".to_string());
-                        alert = Some("已完成".to_string());
-                    } else {
-                        log_status = Some("working".to_string());
-                        alert = Some("正在执行".to_string());
-                    }
-                }
-            }
-        }
-        if recent.len() >= 5 {
-            break;
-        }
-    }
-    if recent.is_empty() {
-        recent.push("暂无输出".to_string());
-    }
-    Some(LogSnapshot {
-        path: path.display().to_string(),
-        recent,
-        file,
-        cwd,
-        log_status,
-        alert,
-    })
-}
-
-#[allow(dead_code)]
-fn codex_snapshot(path: &Path) -> Option<LogSnapshot> {
-    let text = read_tail(path, 128 * 1024);
-    let mut recent = Vec::new();
-    let mut file = None;
-    let mut cwd = None;
-    let mut log_status = None;
-    let mut alert = None;
-
-    for line in text.lines().rev() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if cwd.is_none() {
-            cwd = v
-                .pointer("/payload/cwd")
-                .and_then(|c| c.as_str())
-                .or_else(|| {
-                    v.pointer("/payload/environments/environments/local/cwd")
-                        .and_then(|c| c.as_str())
-                })
-                .map(String::from);
-        }
-        let payload = v.get("payload");
-        let ptype = payload
-            .and_then(|p| p.get("type"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
-        if ptype == "function_call" {
-            let args = payload
-                .and_then(|p| p.get("arguments"))
-                .and_then(|a| a.as_str())
-                .unwrap_or("");
-            let command = serde_json::from_str::<Value>(args)
-                .ok()
-                .and_then(|a| a.get("command").and_then(|c| c.as_str()).map(String::from))
-                .unwrap_or_else(|| args.to_string());
-            let clean = clean_line(&format!("执行: {command}"), 180);
-            if !clean.is_empty() && !recent.contains(&clean) {
-                recent.push(clean);
-            }
-            if file.is_none() {
-                file = extract_paths(&command).into_iter().rev().next();
-            }
-            if log_status.is_none() {
-                log_status = Some("working".to_string());
-                alert = Some("正在执行".to_string());
-            }
-        } else if ptype == "function_call_output" {
-            let output = payload
-                .and_then(|p| p.get("output"))
-                .and_then(|o| o.as_str())
-                .unwrap_or("");
-            if log_status.is_none() {
-                let clean = clean_line(output, 180);
-                if !clean.is_empty() && !recent.contains(&clean) {
-                    recent.push(clean);
-                }
-                log_status = Some("working".to_string());
-                alert = Some("正在执行".to_string());
-            }
-        } else if ptype == "message" {
-            let role = payload
-                .and_then(|p| p.get("role"))
-                .and_then(|r| r.as_str())
-                .unwrap_or("");
-            if role == "assistant" {
-                if let Some(content) = payload.and_then(json_text) {
-                    let clean = clean_line(&content, 180);
-                    if !clean.is_empty() && !recent.contains(&clean) {
-                        recent.push(clean);
-                    }
-                    if file.is_none() {
-                        file = extract_paths(&content).into_iter().rev().next();
-                    }
-                    if log_status.is_none() {
-                        log_status = Some("working".to_string());
-                        alert = Some("正在执行".to_string());
-                    }
-                }
-            }
-        } else if ptype == "event_msg" {
-            let inner_type = payload
-                .and_then(|p| p.get("type"))
-                .and_then(|t| t.as_str())
-                .unwrap_or("");
-            if inner_type == "user_message" {
-                continue;
-            }
-            if log_status.is_none() {
-                if inner_type.contains("error") {
-                    log_status = Some("error".to_string());
-                    alert = Some("检测到报错".to_string());
-                    break;
-                }
-                if inner_type == "permission_request"
-                    || inner_type.contains("permission")
-                    || inner_type.contains("approval")
-                {
-                    log_status = Some("waiting".to_string());
-                    alert = Some("等待确认".to_string());
-                    break;
-                }
-                if inner_type == "turn_complete" || inner_type == "turn_completed" {
-                    log_status = Some("done".to_string());
-                    alert = Some("已完成".to_string());
-                    break;
-                }
-            }
-        }
-        if recent.len() >= 5 {
-            break;
-        }
-    }
-    if recent.is_empty() {
-        recent.push("暂无输出".to_string());
-    }
-    Some(LogSnapshot {
-        path: path.display().to_string(),
-        recent,
-        file,
-        cwd,
-        log_status,
-        alert,
-    })
-}
-
-#[allow(dead_code)]
-fn opencode_snapshot_from_text(path: &Path, text: &str) -> LogSnapshot {
-    let mut recent = Vec::new();
-    let mut file = None;
-    let mut cwd = None;
-    let mut log_status = None;
-    let mut alert = None;
-
-    for line in text.lines().rev() {
-        if cwd.is_none() {
-            if let Some(idx) = line.find("directory=") {
-                let rest = line[idx + 10..].trim();
-                let val = if rest.starts_with('"') {
-                    rest.trim_start_matches('"')
-                        .split('"')
-                        .next()
-                        .unwrap_or("")
-                        .to_string()
-                } else {
-                    rest.split_whitespace().next().unwrap_or("").to_string()
-                };
-                if !val.is_empty() {
-                    cwd = Some(val);
-                }
-            }
-        }
-        if log_status.is_none() && line.contains("level=ERROR") {
-            log_status = Some("error".to_string());
-            alert = Some("检测到报错".to_string());
-            break;
-        }
-        let msg = line.rsplit("message=").next().unwrap_or(line);
-        let clean = clean_line(msg, 160);
-        let noisy = [
-            "init",
-            "cleanup",
-            "formatter",
-            "lsp",
-            "watcher backend",
-            "location services",
-        ]
-        .iter()
-        .any(|n| clean.to_lowercase().contains(n));
-        if !clean.is_empty() && !noisy && !recent.contains(&clean) {
-            recent.push(clean);
-        }
-        if file.is_none() {
-            file = extract_paths(line).into_iter().rev().next();
-        }
-        if log_status.is_none() {
-            if let Some((status, alert_text)) = text_signal(msg) {
-                log_status = Some(status.to_string());
-                alert = Some(alert_text.to_string());
-            }
-        }
-        if recent.len() >= 5 {
-            break;
-        }
-    }
-    if recent.is_empty() {
-        recent.push("暂无输出".to_string());
-    }
-    LogSnapshot {
-        path: path.display().to_string(),
-        recent,
-        file,
-        cwd,
-        log_status,
-        alert,
-    }
 }
 
 fn list_newest_files(root: &Path, depth: usize, ext: &str, max: usize) -> Vec<PathBuf> {
@@ -1609,6 +1414,18 @@ fn codex_metadata(text: &str) -> (Option<String>, Option<String>) {
     (None, None)
 }
 
+fn is_codex_desktop_root(text: &str) -> bool {
+    text.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).find(|value| {
+        value.get("type").and_then(Value::as_str) == Some("session_meta")
+    }).is_some_and(|value| {
+        let payload = &value["payload"];
+        matches!(payload["originator"].as_str(), Some("Codex Desktop" | "codex_work_desktop"))
+            && payload["thread_source"].as_str() == Some("user")
+            && payload.get("parent_thread_id").is_none_or(Value::is_null)
+            && payload["source"].as_str() == Some("vscode")
+    })
+}
+
 fn session_candidate_from_legacy(
     agent_id: &str,
     session: &AgentSession,
@@ -1716,12 +1533,18 @@ fn scan_session_directory(
     // Every file contributes identity evidence. Only selected files get expensive display parsing.
     for (_, path) in &files {
         let mut identity_scan = index_session_file(agent_id, path);
+        scan.desktop_root_paths.append(&mut identity_scan.desktop_root_paths);
         scan.candidates.append(&mut identity_scan.candidates);
         scan.diagnostics.append(&mut identity_scan.diagnostics);
         if identity_scan.acquisition == AcquisitionCompleteness::Incomplete {
             scan.acquisition = AcquisitionCompleteness::Incomplete;
         }
     }
+    // This changes display priority only: all identities remain available to matching.
+    // Stable ordering preserves newest-first order within each group.
+    scan.candidates.sort_by_key(|candidate| {
+        !candidate.view.log_path.as_ref().is_some_and(|path| scan.desktop_root_paths.contains(path))
+    });
     let active_id = indexed_active_session(&scan, process, epoch_millis());
     let active = scan
         .candidates
@@ -1825,6 +1648,20 @@ fn index_session_file(agent_id: &str, path: &Path) -> SessionScan {
             .unwrap_or(0);
         let mut head = Vec::new();
         (&mut file).take(16 * 1024).read_to_end(&mut head)?;
+        // Codex embeds instructions in session_meta: its first JSON record can
+        // exceed 16 KiB. Finish that record before trimming partial tail data,
+        // otherwise one ordinary long header invalidates the entire scan.
+        // Keep a hard bound for malformed files without any record delimiter.
+        while !head.contains(&b'\n')
+            && (head.len() as u64) < metadata.len()
+            && head.len() < 1024 * 1024
+        {
+            let previous_len = head.len();
+            (&mut file).take(16 * 1024).read_to_end(&mut head)?;
+            if head.len() == previous_len {
+                break;
+            }
+        }
         if metadata.len() > head.len() as u64 {
             head.truncate(
                 head.iter()
@@ -1839,6 +1676,9 @@ fn index_session_file(agent_id: &str, path: &Path) -> SessionScan {
     if let Err(error) = result {
         scan.record_issue(agent_id, io_issue(&error));
         return scan;
+    }
+    if agent_id == "codex" && is_codex_desktop_root(&acquired.text) {
+        scan.desktop_root_paths.push(path.to_string_lossy().into_owned());
     }
     let (id, cwd) = if agent_id == "codex" {
         codex_metadata(&acquired.text)
@@ -2087,13 +1927,12 @@ fn build_session_scan_for_process(
         .unwrap_or("");
     match kind {
         "claude" | "codex" => {
-            let Some(root) = home_dir().map(|home| {
-                if kind == "claude" {
-                    home.join(".claude/projects")
-                } else {
-                    home.join(".codex/sessions")
-                }
-            }) else {
+            let root = if kind == "claude" {
+                home_dir().map(|home| home.join(".claude/projects"))
+            } else {
+                codex_data_root().map(|root| root.join("sessions"))
+            };
+            let Some(root) = root else {
                 let mut scan = SessionScan::default();
                 scan.record_issue(kind, domain::DataIssue::LogUnavailable);
                 return scan;
@@ -2466,7 +2305,7 @@ fn scan_codex_text(text: &str, now: u64) -> Option<UsageInfo> {
 }
 
 fn codex_usage() -> Option<UsageInfo> {
-    let root = home_dir()?.join(".codex").join("sessions");
+    let root = codex_data_root()?.join("sessions");
     let files = list_newest_files(&root, 5, "jsonl", 6);
     if files.is_empty() {
         return None;
@@ -3227,8 +3066,10 @@ fn focus_agent_terminal(name: String, state: tauri::State<AppState>) -> Result<(
                 unsafe {
                     if let Some(hwnd) = window_hwnd_for_pid(target) {
                         let _ = ShowWindow(hwnd, SW_RESTORE);
-                        let _ = SetForegroundWindow(hwnd);
-                        return Ok(());
+                        if SetForegroundWindow(hwnd).as_bool() {
+                            return Ok(());
+                        }
+                        return Err("Windows 未允许切换到 Agent 终端，请从任务栏选择该窗口".into());
                     }
                 }
                 let Some(parent) = (unsafe { parent_pid_of(target) }) else {
@@ -3551,7 +3392,48 @@ fn open_terminal_in_dir(dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn restart_program_available(program: &str, cwd: Option<&str>) -> Result<bool, String> {
+    // `where.exe C:\...\agent.exe` treats the drive colon as path:pattern
+    // and rejects valid paths. Resolve explicit paths directly instead.
+    if program.contains(['\\', '/']) || std::path::Path::new(program).is_absolute() {
+        let path = std::path::Path::new(program);
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::path::Path::new(cwd.unwrap_or(".")).join(path)
+        };
+        return Ok(resolved.is_file());
+    }
+    let mut command = quiet_command("where.exe");
+    command.arg(program);
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    command
+        .output()
+        .map(|result| result.status.success())
+        .map_err(|error| format!("无法检查 Agent 启动程序: {error}"))
+}
+
 fn spawn_command_in_dir(cmd: &[String], cwd: Option<&str>) -> Result<(), String> {
+    if cmd.first().is_none_or(|program| program.trim().is_empty()) {
+        return Err("未找到可启动的 Agent 命令".into());
+    }
+    if cmd
+        .iter()
+        .any(|arg| arg.contains(['&', '|', '<', '>', '^', '%', '!', '\r', '\n', '"']))
+    {
+        return Err("恢复命令包含不支持的终端特殊字符，无法安全启动".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if !restart_program_available(&cmd[0], cwd)? {
+            return Err(
+                "未找到 Agent 命令，请先安装对应 CLI 并将其加入 PATH 后重新打开小岛".into(),
+            );
+        }
+    }
     let cmdline = cmd
         .iter()
         .map(|arg| {
@@ -3801,40 +3683,9 @@ fn restart_agent(name: String, state: tauri::State<AppState>) -> Result<(), Stri
         .get(&name)
         .ok_or_else(|| "no command recorded for this agent".to_string())?;
     let base = clean_agent_base(&name, &command.cmd);
-    let cmdline = base
-        .iter()
-        .map(|arg| {
-            if arg.contains(' ') && !arg.starts_with('"') {
-                format!("\"{}\"", arg.replace('"', "\"\""))
-            } else {
-                arg.clone()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-        let mut builder = std::process::Command::new("cmd.exe");
-        builder
-            .arg("/K")
-            .arg(&cmdline)
-            .creation_flags(CREATE_NEW_CONSOLE);
-        if let Some(cwd) = &command.cwd {
-            builder.current_dir(cwd);
-        }
-        builder
-            .spawn()
-            .map_err(|e| format!("failed to restart agent: {e}"))?;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = cmdline;
-        return Err("not supported on this platform".into());
-    }
-    Ok(())
+    let cwd = command.cwd.clone();
+    drop(session);
+    spawn_command_in_dir(&base, cwd.as_deref())
 }
 
 #[tauri::command]
@@ -3854,13 +3705,52 @@ fn restart_session(
         .session
         .lock()
         .map_err(|_| "state lock error".to_string())?;
-    let command = session
+    let base = session
         .commands
         .get(&name)
-        .ok_or_else(|| "no command recorded for this agent".to_string())?;
-    let base = clean_agent_base(&name, &command.cmd);
-    let resume_cmd = resume_command_for(&name, &session_id, &base);
+        .map(|command| clean_agent_base(&name, &command.cmd));
+    let resume_cmd = interactive_resume_command(&name, &session_id, base.as_deref())?;
+    drop(session);
     spawn_command_in_dir(&resume_cmd, Some(&dir))
+}
+
+fn interactive_resume_command(
+    name: &str,
+    session_id: &str,
+    base: Option<&[String]>,
+) -> Result<Vec<String>, String> {
+    if session_id.trim().is_empty() {
+        return Err("缺少要恢复的会话编号".into());
+    }
+    // Codex interactive resume is verified against the installed CLI help.
+    // Other providers retain their existing configured resume arguments.
+    if let Some(cli) = match name {
+        "Claude Code" => Some("claude"),
+        "OpenCode" => Some("opencode"),
+        "Hermes" => Some("hermes"),
+        _ => None,
+    } {
+        return Ok(resume_command_for(name, session_id, &[cli.to_string()]));
+    }
+    let (cli, args): (&str, &[&str]) = match name {
+        "Codex CLI" => ("codex", &["resume"]),
+        _ => {
+            let base = base
+                .filter(|cmd| !cmd.is_empty())
+                .ok_or("该 Agent 未记录启动命令，暂不支持恢复会话")?;
+            let supported = agent_defs()
+                .iter()
+                .any(|def| def.name == name && !def.resume_args.is_empty());
+            if !supported {
+                return Err("该 Agent 未配置会话恢复命令".into());
+            }
+            return Ok(resume_command_for(name, session_id, base));
+        }
+    };
+    let mut command = vec![cli.to_string()];
+    command.extend(args.iter().map(|arg| arg.to_string()));
+    command.push(session_id.to_string());
+    Ok(command)
 }
 
 #[tauri::command]
@@ -4130,10 +4020,22 @@ fn toggle_window(app: &tauri::AppHandle) {
 
 #[tauri::command]
 fn open_overview(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("overview") {
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
+    let window = app
+        .get_webview_window("overview")
+        .ok_or("总览窗口尚未创建")?;
+    window
+        .unminimize()
+        .map_err(|error| format!("无法还原总览窗口: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("无法显示总览窗口: {error}"))?;
+    // The capsule itself is topmost, so an ordinary focused window remains behind it.
+    window
+        .set_always_on_top(true)
+        .map_err(|error| format!("无法置顶总览窗口: {error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("无法聚焦总览窗口: {error}"))?;
     Ok(())
 }
 
@@ -4175,6 +4077,48 @@ fn start_global_hotkeys(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interactive_resume_works_without_a_recorded_process_command() {
+        assert_eq!(
+            interactive_resume_command("Codex CLI", "synthetic-session", None).unwrap(),
+            vec!["codex", "resume", "synthetic-session"]
+        );
+        assert_eq!(
+            interactive_resume_command("OpenCode", "synthetic-session", None).unwrap(),
+            resume_command_for("OpenCode", "synthetic-session", &["opencode".into()])
+        );
+        assert!(interactive_resume_command("Unknown", "synthetic-session", None).is_err());
+        assert!(interactive_resume_command("Codex CLI", "", None).is_err());
+    }
+
+    #[test]
+    fn restart_rejects_empty_and_shell_control_arguments_before_launch() {
+        assert!(spawn_command_in_dir(&[], None).is_err());
+        assert!(spawn_command_in_dir(&["codex".into(), "session&other".into()], None).is_err());
+        assert!(spawn_command_in_dir(&["codex".into(), "%PATH%".into()], None).is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn restart_preflight_accepts_absolute_executable_paths_without_where_pattern_parsing() {
+        let fixture = std::env::temp_dir().join(format!("island-启动测试 {}", std::process::id()));
+        std::fs::create_dir_all(&fixture).unwrap();
+        let shim = fixture.join("agent shim.cmd");
+        std::fs::write(&shim, "@echo off\r\n").unwrap();
+        assert!(restart_program_available(shim.to_str().unwrap(), None).unwrap());
+        assert!(restart_program_available(".\\agent shim.cmd", fixture.to_str()).unwrap());
+        std::fs::remove_file(shim).unwrap();
+        std::fs::remove_dir(fixture).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        assert!(restart_program_available(executable.to_str().unwrap(), None).unwrap());
+        assert!(restart_program_available("cmd.exe", None).unwrap());
+        assert!(
+            !restart_program_available("C:\\不存在的测试目录\\Agent Tools\\missing.exe", None)
+                .unwrap()
+        );
+        assert!(!restart_program_available("missing-agent-87a310.cmd", None).unwrap());
+    }
 
     #[test]
     fn hook_approval_decision_rejects_unknown_id() {
@@ -4607,6 +4551,28 @@ mod tests {
     }
 
     #[test]
+    fn acquisition_index_reads_long_codex_metadata_record() {
+        let path = std::env::temp_dir().join(format!(
+            "agent-island-long-metadata-{}.jsonl",
+            epoch_millis()
+        ));
+        let metadata = serde_json::json!({
+            "type": "session_meta",
+            "payload": { "id": "long-header", "cwd": "D:/target",
+                "instructions": "x".repeat(48 * 1024) }
+        });
+        fs::write(&path, format!("{metadata}\n{{\"type\":\"unknown\"}}\n")).unwrap();
+        let scan = index_session_file("codex", &path);
+        fs::remove_file(&path).unwrap();
+        assert_eq!(scan.acquisition, AcquisitionCompleteness::Complete);
+        assert_eq!(scan.candidates[0].identity.session_id, "long-header");
+        assert_eq!(
+            scan.candidates[0].identity.project_path.as_deref(),
+            Some("D:/target")
+        );
+    }
+
+    #[test]
     fn acquisition_indexed_identity_disappearing_in_detail_gates_ownership() {
         for (name, replacement) in [("empty", ""), ("identity_removed", "{\"type\":\"unknown\"}\n"), ("replaced", "{\"type\":\"session_meta\",\"payload\":{\"id\":\"replacement\",\"cwd\":\"D:/other\"}}\n")] {
             let path = std::env::temp_dir().join(format!("agent-island-d1-race-{name}-{}.jsonl", epoch_millis()));
@@ -4996,6 +4962,59 @@ mod tests {
             "answer 0"
         );
         assert_eq!(snapshot.agents[0].history_sessions.len(), 3);
+    }
+
+    #[test]
+    fn codex_data_root_honors_override_without_mutating_environment() {
+        use std::ffi::OsStr;
+        let home = Path::new("C:/Users/测试 用户");
+        assert_eq!(codex_data_root_from(None, Some(home)), Some(home.join(".codex")));
+        assert_eq!(codex_data_root_from(Some(OsStr::new("")), Some(home)), Some(home.join(".codex")));
+        let custom = OsStr::new("D:/自定义 数据/codex");
+        assert_eq!(codex_data_root_from(Some(custom), Some(home)), Some(PathBuf::from(custom)));
+        assert_eq!(codex_data_root_from(Some(custom), None), Some(PathBuf::from(custom)));
+        assert_eq!(codex_data_root_from(None, None), None);
+    }
+
+    #[test]
+    fn discovery_desktop_root_precedes_helpers_without_discarding_identity_evidence() {
+        let root = std::env::temp_dir().join(format!("agent-island-desktop-{}", epoch_millis()));
+        fs::create_dir_all(&root).unwrap();
+        for index in 0..5 {
+            let path = root.join(format!("{index}.jsonl"));
+            let mut payload = serde_json::json!({"id": format!("s{index}"), "cwd":"D:/project", "originator":"Codex Desktop", "source":"vscode", "thread_source":"user"});
+            if index != 0 {
+                payload["source"] = serde_json::json!({"subagent":{}});
+                payload["parent_thread_id"] = serde_json::json!("s0");
+                payload["thread_source"] = serde_json::json!("guardian_review");
+            }
+            fs::write(&path, format!("{}\n", serde_json::json!({"type":"session_meta","payload":payload}))).unwrap();
+            File::options().write(true).open(&path).unwrap().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(10 + index)).unwrap();
+        }
+        let scan = scan_session_directory("codex", &root, None);
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(scan.candidates.len(), 5);
+        assert_eq!(scan.candidates[0].identity.session_id, "s0");
+        assert_eq!(scan.legacy_sessions.len(), 3);
+        assert_eq!(scan.legacy_sessions[0].id, "s0");
+        assert_eq!(indexed_active_session(&scan, None, 20_000), None);
+        let process = process_fact_from_observations("codex", "Codex CLI", &[ProcessObservation { pid:42, project_path:Some("D:/project".into()), started_at_ms:0 }]);
+        assert_eq!(indexed_active_session(&scan, Some(&process.identity), 20_000), None);
+        let snapshot = interface::snapshot::build_snapshot(20_000, &[process], &scan.candidates);
+        assert!(snapshot.agents[0].active_session.is_none());
+        assert_eq!(snapshot.agents[0].history_sessions.len(), 3);
+        assert_eq!(snapshot.agents[0].history_sessions[0].id, "s0");
+    }
+
+    #[test]
+    fn desktop_priority_requires_explicit_root_metadata() {
+        let valid = serde_json::json!({"type":"session_meta","payload":{"originator":"codex_work_desktop","source":"vscode","thread_source":"user"}});
+        assert!(is_codex_desktop_root(&valid.to_string()));
+        for (key, value) in [("originator", serde_json::json!("unknown")), ("source", serde_json::json!({"subagent":{}})), ("thread_source", serde_json::json!("guardian_review")), ("parent_thread_id", serde_json::json!("parent"))] {
+            let mut invalid = valid.clone();
+            invalid["payload"][key] = value;
+            assert!(!is_codex_desktop_root(&invalid.to_string()));
+        }
     }
 
     #[test]
@@ -5496,6 +5515,24 @@ mod tests {
         assert_eq!(serialized["usage"]["used_percent"], 42.0);
         assert_eq!(serialized["usage"]["stale"], false);
         assert_eq!(serialized["can_restart"], true);
+    }
+
+    #[test]
+    fn compatibility_status_placeholder_uses_process_facts_only() {
+        use domain::DisplayStatus;
+
+        assert_eq!(
+            legacy_process_status(0.0, 64.0, true),
+            ("working", DisplayStatus::Working)
+        );
+        assert_eq!(
+            legacy_process_status(95.0, 64.0, false),
+            ("high_load", DisplayStatus::Working)
+        );
+        assert_eq!(
+            legacy_process_status(0.0, 64.0, false),
+            ("idle", DisplayStatus::Idle)
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@ export interface CardPlacement {
   id: CardId;
   size: CardSize;
   visible: boolean;
+  height?: number;
 }
 
 export interface LayoutConfigV1 {
@@ -29,6 +30,7 @@ export type LayoutValidationError =
   | "unknown_card_id"
   | "duplicate_card_id"
   | "invalid_card_size"
+  | "invalid_card_height"
   | "invalid_card_visibility"
   | "missing_required_card"
   | "hidden_required_card"
@@ -72,12 +74,14 @@ export function validateLayout(input: unknown): LayoutValidationResult {
       if (seen.has(candidate.id)) return invalid("duplicate_card_id");
       if (!isOneOf(candidate.size, CARD_SIZES)) return invalid("invalid_card_size");
       if (typeof candidate.visible !== "boolean") return invalid("invalid_card_visibility");
+      if (candidate.height !== undefined && (typeof candidate.height !== "number" || !Number.isInteger(candidate.height) || candidate.height < 96 || candidate.height > 600)) return invalid("invalid_card_height");
 
       seen.add(candidate.id);
       cards.push({
         id: candidate.id,
         size: candidate.size,
         visible: candidate.visible,
+        ...(candidate.height === undefined ? {} : { height: candidate.height as number }),
       });
     }
 

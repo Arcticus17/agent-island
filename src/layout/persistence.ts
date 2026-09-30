@@ -24,7 +24,7 @@ function copyLayout(layout: LayoutConfigV1): LayoutConfigV1 {
   return {
     version: 1,
     preset: layout.preset,
-    cards: layout.cards.map(({ id, size, visible }) => ({ id, size, visible })),
+    cards: layout.cards.map((card) => ({ ...card })),
   };
 }
 

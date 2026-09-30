@@ -18,10 +18,10 @@ export const DEFAULT_LAYOUTS: Record<DefaultLayoutName, LayoutConfigV1> = {
     { id: "stats", size: "standard", visible: false },
   ]),
   monitoring: layout("monitoring", [
-    { id: "status", size: "standard", visible: true },
-    { id: "usage", size: "standard", visible: true },
-    { id: "session", size: "wide", visible: true },
+    { id: "status", size: "compact", visible: true },
+    { id: "usage", size: "compact", visible: true },
     { id: "log", size: "wide", visible: true },
+    { id: "session", size: "standard", visible: true },
     { id: "stats", size: "standard", visible: true },
   ]),
   debugging: layout("debugging", [

@@ -8,7 +8,7 @@ import {
 } from "./schema";
 
 function copyCards(cards: readonly CardPlacement[]): CardPlacement[] {
-  return cards.map(({ id, size, visible }) => ({ id, size, visible }));
+  return cards.map((card) => ({ ...card }));
 }
 
 function changedLayout(layout: LayoutConfigV1, cards: CardPlacement[]): LayoutConfigV1 {
@@ -52,10 +52,22 @@ export function resizeCard(
 ): LayoutConfigV1 {
   if (!validSource(layout) || !isCardSize(size)) return layout;
   const index = layout.cards.findIndex(({ id }) => id === cardId);
-  if (index < 0 || layout.cards[index].size === size) return layout;
+  if (index < 0 || (layout.cards[index].size === size && layout.cards[index].height === undefined)) return layout;
 
   const cards = copyCards(layout.cards);
   cards[index] = { ...cards[index], size };
+  delete cards[index].height;
+  return changedLayout(layout, cards);
+}
+
+export function setCardHeight(layout: LayoutConfigV1, cardId: string, height: number): LayoutConfigV1 {
+  if (!validSource(layout) || !Number.isFinite(height)) return layout;
+  const index = layout.cards.findIndex(({ id }) => id === cardId);
+  if (index < 0) return layout;
+  const nextHeight = Math.max(96, Math.min(600, Math.round(height)));
+  if (layout.cards[index].height === nextHeight) return layout;
+  const cards = copyCards(layout.cards);
+  cards[index] = { ...cards[index], height: nextHeight };
   return changedLayout(layout, cards);
 }
 

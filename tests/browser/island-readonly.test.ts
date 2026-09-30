@@ -244,7 +244,9 @@ describe("read-only Agent Island", () => {
     const { target } = await renderIsland([noActive]);
 
     expect(target.querySelector('[data-testid="empty-session"]')?.textContent).toContain("无法确认当前会话");
-    expect(target.textContent).not.toContain("alpha-old");
+    expect(target.querySelector('[data-testid="status-session"]')?.textContent).not.toContain("alpha-old");
+    expect(target.querySelector('[data-testid="log-scroll"]')).toBeNull();
+    expect(target.querySelector<HTMLSelectElement>('[data-testid="session-picker"]')?.value).toBe("");
     expect(target.textContent).not.toContain("D:\\archive\\alpha");
   });
 
