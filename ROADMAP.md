@@ -91,6 +91,7 @@
 - 线程韧性：移除 `panic = "abort"`，共享状态改为锁中毒可恢复，单个后台线程失败不再让整个岛消失
 - 测试门禁：Rust 132、单元 123、浏览器交互 77、视觉比对 14、旧前端 26、svelte-check 0 错误 0 警告；视觉回归改用锁定版 Chromium，官方 CDN 过慢时可用 npmmirror 镜像安装
 - 待验收：混合 DPI、多显示器、安装/卸载与原生窗口层级仍需实机人工验收，未实测的系统与架构不列为已支持
+- 发布记录：`v1.9.0` 由 GitHub Actions 自动构建 EXE/MSI 并发布（`Agent.Island_1.9.0_x64-setup.exe` / `_en-US.msi`），安装包哈希与流水线明细见 [发布记录](docs/verification/2026-09-30-v1.9.0-release.md)；CI 的视觉比对改为报告而不阻塞发布，原因见 [视觉基线刷新记录](docs/verification/2026-09-30-visual-baseline-refresh.md)
 
 ## 当前已完成
 

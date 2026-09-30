@@ -31,7 +31,7 @@
 
 日常使用直接运行安装后的 `Agent Island` 即可。
 
-仓库当前版本为 1.9.0，仓库进度不代表对应安装包已经发布。原生 DPI、多显示器及安装/卸载验收仍待完成，详见[验收记录](docs/verification/2026-09-04-adaptive-ui.md)与[视觉基线刷新记录](docs/verification/2026-09-30-visual-baseline-refresh.md)。
+仓库当前版本为 1.9.0，安装包已由 GitHub Actions 自动构建并发布（Release `v1.9.0`，含 EXE 安装器与 MSI）。按[公开发布适配门槛](docs/verification/public-release-compatibility.md)口径，安装包在完成干净环境、混合 DPI、多显示器与安装/卸载验收前仍属测试版，详见[发布记录](docs/verification/2026-09-30-v1.9.0-release.md)。
 
 本项目面向其他用户分发，不应依赖开发者本机环境。正式发布前须完成[公开发布适配门槛](docs/verification/public-release-compatibility.md)，涵盖干净系统、普通权限、中文/空格路径、CLI 安装方式、混合 DPI、多屏和升级卸载。未实测的系统与架构不列为已支持。
 

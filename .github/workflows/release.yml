@@ -77,5 +77,7 @@ jobs:
             ## Agent Island ${{ github.ref_name }}
 
             自动构建发布：Windows EXE 安装器 + MSI。
+
+            按《公开发布适配门槛》，本安装包在完成干净环境、混合 DPI、多显示器与安装/卸载验收前属测试版；未实测的系统与架构不列为已支持。详见 docs/verification/public-release-compatibility.md。
           releaseDraft: false
           prerelease: false
