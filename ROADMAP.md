@@ -96,7 +96,7 @@
 ## 当前已完成
 
 - 常驻灵动岛：悬停展开、拖拽记忆、多显示器、托盘、开机自启
-- Agent 监控：Claude Code、Codex CLI、OpenCode、Hermes、Copilot、Cursor
+- Agent 监控：Claude Code、Codex CLI、OpenCode、Hermes（Copilot / Cursor 适配器已按 v1.1“鸡肋即砍”移除）
 - 状态展示：工作中、等待中、高负载、已完成、报错、已停止
 - 真实日志：读取各 Agent 最近会话输出，滚动查看、自动跟随
 - 会话切换：顶部箭头切 Agent，展开面板底部箭头切会话
@@ -106,7 +106,7 @@
 - 使用统计：累计运行时间、报错次数、完成次数
 - 全局快捷键：Ctrl+Alt+I 呼出/隐藏小岛，Ctrl+Alt+O 打开总览
 - 安装包：Windows EXE 安装器 + MSI，已挂 GitHub Release
-- GitHub：代码已上传，仓库为私有，含 Release v0.1.0
+- GitHub：私有仓库，Release 已由 Actions 发布至 v1.9.0（v0.1.0 为首发）
 
 ## 阶段计划
 
