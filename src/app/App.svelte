@@ -17,7 +17,7 @@
   import type { ApprovalItem, CommandFailure, CommandUiState, NotificationItem } from "../components/events/types";
   import { tauriBridge } from "../bridge/tauri";
   import { tauriDiagnosticsBridge, type DiagnosticsBridge } from "../bridge/diagnostics";
-  import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent } from "../bridge/types";
+  import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent, SourceHealth } from "../bridge/types";
   import { loadLayout, saveLayout } from "../layout/persistence";
   import type { CardId, CardPlacement, LayoutConfigV1 } from "../layout/schema";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
@@ -63,6 +63,7 @@
   let hookError = $state<CommandFailure | null>(null);
   let listenerError = $state(false);
   let diagnosticIssues = $state<DiagnosticView[]>([]);
+  let diagnosticSources = $state<SourceHealth[]>([]);
   let diagnosticStatus = $state<"loading" | "ready" | "failed">("loading");
   let diagnosticRequest = 0;
   let diagnosticInFlight: Promise<void> | null = null;
@@ -98,10 +99,12 @@
         const response = await diagnosticsBridge.getDiagnostics();
         if (disposed || request !== diagnosticRequest || diagnosticRefreshQueued) return;
         diagnosticIssues = response.issues;
+        diagnosticSources = response.sources;
         diagnosticStatus = "ready";
       } catch {
         if (disposed || request !== diagnosticRequest || diagnosticRefreshQueued) return;
         diagnosticIssues = [];
+        diagnosticSources = [];
         diagnosticStatus = "failed";
       }
       void syncWindowSize();
@@ -573,6 +576,7 @@
       </section>
       <DiagnosticsPanel
         issues={diagnosticIssues}
+        sources={diagnosticSources}
         status={diagnosticStatus}
         exportDiagnostics={(destination) => diagnosticsBridge.exportDiagnostics(destination)}
         onLayoutChange={() => void syncWindowSize()}

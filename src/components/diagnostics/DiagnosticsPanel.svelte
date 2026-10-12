@@ -1,16 +1,18 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import type { DiagnosticView } from "../../bridge/types";
+  import type { DiagnosticView, SourceHealth } from "../../bridge/types";
 
   type ExportState = "idle" | "pending" | "succeeded" | "failed";
 
   let {
     issues,
+    sources = [],
     status = "ready",
     exportDiagnostics,
     onLayoutChange = () => {},
   }: {
     issues: readonly DiagnosticView[];
+    sources?: readonly SourceHealth[];
     status?: "loading" | "ready" | "failed";
     exportDiagnostics: (destination: string) => Promise<void>;
     onLayoutChange?: () => void;
@@ -20,6 +22,29 @@
   let exportState = $state<ExportState>("idle");
   let exportRequest = 0;
   let disposed = false;
+
+  let sourcesHealthy = $derived(sources.every((entry) => entry.status === "ok"));
+
+  function sourceLabel(source: string): string {
+    if (source === "claude_usage") return "Claude 用量";
+    if (source === "codex_usage") return "Codex 用量";
+    return source;
+  }
+
+  function sourceStatusLabel(status: string): string {
+    switch (status) {
+      case "ok":
+        return "正常";
+      case "no_records":
+        return "未找到记录";
+      case "no_usage_events":
+        return "未解析到用量事件";
+      case "unavailable":
+        return "不可用";
+      default:
+        return status;
+    }
+  }
 
   onDestroy(() => {
     disposed = true;
@@ -59,14 +84,16 @@
       <span class="eyebrow">SYSTEM HEALTH</span>
       <h2 id="diagnostics-title">诊断信息</h2>
     </div>
-    <span class:clear={status === "ready" && issues.length === 0} class:unavailable={status === "failed"} class="issue-count">
+    <span class:clear={status === "ready" && issues.length === 0 && sourcesHealthy} class:unavailable={status === "failed"} class="issue-count">
       {status === "loading"
         ? "正在检查"
         : status === "failed"
           ? "暂不可用"
-          : issues.length === 0
-            ? "状态正常"
-            : `${issues.length} 项提示`}
+          : issues.length > 0
+            ? `${issues.length} 项提示`
+            : sourcesHealthy
+              ? "状态正常"
+              : "数据源需注意"}
     </span>
   </header>
 
@@ -103,6 +130,27 @@
     </div>
   {:else}
     <p class="empty">当前没有可报告的适配器问题。</p>
+  {/if}
+
+  {#if sources.length > 0}
+    <div class="source-list" aria-label="数据源健康">
+      {#each sources as entry (entry.source)}
+        <div class="source" data-testid="diagnostics-source">
+          <div class="source-heading">
+            <strong>{sourceLabel(entry.source)}</strong>
+            <span class="source-records">{entry.records} 个记录文件</span>
+            <span class:warn={entry.status !== "ok"} class="source-status">{sourceStatusLabel(entry.status)}</span>
+          </div>
+          {#if entry.status === "no_usage_events"}
+            <p class="source-hint">有记录但未解析到用量事件：可能暂无近期活动，也可能是记录格式已变化。</p>
+          {:else if entry.status === "unavailable"}
+            <p class="source-hint">无法读取该数据源，用量卡可能为空。</p>
+          {:else if entry.status === "no_records"}
+            <p class="source-hint">数据目录存在但没有会话记录，用量卡保持空。</p>
+          {/if}
+        </div>
+      {/each}
+    </div>
   {/if}
 
   <form class="export" onsubmit={(event) => { event.preventDefault(); void exportReport(); }}>
@@ -283,6 +331,50 @@
 
   .unavailable-copy { color: var(--island-refresh-error-text); }
 
+  .source-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .source {
+    min-width: 0;
+    padding: 9px 10px;
+    border: 1px solid var(--island-border-subtle);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--island-control-surface) 82%, transparent);
+  }
+
+  .source-heading {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 7px;
+  }
+
+  .source-records {
+    flex: 0 0 auto;
+    color: var(--island-text-secondary);
+    font-size: 9px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .source-status {
+    flex: 0 0 auto;
+    margin-left: auto;
+    color: var(--island-status-done);
+    font-size: 9px;
+  }
+
+  .source-status.warn { color: var(--island-status-waiting); }
+
+  .source-hint {
+    margin: 6px 0 0;
+    color: var(--island-status-waiting);
+    font-size: 9px;
+    line-height: 1.45;
+  }
+
   .export {
     display: grid;
     gap: 6px;
@@ -347,7 +439,8 @@
   .feedback.failure { color: var(--island-refresh-error-text); }
 
   @media (max-width: 520px) {
-    .issue-list { grid-template-columns: minmax(0, 1fr); }
+    .issue-list,
+    .source-list { grid-template-columns: minmax(0, 1fr); }
   }
 
   @media (max-width: 380px) {

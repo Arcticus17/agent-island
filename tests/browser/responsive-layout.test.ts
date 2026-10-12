@@ -80,7 +80,7 @@ async function renderIsland(options: { pollIntervalMs?: number; snapshots?: Agen
     target,
     props: {
       bridge,
-      diagnosticsBridge: { getDiagnostics: async () => ({ generated_at_ms: 100, issues: [] }), exportDiagnostics: async () => undefined },
+      diagnosticsBridge: { getDiagnostics: async () => ({ generated_at_ms: 100, issues: [], sources: [] }), exportDiagnostics: async () => undefined },
       pollIntervalMs: options.pollIntervalMs ?? 0,
       initiallyExpanded: true,
     },

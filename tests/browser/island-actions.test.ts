@@ -446,6 +446,7 @@ describe("Agent Island commands", () => {
 
     pendingDiagnostics.resolve({
       generated_at_ms: 100,
+      sources: [],
       issues: [{
         adapter: "codex",
         code: "pre_stop_diagnostic",
@@ -461,6 +462,7 @@ describe("Agent Island commands", () => {
 
     postStopDiagnostics.resolve({
       generated_at_ms: 201,
+      sources: [],
       issues: [{
         adapter: "codex",
         code: "post_stop_diagnostic",
@@ -494,7 +496,7 @@ describe("Agent Island commands", () => {
     expect(harness.snapshotCalls()).toBeGreaterThan(1);
     expect(diagnosticCalls).toBe(1);
 
-    firstDiagnostics.resolve({ generated_at_ms: 100, issues: [] });
+    firstDiagnostics.resolve({ generated_at_ms: 100, issues: [], sources: [] });
     await waitFor(() => diagnosticCalls === 2);
     await new Promise((resolve) => setTimeout(resolve, 70));
     expect(diagnosticCalls).toBe(2);

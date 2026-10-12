@@ -60,6 +60,12 @@ export interface DiagnosticView {
   candidate_count?: number;
 }
 
+export interface SourceHealth {
+  source: string;
+  status: string;
+  records: number;
+}
+
 export interface UsageInfo {
   tokens_total: number;
   tokens_output: number;

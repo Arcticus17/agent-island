@@ -62,7 +62,7 @@ for (const theme of ["graphite", "pure-black"] as const) {
       const bridge = createMockBridge([snapshot(status, scenario === "long-log" || scenario === "single-column")]);
       app = mount(App, { target, props: {
         bridge, pollIntervalMs: 0, initiallyExpanded: !scenario.startsWith("compact"),
-        diagnosticsBridge: { getDiagnostics: async () => ({ generated_at_ms: NOW, issues: [] }), exportDiagnostics: async () => undefined },
+        diagnosticsBridge: { getDiagnostics: async () => ({ generated_at_ms: NOW, issues: [], sources: [] }), exportDiagnostics: async () => undefined },
       } });
       await expect.poll(() => target.textContent).toContain("Claude Code");
       await expect.poll(() => bridge.listenerCount()).toBe(1);

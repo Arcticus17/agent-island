@@ -1,9 +1,10 @@
-import type { DiagnosticView } from "./types";
+import type { DiagnosticView, SourceHealth } from "./types";
 import { invoke } from "./tauri";
 
 export interface DiagnosticsResponse {
   generated_at_ms: number;
   issues: DiagnosticView[];
+  sources: SourceHealth[];
 }
 
 export interface DiagnosticsBridge {
@@ -79,9 +80,26 @@ export function parseDiagnosticsResponse(payload: unknown): DiagnosticsResponse 
     issues.push(diagnostic);
   }
 
+  if (!Array.isArray(payload.sources)) {
+    throw new Error("invalid_diagnostics_response");
+  }
+  const sources: SourceHealth[] = [];
+  for (const value of payload.sources) {
+    if (
+      !isRecord(value) ||
+      typeof value.source !== "string" ||
+      typeof value.status !== "string" ||
+      !isNonnegativeInteger(value.records)
+    ) {
+      throw new Error("invalid_diagnostics_response");
+    }
+    sources.push({ source: value.source, status: value.status, records: value.records });
+  }
+
   return {
     generated_at_ms: payload.generated_at_ms,
     issues,
+    sources,
   };
 }
 

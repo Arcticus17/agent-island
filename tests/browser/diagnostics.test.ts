@@ -87,11 +87,11 @@ describe("component-level failure isolation", () => {
 describe("diagnostics boundary adapter", () => {
   it("calls only the two diagnostics commands with the expected arguments", async () => {
     const invoke = vi.fn(async (command: string) => command === "get_diagnostics"
-      ? { generated_at_ms: 7, issues: [] }
+      ? { generated_at_ms: 7, issues: [], sources: [] }
       : undefined);
     const bridge = createDiagnosticsBridge(invoke);
 
-    await expect(bridge.getDiagnostics()).resolves.toEqual({ generated_at_ms: 7, issues: [] });
+    await expect(bridge.getDiagnostics()).resolves.toEqual({ generated_at_ms: 7, issues: [], sources: [] });
     await expect(bridge.exportDiagnostics("D:\\exports\\report.json")).resolves.toBeUndefined();
 
     expect(invoke.mock.calls).toEqual([
@@ -125,6 +125,7 @@ describe("diagnostics boundary adapter", () => {
           session_id: "private-session-id",
         },
       ],
+      sources: [{ source: "claude_usage", status: "ok", records: 3 }],
       prompt: "top-level secret",
       project_path: "D:\\private\\client",
     });
@@ -142,10 +143,19 @@ describe("diagnostics boundary adapter", () => {
           skipped_lines: 1,
         },
       ],
+      sources: [{ source: "claude_usage", status: "ok", records: 3 }],
     } satisfies DiagnosticsResponse);
     expect(JSON.stringify(response)).not.toContain("secret prompt text");
     expect(JSON.stringify(response)).not.toContain("project-alpha");
     expect(JSON.stringify(response)).not.toContain("private-session-id");
+  });
+
+  it("rejects a source health entry with a non-integer record count", () => {
+    expect(() => parseDiagnosticsResponse({
+      generated_at_ms: 1,
+      issues: [],
+      sources: [{ source: "claude_usage", status: "ok", records: "3" }],
+    })).toThrow("invalid_diagnostics_response");
   });
 
   it.each([
@@ -233,6 +243,25 @@ describe("diagnostics panel", () => {
     const state = target.querySelector('[data-testid="diagnostics-state"]');
     expect(state?.getAttribute("role")).toBe("alert");
     expect(state?.textContent).toContain("diagnostics_fetch_failed");
+    expect(target.textContent).not.toContain("状态正常");
+  });
+
+  it("surfaces usage source health and stops claiming the state is healthy", () => {
+    const target = render(DiagnosticsPanel, {
+      issues: [],
+      sources: [
+        { source: "claude_usage", status: "ok", records: 3 },
+        { source: "codex_usage", status: "no_usage_events", records: 5 },
+      ],
+      exportDiagnostics: async () => undefined,
+    });
+
+    expect(target.querySelectorAll('[data-testid="diagnostics-source"]')).toHaveLength(2);
+    expect(target.textContent).toContain("Claude 用量");
+    expect(target.textContent).toContain("Codex 用量");
+    expect(target.textContent).toContain("未解析到用量事件");
+    expect(target.textContent).toContain("可能暂无近期活动");
+    expect(target.textContent).toContain("数据源需注意");
     expect(target.textContent).not.toContain("状态正常");
   });
 });
