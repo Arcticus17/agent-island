@@ -55,8 +55,29 @@ jobs:
       # docs/verification/2026-09-30-visual-baseline-refresh.md. To make CI block on
       # it, the references must be regenerated on this runner image.
       - name: Visual comparison (reported, not enforced)
+        id: visual
         continue-on-error: true
         run: npm run test:visual
+
+      # A report-only gate that nobody reads drifts silently. Surface the outcome
+      # as a run annotation and a step summary line so a red visual comparison is
+      # impossible to miss even though it does not block the release.
+      - name: Record visual outcome
+        if: always()
+        env:
+          VISUAL_OUTCOME: ${{ steps.visual.outcome }}
+        run: |
+          $outcome = $env:VISUAL_OUTCOME
+          if ($outcome -eq "failure") {
+            Write-Output "::warning title=Visual comparison failed::npm run test:visual reported differences (report-only on this runner). Review the visual-diffs artifact before publishing; see docs/verification/public-release-compatibility.md."
+            $line = "FAILED — 发布前必须人工复核 visual-diffs 附件：确认仅为已知字体渲染差异，无新增布局回归。"
+          } elseif ($outcome -eq "success") {
+            $line = "PASSED — 与开发机基线一致。"
+          } else {
+            $line = "SKIPPED — 上游步骤未执行（outcome: $outcome）。"
+          }
+          "### Visual comparison" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          $line | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
       - name: Upload visual diffs
         if: always()
