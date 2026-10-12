@@ -53,10 +53,20 @@ pub struct DiagnosticSnapshot {
     pub records: Vec<DiagnosticRecord>,
 }
 
+/// Facts-only health of one usage data source: what was found and whether the
+/// last parse produced events, without guessing between idle and format change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SourceHealth {
+    pub source: String,
+    pub status: String,
+    pub records: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DiagnosticsResponse {
     pub generated_at_ms: u64,
     pub issues: Vec<DiagnosticView>,
+    pub sources: Vec<SourceHealth>,
 }
 
 impl From<&DiagnosticSnapshot> for DiagnosticsResponse {
@@ -68,6 +78,7 @@ impl From<&DiagnosticSnapshot> for DiagnosticsResponse {
                 .iter()
                 .map(|record| record.view.clone())
                 .collect(),
+            sources: Vec::new(),
         }
     }
 }
@@ -206,5 +217,23 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.len(), 64);
         assert_ne!(first, "same-session");
+    }
+
+    #[test]
+    fn source_health_serializes_snake_case_field_names() {
+        let response = super::DiagnosticsResponse {
+            generated_at_ms: 1,
+            issues: Vec::new(),
+            sources: vec![super::SourceHealth {
+                source: "claude_usage".into(),
+                status: "ok".into(),
+                records: 2,
+            }],
+        };
+
+        let json = serde_json::to_value(response).unwrap();
+        assert_eq!(json["sources"][0]["source"], "claude_usage");
+        assert_eq!(json["sources"][0]["status"], "ok");
+        assert_eq!(json["sources"][0]["records"], 2);
     }
 }
