@@ -102,6 +102,12 @@
   const collapsedWindowHeight = 60;
   /** 隐藏态：只留一条很薄的"热区"，鼠标扫过就回到胶囊态。 */
   const hiddenWindowHeight = 13;
+  /** 展开态的目标宽度：和高度上限 560 一起构成接近正方形的面板。 */
+  const expandedWidth = 560;
+  const expandedPanelHeight = 560;
+  let restingWidth = 0;
+  /** 正在请求中的窗口宽度：webview 的 innerWidth 更新滞后，同步高度时不能拿旧宽度把窗口缩回去 */
+  let targetWindowWidth = 0;
   let peekTimer: number | undefined;
   let hideTimer: number | undefined;
 
@@ -220,7 +226,7 @@
       collapsedWindowHeight,
       terminalOpen && terminalMax
         ? Math.floor(availableHeight * 0.92)
-        : Math.min(620, Math.floor(availableHeight * 0.78)),
+        : Math.min(expandedPanelHeight, Math.floor(availableHeight * 0.78)),
     );
     const height = targetExpanded
       ? Math.min(
@@ -230,9 +236,15 @@
       : peeked
         ? collapsedWindowHeight
         : hiddenWindowHeight;
+    // 宽度优先用正在请求的目标值：webview 的 innerWidth 会滞后一帧，
+    // 直接用旧宽度同步高度会把刚放宽的窗口又缩回去。
+    if (targetWindowWidth > 0 && Math.abs(Math.round(window.innerWidth) - targetWindowWidth) < 1) {
+      targetWindowWidth = 0;
+    }
+    const width = targetWindowWidth > 0 ? targetWindowWidth : Math.round(window.innerWidth);
     try {
       await bridge.resizeWindow?.({
-        width: Math.max(1, Math.round(window.innerWidth)),
+        width: Math.max(1, width),
         height,
       });
     } catch {
@@ -248,6 +260,7 @@
       widthBeforeMax = Math.round(window.innerWidth);
       // 窄岛（默认 420）放大时把窗口一起放宽；本来就够宽就只加高，不缩窗口。
       const target = Math.min(760, Math.max(widthBeforeMax, 720));
+      targetWindowWidth = target;
       try {
         await bridge.resizeWindow?.({ width: target, height: Math.round(window.innerHeight) });
       } catch {
@@ -256,6 +269,7 @@
     } else if (widthBeforeMax > 0) {
       const restore = widthBeforeMax;
       widthBeforeMax = 0;
+      targetWindowWidth = restore;
       try {
         await bridge.resizeWindow?.({ width: restore, height: Math.round(window.innerHeight) });
       } catch {
@@ -347,24 +361,53 @@
   function toggleExpanded(): void {
     notificationAutoExpanded = false;
     if (!expanded) {
-      selectDefaultAgent();
-      peeked = true;
-      clearHideTimer();
-      expanded = true;
-      void syncWindowSize();
+      expandIsland();
       return;
     }
     collapseToPeek();
   }
 
+  /**
+   * 展开时把窗口放宽到"纵横均衡"的宽度：420×620 太瘦长，560×≤560 接近正方形，
+   * 卡片区也顺势变成两列、少滚动。收起时回到胶囊原本的宽度。
+   */
+  function expandIsland(): void {
+    selectDefaultAgent();
+    clearHideTimer();
+    if (restingWidth === 0) restingWidth = Math.round(window.innerWidth);
+    expanded = true;
+    peeked = true;
+    void syncWindowSize();
+    if (!terminalMax && restingWidth < expandedWidth) void applyWindowWidth(expandedWidth);
+  }
+
+  async function applyWindowWidth(width: number): Promise<void> {
+    targetWindowWidth = width;
+    // 目标宽度只在这次调整期间有效，避免之后一直压着用户手动改的宽度
+    window.setTimeout(() => { if (targetWindowWidth === width) targetWindowWidth = 0; }, 700);
+    try {
+      await bridge.resizeWindow?.({ width, height: Math.round(window.innerHeight) });
+    } catch {
+      // 浏览器预览不支持真实窗口尺寸
+    }
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    if (!disposed) void syncWindowSize();
+  }
+
   /** 完全展开 → 收起成胶囊（鼠标移开后再自动隐藏）。 */
   function collapseToPeek(): void {
     notificationAutoExpanded = false;
+    const restore = restingWidth;
+    restingWidth = 0;
     // 收起岛时退出终端放大，别让收起后的胶囊还挂着 720 宽
-    if (terminalMax) void toggleTerminalMax();
+    if (terminalMax) {
+      terminalMax = false;
+      widthBeforeMax = 0;
+    }
     expanded = false;
     peeked = true;
     clearHideTimer();
+    if (restore > 0 && Math.round(window.innerWidth) !== restore) void applyWindowWidth(restore);
     void syncWindowSize();
   }
 
@@ -1134,3 +1177,4 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+

@@ -1,4 +1,4 @@
-﻿import { mount, unmount } from "svelte";
+import { mount, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
 
@@ -288,13 +288,16 @@ describe("read-only Agent Island", () => {
     await userEvent.keyboard("{Enter}");
     await waitFor(() => toggle.getAttribute("aria-expanded") === "true");
     await waitFor(() => (bridge.windowSizes().at(-1)?.height ?? 0) > 60);
+    // 展开会把窗口放宽到均衡宽度（560），收起再还原
+    expect(bridge.windowSizes().some((size) => size.width === 560)).toBe(true);
     const island = target.querySelector<HTMLElement>('[data-testid="agent-island"]')!;
     const renderedHeight = Math.ceil(Math.max(island.scrollHeight, island.getBoundingClientRect().height));
     // 展开面板有高度上限：内容再多也不让窗口无限变长（超出部分在岛内滚动）。
     const availableHeight = window.screen.availHeight || renderedHeight;
-    const heightCap = Math.max(60, Math.min(620, Math.floor(availableHeight * 0.78)));
+    const heightCap = Math.max(60, Math.min(560, Math.floor(availableHeight * 0.78)));
+    // 展开后窗口宽度是 max(当前宽度, 560)
     expect(bridge.windowSizes().at(-1)).toEqual({
-      width: window.innerWidth,
+      width: Math.max(Math.round(window.innerWidth), 560),
       height: Math.min(Math.max(60, renderedHeight), heightCap),
     });
     expect(getComputedStyle(island).overflowY).toBe("auto");

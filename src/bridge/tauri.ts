@@ -222,7 +222,9 @@ export function createTauriBridge(): AgentIslandBridge {
     async resizeWindow({ width, height }) {
       const window = getCurrentWindow();
       const [size, scale, monitors, position] = await Promise.all([window.innerSize(), window.scaleFactor(), availableMonitors(), window.outerPosition()]);
-      const value = clampWindowPlacement({ x: position.x, y: position.y, width }, monitors, height);
+      // 改宽度时保持窗口原来的水平中心（岛在顶部居中，展开/收起不应该往右漂）
+      const centeredX = Math.round(position.x + (size.width - width * scale) / 2);
+      const value = clampWindowPlacement({ x: centeredX, y: position.y, width }, monitors, height);
       const monitor = monitors.find(m => value.x >= m.workArea.position.x && value.x < m.workArea.position.x + m.workArea.size.width && value.y >= m.workArea.position.y && value.y < m.workArea.position.y + m.workArea.size.height) ?? monitors[0];
       const boundedHeight = Math.min(height, monitor.workArea.size.height / monitor.scaleFactor);
       if (Math.abs(size.width / scale - value.width) >= 1 || Math.abs(size.height / scale - boundedHeight) >= 1) {
