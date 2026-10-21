@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { CommandFailure, CommandUiState } from "../events/types";
+  import { THEME_LABELS, THEME_STYLES, type ThemeStyle } from "../../themes/theme-style";
 
   let {
     privacy,
@@ -23,7 +24,7 @@
   }: {
     privacy: boolean;
     focusMode: "off" | "errors" | "quiet";
-    themeStyle: "graphite" | "pure-black";
+    themeStyle: ThemeStyle;
     iconStyle: "dot" | "pixel";
     agentMode: "all" | "running";
     hookEnabled: boolean | null;
@@ -31,7 +32,7 @@
     hookError: CommandFailure | null;
     onPrivacy: (value: boolean) => void;
     onFocusMode: (value: "off" | "errors" | "quiet") => void;
-    onThemeStyle: (value: "graphite" | "pure-black") => void;
+    onThemeStyle: (value: ThemeStyle) => void;
     onIconStyle: (value: "dot" | "pixel") => void;
     onAgentMode: (value: "all" | "running") => void;
     onHookToggle: () => void;
@@ -65,7 +66,7 @@
     {#if hookError}<p class="setting-error sensitive" role="alert"><strong>{hookError.code}</strong> · {hookError.message}</p>{/if}
     <label><span>隐私遮罩</span><input type="checkbox" checked={privacy} onchange={(event) => onPrivacy(event.currentTarget.checked)} /></label>
     <label><span>专注模式</span><select value={focusMode} onchange={(event) => onFocusMode(event.currentTarget.value as "off" | "errors" | "quiet")}><option value="off">全部状态</option><option value="errors">聚焦错误</option><option value="quiet">静音通知</option></select></label>
-    <label><span>外观</span><select value={themeStyle} onchange={(event) => onThemeStyle(event.currentTarget.value as "graphite" | "pure-black")}><option value="graphite">石墨玻璃</option><option value="pure-black">纯黑</option></select></label>
+    <label><span>外观</span><select value={themeStyle} onchange={(event) => onThemeStyle(event.currentTarget.value as ThemeStyle)}>{#each THEME_STYLES as style (style)}<option value={style}>{THEME_LABELS[style]}</option>{/each}</select></label>
     <label><span>图标</span><select value={iconStyle} onchange={(event) => onIconStyle(event.currentTarget.value as "dot" | "pixel")}><option value="pixel">像素吉祥物</option><option value="dot">圆点</option></select></label>
     <label><span>显示</span><select value={agentMode} onchange={(event) => onAgentMode(event.currentTarget.value as "all" | "running")}><option value="all">全部检测</option><option value="running">仅运行中</option></select></label>
     {#if onAdjustWidth || onStartResize}
@@ -80,7 +81,7 @@
     <div class="setting-feedback" role="status" aria-live="polite" data-testid="settings-feedback">
       <p>{privacy ? "隐私遮罩已开启：会话文本和路径已模糊。" : "隐私遮罩已关闭：会话内容正常显示。"}</p>
       <p>{focusMode === "errors" ? "聚焦错误：优先选择异常 Agent，并隐藏普通通知。" : focusMode === "quiet" ? "静音通知：隐藏普通通知，审批请求仍会显示。" : "全部状态：正常显示任务通知与审批。"}</p>
-      <p>当前外观：{themeStyle === "graphite" ? "石墨玻璃" : "纯黑"}；图标：{iconStyle === "pixel" ? "像素吉祥物" : "圆点"}；显示：{agentMode === "running" ? "仅运行中" : "全部检测"}。</p>
+      <p>当前外观：{themeStyle === "graphite" ? "石墨玻璃" : themeStyle === "pure-black" ? "纯黑" : "终端"}；图标：{iconStyle === "pixel" ? "像素吉祥物" : "圆点"}；显示：{agentMode === "running" ? "仅运行中" : "全部检测"}。</p>
     </div>
   </div>
 </details>
@@ -110,3 +111,4 @@
   @media (prefers-reduced-motion: reduce) { summary, button { transition: none; } }
   .setting-error { margin: -2px 0 0; color: var(--island-refresh-error-text); font-size: 10px; overflow-wrap: anywhere; }
 </style>
+

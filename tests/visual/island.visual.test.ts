@@ -1,4 +1,4 @@
-import { mount, unmount } from "svelte";
+﻿import { mount, unmount } from "svelte";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import App from "../../src/app/App.svelte";
@@ -51,7 +51,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ version: "0.1.0" }), { status: 200 })));
 });
 
-for (const theme of ["graphite", "pure-black"] as const) {
+for (const theme of ["graphite", "pure-black", "terminal"] as const) {
   for (const scenario of ["compact-idle", "compact-working", "compact-error", "monitoring", "approval", "long-log", "single-column"] as const) {
     it(`${theme} ${scenario}`, async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
@@ -86,4 +86,5 @@ for (const theme of ["graphite", "pure-black"] as const) {
     });
   }
 }
+
 

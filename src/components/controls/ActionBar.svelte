@@ -2,6 +2,7 @@
   import { onDestroy } from "svelte";
   import type { AgentCommand, AgentView, CommandResult, SessionView } from "../../bridge/types";
   import type { CommandFailure, CommandUiState } from "../events/types";
+  import type { ThemeStyle } from "../../themes/theme-style";
   import SettingsPopover from "./SettingsPopover.svelte";
 
   type ActionKey = "overview" | "directory" | "terminal" | "focus" | "restart" | "stop";
@@ -37,7 +38,7 @@
     onLayoutChange: () => void;
     privacy: boolean;
     focusMode: "off" | "errors" | "quiet";
-    themeStyle: "graphite" | "pure-black";
+    themeStyle: ThemeStyle;
     iconStyle: "dot" | "pixel";
     agentMode: "all" | "running";
     hookEnabled: boolean | null;
@@ -45,7 +46,7 @@
     hookError: CommandFailure | null;
     onPrivacy: (value: boolean) => void;
     onFocusMode: (value: "off" | "errors" | "quiet") => void;
-    onThemeStyle: (value: "graphite" | "pure-black") => void;
+    onThemeStyle: (value: ThemeStyle) => void;
     onIconStyle: (value: "dot" | "pixel") => void;
     onAgentMode: (value: "all" | "running") => void;
     onHookToggle: () => void;
@@ -176,3 +177,4 @@
   .feedback button { color: inherit; }
   @media (max-width: 420px) { .action-bar { align-items: flex-start; } .actions { display: flex; flex-wrap: nowrap; flex: 1 1 auto; overflow-x: auto; } button { min-height: 38px; padding-inline: 7px; flex: 0 0 auto; } }
 </style>
+

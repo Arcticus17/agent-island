@@ -1,0 +1,106 @@
+/*
+ * 终端主题：等宽、方角、单色，去掉玻璃与模糊。
+ * 只换皮——布局、间距、交互全部沿用 graphite 主题的那一套。
+ * 状态色保留但降饱和（终端里的 ANSI 色也是"白字 + 少量彩色状态"）。
+ */
+.agent-island[data-theme-style="terminal"],
+.event-layer[data-theme-style="terminal"],
+.overview[data-theme-style="terminal"],
+.island-loading[data-theme-style="terminal"] {
+  --surface-island: #070708;
+  --surface-card: #0b0b0c;
+  --surface-raised: #121213;
+  --surface-log: #040405;
+  --surface-event: #0a0a0b;
+  --surface-notification: #0a0a0b;
+  --surface-sticky: #070708;
+  --text-primary: #e8e8e8;
+  --text-secondary: #9a9a9a;
+  --text-tertiary: #6e6e6e;
+  --text-log: #d4d4d4;
+  --text-error: #e0a0a0;
+  --border-subtle: #2a2a2a;
+  --border-event: #3a3a3a;
+  --border-log-divider: #1e1e1e;
+  --accent-primary: #e8e8e8;
+  --status-idle: #8a8a8a;
+  --status-working: #e8e8e8;
+  --status-error: #d98a8a;
+  --status-done: #a8c58a;
+  --status-waiting: #d8b878;
+  --status-stopped: #6e6e6e;
+  --refresh-error-text: #e0a0a0;
+  --refresh-error-surface: #241616;
+  --control-surface: #101011;
+  --control-hover: #1b1b1c;
+  --scrollbar-thumb: #3a3a3a;
+  --scrollbar-track: #070708;
+  --elevation-island: none;
+  --elevation-event: none;
+  --effect-backdrop: none;
+  --log-role-user: #b8b8b8;
+  --island-background: var(--surface-island);
+  --menu-surface: #101011;
+  --menu-surface-hover: #1e1e1f;
+  --menu-text: #e8e8e8;
+}
+
+/* 等宽字体：表单控件默认不继承字体，要显式带上 */
+.agent-island[data-theme-style="terminal"],
+.agent-island[data-theme-style="terminal"] button,
+.agent-island[data-theme-style="terminal"] input,
+.agent-island[data-theme-style="terminal"] select,
+.agent-island[data-theme-style="terminal"] textarea,
+.agent-island[data-theme-style="terminal"] summary,
+.event-layer[data-theme-style="terminal"],
+.event-layer[data-theme-style="terminal"] button,
+.overview[data-theme-style="terminal"],
+.overview[data-theme-style="terminal"] button,
+.overview[data-theme-style="terminal"] input,
+.overview[data-theme-style="terminal"] select {
+  font-family: "Cascadia Mono", "Cascadia Code", "Consolas", "Sarasa Mono SC", ui-monospace, monospace;
+  letter-spacing: 0;
+}
+
+/* 方角 + 去玻璃：圆角和模糊是"灵动岛"语言，终端主题里一律去掉（含根节点自身） */
+.agent-island[data-theme-style="terminal"],
+.agent-island[data-theme-style="terminal"] *,
+.agent-island[data-theme-style="terminal"] *::before,
+.agent-island[data-theme-style="terminal"] *::after,
+.event-layer[data-theme-style="terminal"] *,
+.overview[data-theme-style="terminal"] * {
+  border-radius: 0 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+/* 卡片用 1px 竖线分隔，像终端的表格边框 */
+.agent-island[data-theme-style="terminal"] [data-testid="layout-card"] {
+  border-color: var(--border-subtle);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 80px);
+}
+
+/* 小节提示符：诊断行与卡片眉标加 "❯" / "#"，纯装饰，不改变 DOM 与可访问名 */
+.agent-island[data-theme-style="terminal"] .diagnostics-drawer > summary > span:first-child::before {
+  content: "❯ ";
+  color: var(--text-tertiary);
+}
+.agent-island[data-theme-style="terminal"] .eyebrow::before {
+  content: "# ";
+  color: var(--text-tertiary);
+}
+
+/* 强调态用反相而不是彩色描边，接近 TUI 的选中行 */
+.agent-island[data-theme-style="terminal"] .terminal-toggle.active,
+.agent-island[data-theme-style="terminal"] .update-button.available {
+  color: #070708;
+  background: var(--text-primary);
+  border-color: var(--text-primary);
+}
+
+.agent-island[data-theme-style="terminal"] :focus-visible {
+  outline: 1px dashed var(--text-primary);
+  outline-offset: 2px;
+}

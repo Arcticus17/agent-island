@@ -1,4 +1,4 @@
-// @ts-expect-error The project intentionally omits @types/node; Vitest runs this file in Node.
+﻿// @ts-expect-error The project intentionally omits @types/node; Vitest runs this file in Node.
 import { readFileSync, readdirSync } from "node:fs";
 // @ts-expect-error The project intentionally omits @types/node; Vitest runs this file in Node.
 import { extname, join, relative } from "node:path";
@@ -87,7 +87,7 @@ describe("Agent Island semantic themes", () => {
     }
   });
 
-  it.each(["graphite", "pure-black"])("fully defines the %s theme", (theme) => {
+  it.each(["graphite", "pure-black", "terminal"])("fully defines the %s theme", (theme) => {
     const css = source(`src/themes/${theme}.css`);
     expect(css).toContain(`[data-theme-style="${theme}"]`);
     for (const token of themedTokens) expect(declared(css, token), `${theme}:${token}`).toBe(true);
@@ -122,3 +122,4 @@ describe("Agent Island semantic themes", () => {
     for (const file of ["tokens.css", "graphite.css", "pure-black.css"]) expect(app).toContain(file);
   });
 });
+

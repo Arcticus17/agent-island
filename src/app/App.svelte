@@ -3,6 +3,8 @@
   import "../themes/tokens.css";
   import "../themes/graphite.css";
   import "../themes/pure-black.css";
+  import "../themes/terminal.css";
+  import { THEME_LABELS, THEME_STORAGE_KEY, storedThemeStyle, type ThemeStyle } from "../themes/theme-style";
   import CompactIsland from "../components/island/CompactIsland.svelte";
   import ApprovalStack from "../components/approvals/ApprovalStack.svelte";
   import LogCard from "../components/cards/LogCard.svelte";
@@ -81,11 +83,7 @@
         ? "quiet"
         : "off",
   );
-  let themeStyle = $state<"graphite" | "pure-black">(
-    localStorage.getItem("agent-island-theme-style-v2") === "pure-black"
-      ? "pure-black"
-      : "graphite",
-  );
+  let themeStyle = $state<ThemeStyle>(storedThemeStyle());
   let layout = $state<LayoutConfigV1>(loadLayout(localStorage));
   let layoutPersistenceFailed = $state(false);
   let releaseLayoutDrag: (() => void) | null = null;
@@ -740,9 +738,9 @@
     }
   }
 
-  function setThemeStyle(value: "graphite" | "pure-black"): void {
+  function setThemeStyle(value: ThemeStyle): void {
     themeStyle = value;
-    localStorage.setItem("agent-island-theme-style-v2", value);
+    localStorage.setItem(THEME_STORAGE_KEY, value);
     void syncWindowSize();
   }
 
