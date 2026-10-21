@@ -18,6 +18,9 @@
   --menu-surface: #14181f;
   --menu-surface-hover: #26303d;
   --menu-text: #f5f7fb;
+  /* 「激活紫」：表示"正在被激活/选中/进行中"的品牌色。
+     用在 accent、工作中状态、按钮激活态；深色底上取偏亮的紫罗兰。 */
+  --accent-activation: #a78bfa;
 }
 
 /*

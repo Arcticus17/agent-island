@@ -20,11 +20,11 @@
   --text-log: #d4d4d4;
   --text-error: #e0a0a0;
   --border-subtle: #2a2a2a;
-  --border-event: #3a3a3a;
+  --border-event: color-mix(in srgb, var(--accent-activation) 40%, #3a3a3a);
   --border-log-divider: #1e1e1e;
-  --accent-primary: #e8e8e8;
+  --accent-primary: var(--accent-activation);
   --status-idle: #8a8a8a;
-  --status-working: #e8e8e8;
+  --status-working: var(--accent-activation);
   --status-error: #d98a8a;
   --status-done: #a8c58a;
   --status-waiting: #d8b878;
@@ -92,15 +92,24 @@
   color: var(--text-tertiary);
 }
 
-/* 强调态用反相而不是彩色描边，接近 TUI 的选中行 */
+/* 强调态用「激活紫」反相填充，接近 TUI 里被选中的那一行 */
 .agent-island[data-theme-style="terminal"] .terminal-toggle.active,
 .agent-island[data-theme-style="terminal"] .update-button.available {
-  color: #070708;
-  background: var(--text-primary);
-  border-color: var(--text-primary);
+  color: #0b0713;
+  background: var(--accent-activation);
+  border-color: var(--accent-activation);
+  font-weight: 700;
+}
+
+/* 选中/激活的 Agent 芯片：紫色文字 + 左侧一道紫线，像终端里的当前项 */
+.agent-island[data-theme-style="terminal"] .agent-strip button.active {
+  color: var(--accent-activation);
+  background: color-mix(in srgb, var(--accent-activation) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-activation) 45%, transparent);
 }
 
 .agent-island[data-theme-style="terminal"] :focus-visible {
-  outline: 1px dashed var(--text-primary);
+  outline: 1px dashed var(--accent-activation);
   outline-offset: 2px;
 }
+
