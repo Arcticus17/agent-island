@@ -877,6 +877,21 @@ describe("island prompt composer", () => {
   });
 });
 
+describe("pixel mascot motion", () => {
+  it.each([
+    { status: "stopped" as const, resting: true },
+    { status: "idle" as const, resting: true },
+    { status: "done" as const, resting: true },
+    { status: "working" as const, resting: false },
+    { status: "waiting" as const, resting: false },
+  ])("marks the mascot resting=$resting for $status", async ({ status, resting }) => {
+    const harness = createBridgeHarness([snapshot(100, status)]);
+    const target = await renderIsland(harness);
+    const mascot = target.querySelector('[data-testid="agent-island"] .pixel-agent');
+    expect(mascot).not.toBeNull();
+    expect(mascot!.classList.contains("resting")).toBe(resting);
+  });
+});
 describe("island built-in terminal", () => {
   it("opens a PTY for the selected agent and closes it when toggled off", async () => {
     const harness = createBridgeHarness([snapshot(100)]);
@@ -980,6 +995,7 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
 
 
 

@@ -38,7 +38,7 @@
 
 <button class="compact" class:pixel type="button" data-testid="compact-toggle" aria-expanded={expanded} aria-controls="expanded-island" onclick={onToggle}>
   {#if pixel}
-    <span class="avatar" class:attention={status === "waiting"} aria-hidden="true"><PixelAgent agentName={agent?.name ?? null} size={20} /></span>
+    <span class="avatar" class:attention={status === "waiting"} aria-hidden="true"><PixelAgent agentName={agent?.name ?? null} size={20} {status} /></span>
   {:else}
     <span class="orb" aria-hidden="true"></span>
   {/if}
