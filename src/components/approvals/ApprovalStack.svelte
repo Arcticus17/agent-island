@@ -1,12 +1,16 @@
-<script lang="ts">
+﻿<script lang="ts">
   import type { ApprovalItem } from "../events/types";
+  import { suggestRulePattern } from "../../approvals/rules";
 
   let {
     items,
     onRespond,
+    onRemember,
   }: {
     items: readonly ApprovalItem[];
     onRespond: (id: string, allow: boolean) => void;
+    /** 把这条命令加进允许清单（可选：宿主不支持规则时不给按钮） */
+    onRemember?: (tool: string, pattern: string) => void;
   } = $props();
 </script>
 
@@ -26,6 +30,15 @@
         <button type="button" data-testid="approval-deny" disabled={item.state === "pending" || (item.state === "failed" && !item.error?.retryable)} onclick={() => onRespond(item.approval.id, false)}>
           {item.state === "pending" && item.decision === false ? "拒绝中…" : item.state === "failed" && item.decision === false && item.error?.retryable ? "重试拒绝" : "拒绝"}
         </button>
+        {#if onRemember && item.approval.command}
+          <button
+            class="remember"
+            type="button"
+            data-testid="approval-remember"
+            title={`以后同类命令自动允许：${suggestRulePattern(item.approval.command)}`}
+            onclick={() => onRemember(item.approval.tool, suggestRulePattern(item.approval.command))}
+          >记住这条</button>
+        {/if}
         <button class="allow" type="button" data-testid="approval-allow" disabled={item.state === "pending" || (item.state === "failed" && !item.error?.retryable)} onclick={() => onRespond(item.approval.id, true)}>
           {item.state === "pending" && item.decision === true ? "允许中…" : item.state === "failed" && item.decision === true && item.error?.retryable ? "重试允许" : "允许"}
         </button>
@@ -44,6 +57,8 @@
   .error { margin: 0; color: var(--island-refresh-error-text); font-size: 11px; }
   button { min-height: 36px; padding: 5px 11px; border: 1px solid var(--island-border-subtle); border-radius: 9px; color: var(--island-text-primary); background: var(--island-control-surface); cursor: pointer; }
   button.allow { border-color: var(--island-accent-primary); color: var(--island-accent-primary); }
+  .actions .remember { margin-right: auto; border-style: dashed; color: var(--island-text-secondary); font-size: 11px; }
   button:disabled { opacity: .55; cursor: wait; }
   button:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
 </style>
+

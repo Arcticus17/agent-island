@@ -27,6 +27,7 @@
   import type { CardId, CardPlacement, LayoutConfigV1 } from "../layout/schema";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
   import { preferredAgent } from "../models/agent-priority";
+  import { quotaMessage, quotaWarnMark, QUOTA_WARN_KEY, shouldWarnQuota } from "../usage/quota";
   import {
     compareVersions,
     fetchLatestVersion,
@@ -180,6 +181,25 @@
   $effect(() => {
     if (visibleAgents.length === 0 || selectedAgent) return;
     store.selectAgent(visibleAgents[0].id);
+  });
+
+  // 额度预警：同一额度窗口只提醒一次（用量数据过期时不提醒）
+  $effect(() => {
+    const agent = selectedAgent;
+    if (!agent) return;
+    const usage = agent.usage ?? null;
+    if (!usage || usage.used_percent === null || usage.used_percent === undefined) return;
+    const now = Date.now();
+    const lastWarned = localStorage.getItem(QUOTA_WARN_KEY);
+    if (!shouldWarnQuota({ agentId: agent.id, usage, nowMs: now, lastWarned })) return;
+    const mark = quotaWarnMark(agent.id, usage, now);
+    if (!mark) return;
+    localStorage.setItem(QUOTA_WARN_KEY, mark);
+    pushLocalNotice(
+      agent.name,
+      agent.active_session?.id ?? "",
+      `${agent.name} ${quotaMessage(usage.used_percent, usage.resets_at_secs ?? null, now)}`,
+    );
   });
 
   /**
@@ -612,12 +632,18 @@
   }
 
   function pushNotification(event: Extract<HookEvent, { kind: "notification" }>): void {
-    if (focusMode === "quiet" || focusMode === "errors") return;
+    // hook 事件可以带任意 session，必须先反查到真实的 Agent（防伪造）
     const agent = notificationAgent(event);
     if (!agent?.active_session) return;
+    pushLocalNotice(agent.name, agent.active_session.id, event.message);
+  }
+
+  /** 岛自己产生的提示（额度预警、规则保存回执）：来源可信，不走 hook 的会话校验。 */
+  function pushLocalNotice(agentName: string, sessionId: string, message: string): void {
+    if (focusMode === "quiet" || focusMode === "errors") return;
     const now = Date.now();
     const duplicate = notifications.find((item) =>
-      item.sessionId === agent.active_session?.id && item.message === event.message && now - item.receivedAt <= 20_000,
+      item.sessionId === sessionId && item.message === message && now - item.receivedAt <= 20_000,
     );
     if (duplicate) {
       notifications = notifications.map((item) => item.id === duplicate.id
@@ -634,7 +660,7 @@
     }
     notifications = [
       ...retained,
-      { id, agentName: agent.name, sessionId: agent.active_session.id, message: event.message, receivedAt: now, count: 1 },
+      { id, agentName, sessionId, message, receivedAt: now, count: 1 },
     ];
     scheduleNotificationDismiss(id, 6_500);
     notificationAutoExpanded ||= !expanded;
@@ -708,6 +734,23 @@
       pushNotification(event);
     } else {
       pushApproval(event);
+    }
+  }
+
+  /** 审批卡上的「记住这条」：把 (工具, 建议模式) 加进允许清单，并给出一次可见反馈。 */
+  async function rememberApprovalRule(tool: string, pattern: string): Promise<void> {
+    if (!bridge.addApprovalRule || !pattern.trim()) return;
+    const agentName = selectedAgent?.name ?? "Agent";
+    const sessionId = selectedAgent?.active_session?.id ?? "";
+    try {
+      await bridge.addApprovalRule(tool, pattern);
+      pushLocalNotice(agentName, sessionId, `已加入允许清单：${tool || "任意工具"} · ${pattern}`);
+    } catch (cause) {
+      pushLocalNotice(
+        agentName,
+        sessionId,
+        `加入允许清单失败：${cause instanceof Error ? cause.message : String(cause)}`,
+      );
     }
   }
 
@@ -1194,7 +1237,11 @@
       aria-label="紧急事件"
       bind:this={eventLayerElement}
     >
-      <ApprovalStack items={approvals} onRespond={(id, allow) => void respondToApproval(id, allow)} />
+      <ApprovalStack
+        items={approvals}
+        onRespond={(id, allow) => void respondToApproval(id, allow)}
+        onRemember={bridge.addApprovalRule ? (tool, pattern) => void rememberApprovalRule(tool, pattern) : undefined}
+      />
       {#if listenerError}<p class="listener-error" role="alert">事件监听连接失败，请重启灵动岛后重试。</p>{/if}
       <NotificationStack items={notifications} onDismiss={dismissNotification} onPause={pauseNotification} />
     </aside>
@@ -1344,6 +1391,8 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
+
 
 
 

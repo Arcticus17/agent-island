@@ -1008,6 +1008,43 @@ describe("approval allow rules", () => {
     await waitFor(() => target.querySelectorAll('[data-testid="approval-rule"]').length === 0);
   });
 });
+describe("remember an approval command", () => {
+  it("adds a suggested rule from the approval card", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    harness.emit({
+      kind: "approval",
+      approval: { id: "approval-remember", session: "alpha-live", tool: "Bash", command: "npm install left-pad", cwd: "D:\\work\\alpha" },
+    });
+    const remember = await waitForElement(target, '[data-testid="approval-remember"]');
+    expect(remember.getAttribute("title")).toContain("npm install *");
+    (remember as unknown as HTMLButtonElement).click();
+
+    await waitFor(() => target.querySelector('[data-testid="approval-rule"]') !== null || harness.bridge.listApprovalRules !== undefined);
+    const rules = await harness.bridge.listApprovalRules!();
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toEqual({ id: expect.any(String), tool: "Bash", pattern: "npm install *" });
+  });
+});
+describe("quota warning", () => {
+  it("warns once when the agent usage crosses the threshold", async () => {
+    localStorage.clear();
+    const hot = snapshot(100);
+    hot.agents[0].usage = { ...hot.agents[0].usage!, used_percent: 92, stale: false, resets_at_secs: Math.round(Date.now() / 1000) + 1800 };
+    const harness = createBridgeHarness([hot]);
+    const target = await renderIsland(harness);
+    await waitFor(() => target.textContent?.includes("额度已用 92%") === true);
+    expect(target.textContent).toContain("额度已用 92%");
+
+    // 同一窗口再来一次快照：不再重复提醒
+    const before = (target.textContent?.match(/额度已用 92%/g) ?? []).length;
+    harness.emit({ kind: "stop", session: "alpha-live" });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const after = (target.textContent?.match(/额度已用 92%/g) ?? []).length;
+    expect(after).toBeLessThanOrEqual(before);
+    localStorage.clear();
+  });
+});
 describe("global hotkey", () => {
   it("summons the island from hidden and hides it again", async () => {
     const harness = createBridgeHarness([snapshot(100)]);
@@ -1211,6 +1248,8 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
+
 
 
 
