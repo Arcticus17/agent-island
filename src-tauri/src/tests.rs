@@ -1,4 +1,4 @@
-use super::*;
+﻿use super::*;
 
 #[test]
 fn interactive_resume_works_without_a_recorded_process_command() {
@@ -1848,3 +1848,46 @@ fn incremental_index_reindexes_a_changed_file_and_prunes_deleted_ones() {
 
     fs::remove_dir_all(root).unwrap();
 }
+#[test]
+fn tauri_config_keeps_a_strict_csp() {
+    // CSP 之前是 null（等于不限），这里把要求钉住：改动必须是有意识的
+    let raw = include_str!("../tauri.conf.json");
+    let config: serde_json::Value =
+        serde_json::from_str(raw).expect("tauri.conf.json 必须是合法 JSON");
+    let csp = config["app"]["security"]["csp"]
+        .as_str()
+        .expect("CSP 不能是 null");
+    assert!(csp.contains("default-src 'self'"), "缺少 default-src 'self': {csp}");
+    assert!(csp.contains("object-src 'none'"), "缺少 object-src 'none': {csp}");
+    assert!(csp.contains("base-uri 'self'"), "缺少 base-uri 'self': {csp}");
+    assert!(csp.contains("script-src 'self'"), "脚本必须只允许同源: {csp}");
+    assert!(!csp.contains("unsafe-eval"), "不允许 unsafe-eval: {csp}");
+    assert!(
+        !csp.contains("script-src 'self' 'unsafe-inline'"),
+        "脚本不允许 inline: {csp}"
+    );
+    assert!(
+        csp.contains("https://registry.npmjs.org"),
+        "更新检查需要访问 npm registry: {csp}"
+    );
+    assert!(
+        csp.contains("ipc: http://ipc.localhost"),
+        "invoke 需要 ipc 通道: {csp}"
+    );
+}
+
+#[test]
+fn tauri_config_disables_unused_capabilities() {
+    let raw = include_str!("../tauri.conf.json");
+    let config: serde_json::Value =
+        serde_json::from_str(raw).expect("tauri.conf.json 必须是合法 JSON");
+    // 主窗口必须始终置顶且无边框：它是"岛"，不是普通窗口
+    let windows = config["app"]["windows"].as_array().expect("windows 必须是数组");
+    let main = windows
+        .iter()
+        .find(|window| window["label"] == "main")
+        .expect("必须有 main 窗口");
+    assert_eq!(main["decorations"], false);
+    assert_eq!(main["alwaysOnTop"], true);
+}
+
