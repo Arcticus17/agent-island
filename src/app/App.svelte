@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import "../themes/tokens.css";
   import "../themes/graphite.css";
@@ -74,6 +74,8 @@
   let islandElement = $state<HTMLElement>();
   let eventLayerElement = $state<HTMLElement>();
   let approvals = $state<ApprovalItem[]>([]);
+  /** 有审批在等：隐藏热区要脉冲、且不要自动收起 */
+  const hasPendingApprovals = $derived(approvals.length > 0);
   let notifications = $state<NotificationItem[]>([]);
   let privacy = $state(localStorage.getItem("agent-island-privacy") === "1");
   let focusMode = $state<"off" | "errors" | "quiet">(
@@ -554,10 +556,12 @@
   function scheduleIdleHide(): void {
     clearPeekTimer();
     if (expanded || !peeked) return;
+    // 有待确认的审批时不自动隐藏：收起会把"要不要允许"藏起来
+    if (hasPendingApprovals) return;
     clearHideTimer();
     hideTimer = window.setTimeout(() => {
       hideTimer = undefined;
-      if (expanded || disposed) return;
+      if (expanded || disposed || hasPendingApprovals) return;
       peeked = false;
       void syncWindowSize();
     }, 480);
@@ -986,10 +990,10 @@
   >
     <span class="sr-only" data-testid="selected-agent-id">{viewState.selectedAgentId ?? ""}</span>
     {#if idleHidden}
-      <div class="idle-notch" data-testid="idle-notch" aria-hidden="true"><span class="idle-notch-dot"></span></div>
+      <div class="idle-notch" data-testid="idle-notch" data-pending={hasPendingApprovals ? "true" : "false"} aria-hidden="true"><span class="idle-notch-dot"></span></div>
     {:else}
     <div class="compact-header">
-      <CompactIsland agent={selectedAgent} {expanded} onToggle={toggleExpanded} {iconStyle} />
+      <CompactIsland agent={selectedAgent} {expanded} onToggle={toggleExpanded} {iconStyle} pendingApprovals={hasPendingApprovals} />
       {#if bridge.startWindowDrag}<button class="window-handle" aria-label="拖动窗口" title="按住并拖动窗口" onpointerdown={(event) => { if (event.button === 0) { event.preventDefault(); void windowAction(() => bridge.startWindowDrag!()); } }}>⠿</button>{/if}
     </div>
     {/if}
@@ -1253,6 +1257,21 @@
     transition: opacity var(--duration-fast) ease-out, width var(--duration-fast) ease-out;
   }
   .agent-island.idle-hidden:hover .idle-notch { width: 136px; opacity: 1; }
+  /* 有审批在等：热区脉冲 + 变琥珀色，即使用户把岛收起来也不会漏掉 */
+  .idle-notch[data-pending="true"] {
+    width: 136px;
+    opacity: 1;
+    border-color: var(--island-status-waiting);
+    animation: notch-attention 1.8s ease-in-out infinite;
+  }
+  .idle-notch[data-pending="true"] .idle-notch-dot { background: var(--island-status-waiting); box-shadow: 0 0 8px var(--island-status-waiting); }
+  @keyframes notch-attention {
+    0%, 100% { transform: scale(1); filter: none; }
+    50% { transform: scale(1.06); filter: drop-shadow(0 0 6px var(--island-status-waiting)); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .idle-notch[data-pending="true"] { animation: none; }
+  }
   .idle-notch-dot {
     width: 5px;
     height: 5px;
@@ -1321,4 +1340,5 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
 

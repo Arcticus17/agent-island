@@ -746,6 +746,11 @@ describe("Agent Island event priority", () => {
   });
 
   it("rejects ambiguous or spoofed notification targets and retained snapshots after refresh failure", async () => {
+    // 这类"不该出现"的断言不能靠 sleep 猜时间：等一次真实轮询落地再断言。
+    const settlePoll = async (harness: BridgeHarness): Promise<void> => {
+      const before = harness.snapshotCalls();
+      await waitFor(() => harness.snapshotCalls() > before, 2_000);
+    };
     const ambiguous = claudeSnapshot();
     const duplicate = structuredClone(ambiguous.agents[0]);
     duplicate.id = "other";
@@ -755,22 +760,22 @@ describe("Agent Island event priority", () => {
     const target = await renderIsland(harness, { pollIntervalMs: 30 });
     await waitFor(() => harness.listenerCount() === 1);
     harness.emit({ kind: "notification", session: "alpha-live", message: "Ambiguous" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settlePoll(harness);
     expect(target.textContent).not.toContain("Ambiguous");
 
     await waitFor(() => target.querySelector(".refresh-note") !== null);
     harness.emit({ kind: "notification", session: "alpha-live", message: "Retained stale" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settlePoll(harness);
     expect(target.textContent).not.toContain("Retained stale");
 
     const spoofed = snapshot(100);
     spoofed.agents[0].id = "not-claude";
     spoofed.agents[0].name = "Claude Code";
     const spoofedHarness = createBridgeHarness([spoofed]);
-    const spoofedTarget = await renderIsland(spoofedHarness);
+    const spoofedTarget = await renderIsland(spoofedHarness, { pollIntervalMs: 30 });
     await waitFor(() => spoofedHarness.listenerCount() === 1);
     spoofedHarness.emit({ kind: "notification", session: "alpha-live", message: "Spoofed name" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settlePoll(spoofedHarness);
     expect(spoofedTarget.textContent).not.toContain("Spoofed name");
   });
 });
@@ -932,6 +937,32 @@ describe("agent-scoped diagnostics", () => {
     expect(target.textContent).not.toContain("codex_issue");
     expect(target.textContent).not.toContain("Codex 用量");
     expect(target.querySelector('[data-testid="diagnostics-count"]')?.textContent).toContain("1 项提示");
+  });
+});
+describe("pending approvals stay visible", () => {
+  it("marks the hidden notch while an approval is pending and refuses to auto-hide", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    const island = () => target.querySelector<HTMLElement>('[data-testid="agent-island"]')!;
+
+    harness.emit({
+      kind: "approval",
+      approval: { id: "approval-keep", session: "alpha-live", tool: "Bash", command: "rm -rf build", cwd: "D:\\work\\alpha" },
+    });
+    await waitFor(() => target.querySelector('[data-testid="approval-allow"]') !== null);
+    expect(island().getAttribute("data-presence")).toBe("expanded");
+
+    // 收起成胶囊后：鼠标移开也不该自动隐藏（审批还挂着）
+    target.querySelector<HTMLButtonElement>('[data-testid="compact-toggle"]')!.click();
+    await waitFor(() => island().getAttribute("data-presence") === "peek");
+    document.body.dispatchEvent(new Event("pointerleave"));
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(island().getAttribute("data-presence")).toBe("peek");
+
+    // 再收起一次（点 ⌄ 之后手动隐藏不可达，改用 Esc）→ 热区带 pending 标记
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await waitFor(() => island().getAttribute("data-presence") === "hidden");
+    expect(target.querySelector('[data-testid="idle-notch"]')?.getAttribute("data-pending")).toBe("true");
   });
 });
 describe("global hotkey", () => {
@@ -1137,6 +1168,7 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
 
 
 

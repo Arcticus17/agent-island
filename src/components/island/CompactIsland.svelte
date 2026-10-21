@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import type { AgentView, DisplayStatus } from "../../bridge/types";
   import PixelAgent from "../brand/PixelAgent.svelte";
 
@@ -7,12 +7,15 @@
     expanded,
     onToggle,
     iconStyle = "pixel",
+    pendingApprovals = false,
   }: {
     agent: AgentView | null;
     expanded: boolean;
     onToggle: () => void;
     /** "pixel" 为像素吉祥物 + 数值徽标（默认）；"dot" 为原有的圆点语言 */
     iconStyle?: "dot" | "pixel";
+    /** 有审批在等：胶囊也要显性提示，不能只靠展开面板 */
+    pendingApprovals?: boolean;
   } = $props();
 
   const labels: Record<DisplayStatus, string> = { stopped: "已停止", idle: "空闲", working: "工作中", done: "已完成", error: "错误", waiting: "等待确认" };
@@ -36,21 +39,23 @@
   });
 </script>
 
-<button class="compact" class:pixel type="button" data-testid="compact-toggle" aria-expanded={expanded} aria-controls="expanded-island" onclick={onToggle}>
+<button class="compact" class:pixel class:pending={pendingApprovals} type="button" data-testid="compact-toggle" aria-expanded={expanded} aria-controls="expanded-island" onclick={onToggle}>
   {#if pixel}
-    <span class="avatar" class:attention={status === "waiting"} aria-hidden="true"><PixelAgent agentName={agent?.name ?? null} size={20} {status} /></span>
+    <span class="avatar" class:attention={status === "waiting" || pendingApprovals} aria-hidden="true"><PixelAgent agentName={agent?.name ?? null} size={20} {status} /></span>
   {:else}
     <span class="orb" aria-hidden="true"></span>
   {/if}
   <span class="identity sensitive"><strong>{agent?.name ?? "暂无 Agent"}</strong><span class="session">{agent?.active_session?.name ?? "当前会话未确认"}</span></span>
   {#if pixel}
-    {#if status === "waiting"}
+    {#if pendingApprovals}
+      <span class="badge attention" data-testid="compact-badge" data-pending="true" role="img" aria-label="有审批等待你确认" title="有审批等待你确认">!</span>
+    {:else if status === "waiting"}
       <span class="badge attention" data-testid="compact-badge" role="img" aria-label="等待你确认" title="等待你确认">?</span>
     {:else if badge}
       <span class="badge" data-testid="compact-badge" role="img" aria-label={badge.title} title={badge.title}>{badge.text}</span>
     {/if}
   {/if}
-  <span class="status" role="status" data-testid="compact-status">{labels[status]}</span>
+  <span class="status" role="status" data-testid="compact-status">{pendingApprovals ? "待确认" : labels[status]}</span>
   <span class="chevron" aria-hidden="true">{expanded ? "⌃" : "⌄"}</span>
 </button>
 
@@ -67,6 +72,8 @@
 
   /* 像素模式：换成 flex，好让徽标按内容出现/消失，不占死一列 */
   .compact.pixel { display: flex; gap: 9px; }
+  /* 有审批在等：整条胶囊给一点琥珀色描边，收起状态下也不会漏看 */
+  .compact.pending { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--island-status-waiting) 55%, transparent); }
   .compact.pixel .identity { flex: 1 1 auto; }
   .avatar { flex: 0 0 auto; display: grid; place-items: center; width: 22px; height: 22px; }
   .avatar.attention { animation: attention-bob 1.8s ease-in-out infinite; }
@@ -78,3 +85,4 @@
 
   @media (max-width: 300px) { .compact { grid-template-columns: auto minmax(0, 1fr) auto; } .status { display: none; } }
 </style>
+
