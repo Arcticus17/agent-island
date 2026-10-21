@@ -111,6 +111,15 @@
   }
   let agentMode = $state<AgentMode>(storedAgentMode());
   let terminalOpen = $state(false);
+  let terminalMax = $state(false);
+  let widthBeforeMax = 0;
+  let terminalId = $state<string | null>(null);
+  let terminalProgram = $state<string | null>(null);
+  let terminalText = $state("");
+  let terminalStarting = $state(false);
+  let terminalExited = $state(false);
+  let terminalError = $state<string | null>(null);
+  let terminalSize = { cols: 80, rows: 20 };
   function agentCliName(agent: { name: string } | null): string {
     const map: Record<string, string> = { "Claude Code": "claude", "Codex CLI": "codex", OpenCode: "opencode", Hermes: "hermes" };
     return (agent && map[agent.name]) ?? "Shell";
@@ -130,8 +139,6 @@
     return current;
   });
   let inspectedSession = $state<{ agentId: string; sessionId: string } | null>(null);
-  let terminalMax = $state(false);
-  let widthBeforeMax = 0;
   let inspectingHistory = $derived(inspectedSession?.agentId === selectedAgent?.id && inspectedSession !== null);
   let selectedSession = $derived(inspectingHistory
     ? selectedAgent?.history_sessions.find((session) => session.id === inspectedSession?.sessionId) ?? null
@@ -248,10 +255,70 @@
     await syncWindowSize();
   }
 
+  /**
+   * 内置终端会话归 App 持有：收起面板/收起岛都不会重启 Agent，
+   * 只有点「关闭」或「收起终端」才真正结束 PTY。
+   */
+  async function startTerminal(program?: string): Promise<void> {
+    const target = program ?? agentCliName(selectedAgent);
+    if (!bridge.terminalOpen) {
+      terminalError = "当前宿主不支持内置终端";
+      return;
+    }
+    if (terminalId) await stopTerminal();
+    terminalStarting = true;
+    terminalError = null;
+    terminalExited = false;
+    terminalText = "";
+    try {
+      const id = await bridge.terminalOpen({
+        program: target,
+        cwd: selectedAgent?.active_session?.cwd ?? null,
+        cols: terminalSize.cols,
+        rows: terminalSize.rows,
+      });
+      if (disposed) {
+        void bridge.terminalClose?.(id).catch(() => undefined);
+        return;
+      }
+      terminalId = id;
+      terminalProgram = target;
+    } catch (cause) {
+      terminalError = cause instanceof Error ? cause.message : String(cause);
+    } finally {
+      terminalStarting = false;
+      void syncWindowSize();
+    }
+  }
+
+  async function stopTerminal(): Promise<void> {
+    const current = terminalId;
+    terminalId = null;
+    terminalProgram = null;
+    terminalText = "";
+    terminalExited = false;
+    terminalError = null;
+    if (current) {
+      try {
+        await bridge.terminalClose?.(current);
+      } catch {
+        // 会话可能已经被外部结束
+      }
+    }
+    void syncWindowSize();
+  }
+
   async function toggleTerminal(): Promise<void> {
-    if (terminalOpen && terminalMax) await toggleTerminalMax();
-    terminalOpen = !terminalOpen;
+    if (terminalOpen) {
+      if (terminalMax) await toggleTerminalMax();
+      await stopTerminal();
+      terminalOpen = false;
+      await syncWindowSize();
+      return;
+    }
+    terminalOpen = true;
     await syncWindowSize();
+    if (!terminalId) await startTerminal();
   }
 
   function windowFailure(error: unknown): void {
@@ -269,6 +336,11 @@
     notificationAutoExpanded = false;
     if (!expanded) selectDefaultAgent();
     expanded = !expanded;
+    // 收起岛时退出终端放大，别让收起后的胶囊还挂着 720 宽
+    if (!expanded && terminalMax) {
+      void toggleTerminalMax();
+      return;
+    }
     void syncWindowSize();
   }
 
@@ -543,8 +615,7 @@
         if (!disposed) void syncWindowSize();
       });
     }
-    const unsubscribe = store.subscribe((next) => {
-      const firstAgents = !viewState.snapshot?.agents.length && !!next.snapshot?.agents.length;
+    const unsubscribe = store.subscribe((next) => {      const firstAgents = !viewState.snapshot?.agents.length && !!next.snapshot?.agents.length;
       if (focusMode === "errors") {
         const errorAgent = next.snapshot?.agents.find((agent) =>
           agent.display_status === "error" && !agent.freshness.stale,
@@ -568,6 +639,24 @@
       void syncWindowSize();
     });
     void refreshAll();
+    // 终端输出由 App 常驻订阅：收起面板/收起岛期间也不会丢字节，重新展开接得上
+    let stopTerminalEvents: (() => void) | undefined;
+    if (bridge.listenTerminalEvents) {
+      void bridge.listenTerminalEvents((event) => {
+        if (event.id !== terminalId) return;
+        if (event.kind === "data") {
+          terminalText += event.data;
+          if (terminalText.length > 200_000) terminalText = terminalText.slice(-150_000);
+        } else {
+          terminalExited = true;
+          terminalId = null;
+          void syncWindowSize();
+        }
+      }).then((unlisten) => {
+        if (disposed) unlisten();
+        else stopTerminalEvents = unlisten;
+      }).catch(() => undefined);
+    }
     const timer = pollIntervalMs > 0
       ? window.setInterval(() => void refreshAll(), pollIntervalMs)
       : undefined;
@@ -578,6 +667,7 @@
       resizeRevision += 1;
       stopListening?.();
       stopPlacement?.();
+      stopTerminalEvents?.();
       for (const timer of notificationTimers.values()) window.clearTimeout(timer.handle);
       notificationTimers.clear();
       endLayoutInteraction();
@@ -673,7 +763,25 @@
             {/if}
           </div>
           {#if terminalOpen}
-            <TerminalPanel agent={selectedAgent} {bridge} maximized={terminalMax} onToggleMax={() => void toggleTerminalMax()} onLayoutChange={() => void syncWindowSize()} />
+            <TerminalPanel
+              agent={selectedAgent}
+              sessionId={terminalId}
+              program={terminalProgram}
+              text={terminalText}
+              starting={terminalStarting}
+              exited={terminalExited}
+              error={terminalError}
+              maximized={terminalMax}
+              onToggleMax={() => void toggleTerminalMax()}
+              onStart={(program) => void startTerminal(program)}
+              onStop={() => void stopTerminal()}
+              onInput={(data) => { if (terminalId) void bridge.terminalWrite?.(terminalId, data).catch(() => undefined); }}
+              onResize={(cols, rows) => {
+                terminalSize = { cols, rows };
+                if (terminalId) void bridge.terminalResize?.(terminalId, cols, rows).catch(() => undefined);
+              }}
+              onLayoutChange={() => void syncWindowSize()}
+            />
           {/if}
         {/if}
         <div class="cards-region" class:terminal-open={terminalOpen}>

@@ -108,7 +108,7 @@
 - 会话操作：打开终端、打开目录、恢复、停止、重启
 - 发消息：给 Claude Code / Codex CLI / OpenCode / Hermes 发送提示词；**岛上展开面板新增指令输入框**，发送后流式回执直接显示在岛内（不用切总览），无当前会话或查看历史会话时禁用
 - Agent 请求同步弹出：`PreToolUse`/`Notification` 经 hook bridge（`127.0.0.1:8799`）实时推岛并自动展开；审批卡显示来源 Agent，点允许/拒绝把决定回传给 Agent；修掉 HTTP 头解析大小写敏感导致非 undici 客户端审批被静默丢弃的 bug
-- 内置终端：展开面板点「内置终端」用 ConPTY（`portable-pty`）+ xterm.js 在岛内起当前 Agent 的**交互式 CLI**（`claude`/`codex`/`opencode`，带会话目录），也可落回 `cmd.exe`；键盘输入写 PTY、尺寸变化同步行列、关闭面板即回收进程；程序白名单 + shim 包装
+- 内置终端：展开面板点「内置终端」用 ConPTY（`portable-pty`）+ xterm.js 在岛内起当前 Agent 的**交互式 CLI**（`claude`/`codex`/`opencode`，带会话目录），也可落回 `cmd.exe`；键盘输入写 PTY、尺寸变化同步行列；**会话归 App 持有，收起岛/收起面板都不会重启 Agent**，输出在收起期间继续累积、展开后回放，只有「关闭」或「收起终端」才回收进程；程序白名单 + shim 包装
 - 终端放大：终端头部一个图标按钮（Lucide `maximize-2` / `minimize-2` 对角箭头，`aria-pressed` 高亮）——窗口从 420 拉到 720 宽、高度上限放宽到可用高度 92%，终端区 240 → 560px，诊断/输入框/卡片临时让位；还原回到打开终端前的宽度
 - 使用统计：累计运行时间、报错次数、完成次数
 - 全局快捷键：Ctrl+Alt+I 呼出/隐藏小岛，Ctrl+Alt+O 打开总览

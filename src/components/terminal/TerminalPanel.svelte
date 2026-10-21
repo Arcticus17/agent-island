@@ -3,20 +3,38 @@
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import "@xterm/xterm/css/xterm.css";
-  import type { AgentIslandBridge, AgentView } from "../../bridge/types";
+  import type { AgentView } from "../../bridge/types";
 
   let {
     agent,
-    bridge,
+    sessionId = null,
+    program = null,
+    text = "",
+    starting = false,
+    exited = false,
+    error = null,
     maximized = false,
     onToggleMax,
+    onStart,
+    onStop,
+    onInput,
+    onResize,
     onLayoutChange,
   }: {
     agent: AgentView | null;
-    bridge: AgentIslandBridge;
-    /** 终端放大模式：占满面板，由 App 负责把窗口一起放大 */
+    /** 会话由 App 持有：面板只管渲染，收起面板不会重启 Agent */
+    sessionId?: string | null;
+    program?: string | null;
+    text?: string;
+    starting?: boolean;
+    exited?: boolean;
+    error?: string | null;
     maximized?: boolean;
     onToggleMax?: () => void;
+    onStart?: (program: string) => void;
+    onStop?: () => void;
+    onInput?: (data: string) => void;
+    onResize?: (cols: number, rows: number) => void;
     onLayoutChange?: () => void;
   } = $props();
 
@@ -30,17 +48,15 @@
   let host = $state<HTMLDivElement>();
   let terminal: Terminal | null = null;
   let fitAddon: FitAddon | null = null;
-  let sessionId = $state<string | null>(null);
-  let unlisten: (() => void) | null = null;
   let observer: ResizeObserver | null = null;
-  let disposed = false;
-
-  let phase = $state<"idle" | "starting" | "running" | "exited" | "error">("idle");
-  let error = $state<string | null>(null);
-  let activeProgram = $state<string | null>(null);
+  let written = 0;
+  /** 上一帧应用的输出长度，用来处理"历史被截断"的情况 */
+  let appliedSnapshot = 0;
 
   const agentCli = $derived(agent ? AGENT_CLI[agent.name] ?? null : null);
-  const cwd = $derived(agent?.active_session?.cwd ?? null);
+  const phase = $derived(
+    error ? "error" : starting ? "starting" : sessionId ? "running" : exited ? "exited" : "idle",
+  );
 
   function themeColors(node: HTMLElement) {
     const styles = getComputedStyle(node);
@@ -54,13 +70,13 @@
   }
 
   function fit(): void {
-    if (!fitAddon || !terminal || !sessionId) return;
+    if (!fitAddon || !terminal) return;
     try {
       fitAddon.fit();
     } catch {
       return;
     }
-    void bridge.terminalResize?.(sessionId, terminal.cols, terminal.rows).catch(() => undefined);
+    onResize?.(terminal.cols, terminal.rows);
   }
 
   function createTerminal(): Terminal {
@@ -82,87 +98,46 @@
     const addon = new FitAddon();
     instance.loadAddon(addon);
     instance.open(node);
-    instance.onData((data) => {
-      const current = sessionId;
-      if (current) void bridge.terminalWrite?.(current, data).catch(() => undefined);
-    });
+    instance.onData((data) => onInput?.(data));
     terminal = instance;
     fitAddon = addon;
     return instance;
   }
 
-  async function start(program: string, args: string[] = []): Promise<void> {
-    if (!bridge.terminalOpen) {
-      error = "当前宿主不支持内置终端";
-      phase = "error";
-      return;
+  /** 把 App 累积的输出增量写进 xterm；历史被截断时整体重放一次。 */
+  $effect(() => {
+    const next = text;
+    const instance = terminal;
+    if (!instance) return;
+    if (next.length < appliedSnapshot) {
+      instance.reset();
+      written = 0;
     }
-    const instance = terminal ?? createTerminal();
-    if (sessionId) await stop(false);
-    instance.reset();
-    error = null;
-    phase = "starting";
-    activeProgram = program;
-    try {
-      const id = await bridge.terminalOpen({
-        program,
-        args,
-        cwd,
-        cols: instance.cols || 80,
-        rows: instance.rows || 20,
-      });
-      if (disposed) {
-        void bridge.terminalClose?.(id).catch(() => undefined);
-        return;
-      }
-      sessionId = id;
-      phase = "running";
-      instance.focus();
-      // 首帧布局完成后再 fit 一次，拿到正确的行列数
-      requestAnimationFrame(() => { fit(); });
-      onLayoutChange?.();
-    } catch (cause) {
-      phase = "error";
-      error = cause instanceof Error ? cause.message : String(cause);
-      onLayoutChange?.();
+    appliedSnapshot = next.length;
+    if (next.length > written) {
+      instance.write(next.slice(written));
+      written = next.length;
     }
-  }
+  });
 
-  async function stop(clearPhase = true): Promise<void> {
-    const current = sessionId;
-    sessionId = null;
-    if (current) await bridge.terminalClose?.(current).catch(() => undefined);
-    if (clearPhase) {
-      phase = "idle";
-      activeProgram = null;
-      onLayoutChange?.();
-    }
-  }
+  /** 会话就绪（首次启动或重新挂载后拿到 id）→ 重新对齐尺寸并聚焦。 */
+  $effect(() => {
+    if (!sessionId || !terminal) return;
+    requestAnimationFrame(() => fit());
+  });
 
   onMount(() => {
-    void (async () => {
-      if (bridge.listenTerminalEvents) {
-        unlisten = await bridge.listenTerminalEvents((event) => {
-          if (event.id !== sessionId) {
-            if (event.kind === "exit") return;
-            return;
-          }
-          if (event.kind === "data") terminal?.write(event.data);
-          else {
-            phase = "exited";
-            sessionId = null;
-            onLayoutChange?.();
-          }
-        });
-      }
-      if (!bridge.terminalOpen) {
-        error = "当前宿主不支持内置终端";
-        phase = "error";
-        return;
-      }
-      // 打开面板就自动开一个：优先 Agent 自己的 CLI，没有就落到 Shell
-      await start(agentCli ?? "cmd.exe");
-    })();
+    const instance = createTerminal();
+    if (text.length > 0) {
+      instance.write(text);
+      written = text.length;
+      appliedSnapshot = text.length;
+    }
+    requestAnimationFrame(() => {
+      fit();
+      if (sessionId) instance.focus();
+      onLayoutChange?.();
+    });
 
     if (host && typeof ResizeObserver !== "undefined") {
       observer = new ResizeObserver(() => { if (sessionId) fit(); });
@@ -170,19 +145,18 @@
     }
 
     return () => {
-      disposed = true;
+      // 只销毁渲染器；PTY 归 App 所有，收起面板不关 Agent
       observer?.disconnect();
       observer = null;
-      unlisten?.();
-      unlisten = null;
-      void stop(false);
-      terminal?.dispose();
+      instance.dispose();
       terminal = null;
+      fitAddon = null;
     };
   });
 
   onDestroy(() => {
-    disposed = true;
+    observer?.disconnect();
+    observer = null;
   });
 </script>
 
@@ -191,14 +165,16 @@
     <span class="title">终端</span>
     <span class="phase" data-testid="terminal-phase" data-phase={phase}>
       {#if phase === "starting"}启动中…
-      {:else if phase === "running"}{activeProgram ?? "运行中"}
+      {:else if phase === "running"}{program ?? "运行中"}
       {:else if phase === "exited"}已退出
       {:else if phase === "error"}出错
       {:else}未启动{/if}
     </span>
     <div class="actions">
-      {#if agentCli}<button type="button" data-testid="terminal-start-agent" onclick={() => void start(agentCli)}>{agentCli}</button>{/if}
-      <button type="button" data-testid="terminal-start-shell" onclick={() => void start("cmd.exe")}>Shell</button>
+      {#if agentCli}
+        <button type="button" data-testid="terminal-start-agent" onclick={() => onStart?.(agentCli)}>{agentCli}</button>
+      {/if}
+      <button type="button" data-testid="terminal-start-shell" onclick={() => onStart?.("cmd.exe")}>Shell</button>
       {#if onToggleMax}
         <!-- Lucide "maximize-2 / minimize-2"（ISC）：对角箭头表示放大/还原，和 VS Code 面板、浏览器全屏的语义一致 -->
         <button
@@ -208,7 +184,7 @@
           data-maximized={maximized}
           aria-pressed={maximized}
           aria-label={maximized ? "还原终端大小" : "放大终端"}
-          title={maximized ? "还原终端大小（Esc 之外也可点这里）" : "放大终端：窗口一起放大"}
+          title={maximized ? "还原终端大小" : "放大终端：窗口一起放大"}
           onclick={onToggleMax}
         >
           {#if maximized}
@@ -222,7 +198,7 @@
           {/if}
         </button>
       {/if}
-      {#if sessionId}<button type="button" data-testid="terminal-stop" onclick={() => void stop()}>关闭</button>{/if}
+      {#if sessionId}<button type="button" data-testid="terminal-stop" onclick={() => onStop?.()}>关闭</button>{/if}
     </div>
   </header>
   {#if error}
@@ -233,7 +209,7 @@
 </section>
 
 <style>
-  .terminal-panel { display: grid; gap: 6px; }
+  .terminal-panel { display: grid; gap: 6px; min-width: 0; }
   header { display: flex; align-items: center; gap: 8px; }
   .title { color: var(--island-text-primary); font-size: 12px; font-weight: 700; }
   .phase { color: var(--island-text-tertiary); font-size: 10px; }
@@ -258,5 +234,3 @@
   .terminal-panel:has(.screen.maximized) { gap: 8px; }
   .error { margin: 0; color: var(--island-refresh-error-text); font-size: 11px; overflow-wrap: anywhere; }
 </style>
-
-

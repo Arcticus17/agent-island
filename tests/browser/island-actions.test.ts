@@ -900,6 +900,26 @@ describe("island built-in terminal", () => {
     await waitFor(() => target.querySelector('[data-testid="terminal-phase"]')?.getAttribute("data-phase") === "idle");
   });
 
+  it("keeps the agent session alive when the island collapses and reopens", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-toggle"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="terminal-panel"]') !== null);
+    await waitFor(() => harness.terminalCalls().filter((call) => call.kind === "open").length === 1);
+
+    // 收起岛 → 面板卸载；再展开 → 面板重新挂载。PTY 归 App 所有，不能被重启或关掉。
+    const compact = () => target.querySelector<HTMLButtonElement>('[data-testid="compact-toggle"]')!;
+    compact().click();
+    await waitFor(() => target.querySelector('[data-testid="terminal-panel"]') === null);
+    compact().click();
+    await waitFor(() => target.querySelector('[data-testid="terminal-panel"]') !== null);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    expect(harness.terminalCalls().filter((call) => call.kind === "open")).toHaveLength(1);
+    expect(harness.terminalCalls().some((call) => call.kind === "close")).toBe(false);
+    expect(target.querySelector('[data-testid="terminal-phase"]')?.getAttribute("data-phase")).toBe("running");
+  });
   it("closes the PTY when the terminal panel is hidden again", async () => {
     const harness = createBridgeHarness([snapshot(100)]);
     const target = await renderIsland(harness);
@@ -960,5 +980,6 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
 
 
