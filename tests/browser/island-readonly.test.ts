@@ -335,6 +335,30 @@ describe("daily budget", () => {
     localStorage.clear();
   });
 });
+describe("pinned agent", () => {
+  it("keeps the pinned agent selected when a busier one appears", async () => {
+    localStorage.clear();
+    const first = snapshot(100);
+    const second = snapshot(100);
+    second.agents[0].state.turn = "executing";
+    second.agents[0].display_status = "working";
+    const { target } = await renderIsland([first, second], { pollIntervalMs: 40 });
+    const settings = target.querySelector<HTMLDetailsElement>("details.settings")!;
+    settings.open = true;
+    await waitFor(() => target.querySelector('[data-testid="pin-toggle"]') !== null);
+    // 先切到第二个 Agent，再把它固定住
+    const secondAgent = target.querySelector<HTMLButtonElement>('[data-agent-id="beta"]');
+    secondAgent?.click();
+    await waitFor(() => target.querySelector('[data-testid="active-session-id"]')?.textContent === "beta-live");
+    target.querySelector<HTMLButtonElement>('[data-testid="pin-toggle"]')!.click();
+    await waitFor(() => localStorage.getItem("agent-island-pinned-agent") === "beta");
+    expect(target.querySelector('[data-testid="pin-toggle"]')?.textContent).toContain("已固定");
+    // 等到下一轮快照（alpha 变成工作中）后，选中仍然是 beta
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    expect(target.querySelector('[data-testid="active-session-id"]')?.textContent).toBe("beta-live");
+    localStorage.clear();
+  });
+});
 describe("command palette", () => {
   it("opens with Ctrl+K, filters and runs a command", async () => {
     const { target } = await renderIsland([snapshot(100)]);
@@ -420,6 +444,7 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
 
 
 

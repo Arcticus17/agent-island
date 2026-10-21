@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import "../themes/tokens.css";
   import "../themes/graphite.css";
@@ -29,6 +29,7 @@
   import type { CardId, CardPlacement, LayoutConfigV1 } from "../layout/schema";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
   import { preferredAgent } from "../models/agent-priority";
+  import { PINNED_AGENT_KEY, pinnedSelection, storedPinnedAgent } from "../models/pinned-agent";
   import { quotaMessage, quotaWarnMark, QUOTA_WARN_KEY, shouldWarnQuota } from "../usage/quota";
   import {
     BUDGET_OPTIONS,
@@ -117,6 +118,8 @@
   let diagnosticStatus = $state<"loading" | "ready" | "failed">("loading");
   /** 命令面板（Ctrl+K） */
   let paletteOpen = $state(false);
+  /** 固定盯住的 Agent（重启后仍然生效） */
+  let pinnedAgentId = $state<string | null>(storedPinnedAgent((key) => localStorage.getItem(key)));
   let diagnosticRequest = 0;
   let diagnosticInFlight: Promise<void> | null = null;
   let diagnosticRefreshQueued = false;
@@ -689,12 +692,32 @@
     void syncWindowSize();
   }
 
+  function setPinnedAgent(id: string | null): void {
+    pinnedAgentId = id;
+    try {
+      if (id) localStorage.setItem(PINNED_AGENT_KEY, id);
+      else localStorage.removeItem(PINNED_AGENT_KEY);
+    } catch {
+      // 存储不可用时只影响持久化
+    }
+  }
+
   function selectDefaultAgent(): void {
     const current = store.current();
     // Explicit error focus keeps its existing behavior. Failed refreshes do not
     // provide new evidence for automatically switching the displayed agent.
     if (focusMode === "errors" || current.refreshError || !current.snapshot) return;
     if (visibleAgents.length === 0) return;
+    // 固定了某个 Agent 就一直停在它上面；它消失时才解除固定并回退到自动选择
+    if (pinnedAgentId) {
+      const { agent, stalePin } = pinnedSelection(visibleAgents, pinnedAgentId);
+      if (stalePin) {
+        setPinnedAgent(null);
+      } else if (agent) {
+        if (current.selectedAgentId !== agent.id) store.selectAgent(agent.id);
+        return;
+      }
+    }
     const preferred = preferredAgent({ ...current.snapshot, agents: visibleAgents }, current.selectedAgentId);
     if (preferred) store.selectAgent(preferred.id);
   }
@@ -1351,6 +1374,8 @@
             dailyBudget = value;
             localStorage.setItem(BUDGET_STORAGE_KEY, String(value));
           }}
+          pinnedAgentName={pinnedAgentId ? selectedAgent?.name ?? pinnedAgentId : null}
+          onTogglePin={() => setPinnedAgent(pinnedAgentId ? null : selectedAgent?.id ?? null)}
           onIconStyle={setIconStyle}
           onAgentMode={setAgentMode}
           onHookToggle={() => void toggleHook()}
@@ -1528,6 +1553,9 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
+
+
 
 
 

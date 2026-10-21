@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 命令面板（Ctrl+K）：把"点来点去"的操作变成一个键盘可达的搜索框。
  *
  * 数据都是现成的（Agents、会话、几个固定动作），所以这里只负责两件事：
@@ -32,6 +32,7 @@ export const PALETTE_ACTIONS: ReadonlyArray<{ id: string; title: string; hint: s
   { id: "action:refresh", title: "刷新快照", hint: "刷新" },
   { id: "action:privacy", title: "切换隐私遮罩", hint: "隐私" },
   { id: "action:focus", title: "切换专注模式", hint: "专注" },
+  { id: "action:pin", title: "固定 / 取消固定当前 Agent", hint: "固定" },
   { id: "action:hide", title: "收起灵动岛", hint: "Esc" },
 ];
 
@@ -113,3 +114,4 @@ export function moveSelection(index: number, delta: number, length: number): num
   if (next >= length) return 0;
   return next;
 }
+

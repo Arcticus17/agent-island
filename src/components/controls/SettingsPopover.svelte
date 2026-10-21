@@ -13,6 +13,8 @@
     hookError,
     budget = 0,
     onBudget,
+    pinnedAgentName = null,
+    onTogglePin,
     onPrivacy,
     onFocusMode,
     onThemeStyle,
@@ -35,6 +37,9 @@
     /** 每日预算（美元），0 表示不设 */
     budget?: number;
     onBudget?: (value: number) => void;
+    /** 当前固定的 Agent 名称（null 表示没固定） */
+    pinnedAgentName?: string | null;
+    onTogglePin?: () => void;
     onPrivacy: (value: boolean) => void;
     onFocusMode: (value: "off" | "errors" | "quiet") => void;
     onThemeStyle: (value: ThemeStyle) => void;
@@ -73,6 +78,14 @@
     <label><span>专注模式</span><select value={focusMode} onchange={(event) => onFocusMode(event.currentTarget.value as "off" | "errors" | "quiet")}><option value="off">全部状态</option><option value="errors">聚焦错误</option><option value="quiet">静音通知</option></select></label>
     <label><span>外观</span><select value={themeStyle} onchange={(event) => onThemeStyle(event.currentTarget.value as ThemeStyle)}>{#each THEME_STYLES as style (style)}<option value={style}>{THEME_LABELS[style]}</option>{/each}</select></label>
     <label><span>图标</span><select value={iconStyle} onchange={(event) => onIconStyle(event.currentTarget.value as "dot" | "pixel")}><option value="pixel">像素吉祥物</option><option value="dot">圆点</option></select></label>
+    {#if onTogglePin}
+      <div class="setting-row">
+        <span>固定 Agent</span>
+        <button type="button" data-testid="pin-toggle" data-pinned={pinnedAgentName ? "true" : "false"} onclick={onTogglePin}>
+          {pinnedAgentName ? `已固定 ${pinnedAgentName}` : "固定当前"}
+        </button>
+      </div>
+    {/if}
     {#if onBudget}
       <label>
         <span>每日预算</span>
@@ -127,6 +140,7 @@
   @media (prefers-reduced-motion: reduce) { summary, button { transition: none; } }
   .setting-error { margin: -2px 0 0; color: var(--island-refresh-error-text); font-size: 10px; overflow-wrap: anywhere; }
 </style>
+
 
 
 

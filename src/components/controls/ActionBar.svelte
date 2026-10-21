@@ -26,6 +26,8 @@
     onThemeStyle,
     budget = 0,
     onBudget,
+    pinnedAgentName = null,
+    onTogglePin,
     onIconStyle,
     onAgentMode,
     onHookToggle,
@@ -51,6 +53,8 @@
     onThemeStyle: (value: ThemeStyle) => void;
     budget?: number;
     onBudget?: (value: number) => void;
+    pinnedAgentName?: string | null;
+    onTogglePin?: () => void;
     onIconStyle: (value: "dot" | "pixel") => void;
     onAgentMode: (value: "all" | "running") => void;
     onHookToggle: () => void;
@@ -162,7 +166,7 @@
       {states.stop === "confirming" ? "确认停止" : states.stop === "pending" ? "停止中…" : states.stop === "succeeded" ? "已停止" : "停止"}
     </button>
   </div>
-  <SettingsPopover {privacy} {focusMode} {themeStyle} {iconStyle} {agentMode} {hookEnabled} {hookState} {hookError} {onPrivacy} {onFocusMode} {onThemeStyle} {onIconStyle} {onAgentMode} {onHookToggle} {budget} {onBudget} onOpen={onSettingsOpen} {onLayoutChange} {onAdjustWidth} {onStartResize} />
+  <SettingsPopover {privacy} {focusMode} {themeStyle} {iconStyle} {agentMode} {hookEnabled} {hookState} {hookError} {onPrivacy} {onFocusMode} {onThemeStyle} {onIconStyle} {onAgentMode} {onHookToggle} {budget} {onBudget} {pinnedAgentName} {onTogglePin} onOpen={onSettingsOpen} {onLayoutChange} {onAdjustWidth} {onStartResize} />
   </div>
 </footer>
 
@@ -181,5 +185,6 @@
   .feedback button { color: inherit; }
   @media (max-width: 420px) { .action-bar { align-items: flex-start; } .actions { display: flex; flex-wrap: nowrap; flex: 1 1 auto; overflow-x: auto; } button { min-height: 38px; padding-inline: 7px; flex: 0 0 auto; } }
 </style>
+
 
 
