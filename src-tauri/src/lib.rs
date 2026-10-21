@@ -1,4 +1,5 @@
-mod adapters;
+﻿mod adapters;
+mod approval_rules;
 mod application;
 mod commands;
 mod domain;
@@ -16,6 +17,7 @@ mod updates;
 mod usage;
 
 use adapters::AgentAdapter;
+use approval_rules::*;
 use commands::*;
 use hooks::*;
 use hotkey::*;
@@ -479,6 +481,10 @@ pub fn run() {
             terminal_list,
             probe_cli_version,
             load_app_settings,
+            list_approval_rules,
+            add_approval_rule,
+            remove_approval_rule,
+            list_approval_audit,
             save_app_settings,
             get_autostart,
             set_autostart,
@@ -612,6 +618,7 @@ pub fn run() {
         }
     });
 }
+
 
 
 

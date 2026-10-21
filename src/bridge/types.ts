@@ -367,6 +367,26 @@ export interface AgentIslandBridge {
   saveAppSettings?(settings: string): Promise<void>;
   /** 全局快捷键（Ctrl+Shift+A）唤出/收起。 */
   listenIslandHotkey?(handler: () => void): Promise<() => void>;
+  /** 审批允许清单：命中规则的 PreToolUse 直接放行，并写入审计。 */
+  listApprovalRules?(): Promise<ApprovalRule[]>;
+  addApprovalRule?(tool: string, pattern: string): Promise<ApprovalRule[]>;
+  removeApprovalRule?(id: string): Promise<ApprovalRule[]>;
+  listApprovalAudit?(limit?: number): Promise<ApprovalAuditEntry[]>;
+}
+
+export interface ApprovalRule {
+  id: string;
+  tool: string;
+  pattern: string;
+}
+
+export interface ApprovalAuditEntry {
+  at_ms: number;
+  id: string;
+  tool: string;
+  command: string;
+  rule: string;
+  decision: string;
 }
 
 export interface CliVersionProbe {

@@ -113,6 +113,8 @@ function createBridgeHarness(
   const terminalHandlers = new Set<(event: TerminalEvent) => void>();
   const focusHandlers = new Set<(focused: boolean) => void>();
   const hotkeyHandlers = new Set<() => void>();
+  const approvalRules: Array<{ id: string; tool: string; pattern: string }> = [];
+  const approvalAudit: Array<{ at_ms: number; id: string; tool: string; command: string; rule: string; decision: string }> = [];
   const cliVersion = "0.1.0";
   const terminalLog: Array<{ kind: string; [key: string]: unknown }> = [];
   const resizeLog: Array<{ width: number; height: number }> = [];
@@ -166,6 +168,21 @@ function createBridgeHarness(
       hotkeyHandlers.add(handler);
       return () => hotkeyHandlers.delete(handler);
     },
+    async listApprovalRules() {
+      return approvalRules.map((rule) => ({ ...rule }));
+    },
+    async addApprovalRule(tool, pattern) {
+      approvalRules.push({ id: `rule-${approvalRules.length + 1}`, tool, pattern });
+      return approvalRules.map((rule) => ({ ...rule }));
+    },
+    async removeApprovalRule(id) {
+      const index = approvalRules.findIndex((rule) => rule.id === id);
+      if (index >= 0) approvalRules.splice(index, 1);
+      return approvalRules.map((rule) => ({ ...rule }));
+    },
+    async listApprovalAudit(limit) {
+      return approvalAudit.slice(0, limit ?? 20).map((entry) => ({ ...entry }));
+    },
     async probeCliVersion(program) {
       return { program, version: cliVersion, raw: `mock ${cliVersion}`, ok: true };
     },
@@ -191,6 +208,11 @@ function createBridgeHarness(
       for (const handler of hotkeyHandlers) handler();
     },
   };
+}
+
+async function waitForElement(target: HTMLElement, selector: string): Promise<HTMLInputElement> {
+  await waitFor(() => target.querySelector(selector) !== null);
+  return target.querySelector<HTMLInputElement>(selector)!;
 }
 
 async function waitFor(check: () => boolean, timeoutMs = 1_000) {
@@ -965,6 +987,27 @@ describe("pending approvals stay visible", () => {
     expect(target.querySelector('[data-testid="idle-notch"]')?.getAttribute("data-pending")).toBe("true");
   });
 });
+describe("approval allow rules", () => {
+  it("adds, lists and removes rules through the bridge", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    const drawer = target.querySelector<HTMLDetailsElement>('[data-testid="approval-rules-drawer"]')!;
+    drawer.open = true;
+    drawer.dispatchEvent(new Event("toggle"));
+
+    const input = await waitForElement(target, '[data-testid="approval-rule-input"]');
+    input.value = "npm *";
+    input.dispatchEvent(new Event("input"));
+    target.querySelector<HTMLButtonElement>('[data-testid="approval-rule-add"]')!.click();
+
+    await waitFor(() => target.querySelectorAll('[data-testid="approval-rule"]').length === 1);
+    expect(target.querySelector('[data-testid="approval-rule"]')?.textContent).toContain("任意工具 · npm *");
+    expect(target.querySelector('[data-testid="approval-rule-count"]')?.textContent).toContain("1 条");
+
+    target.querySelector<HTMLButtonElement>('[data-testid="approval-rule-remove"]')!.click();
+    await waitFor(() => target.querySelectorAll('[data-testid="approval-rule"]').length === 0);
+  });
+});
 describe("global hotkey", () => {
   it("summons the island from hidden and hides it again", async () => {
     const harness = createBridgeHarness([snapshot(100)]);
@@ -1168,6 +1211,8 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
+
 
 
 

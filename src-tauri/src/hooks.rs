@@ -460,6 +460,16 @@ pub(crate) fn handle_hook_conn(mut stream: std::net::TcpStream, app: tauri::AppH
                 .and_then(|c| c.as_str())
                 .unwrap_or("")
                 .to_string();
+            let tool = event
+                .get("tool")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
+            let session_id = event
+                .get("session")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string();
             if !enabled {
                 write_http_json(&mut stream, "200 OK", "{\"decision\":\"ask\"}");
                 return;
@@ -468,19 +478,28 @@ pub(crate) fn handle_hook_conn(mut stream: std::net::TcpStream, app: tauri::AppH
                 write_http_json(&mut stream, "200 OK", "{\"decision\":\"allow\"}");
                 return;
             }
+            // 用户自己的允许清单：命中就直接放行，但必须留痕并让用户看见
+            let rules = load_rules(&rules_path());
+            if let Some(rule) = match_rule(&rules, &tool, &command) {
+                let id = new_hook_approval_id();
+                record_auto_allow(&audit_path(), &id, &tool, &command, rule);
+                use tauri::Emitter;
+                let _ = app.emit(
+                    "hook-event",
+                    serde_json::json!({
+                        "kind": "notification",
+                        "message": format!("已按规则自动允许：{command}"),
+                        "session": session_id,
+                    }),
+                );
+                write_http_json(&mut stream, "200 OK", "{\"decision\":\"allow\"}");
+                return;
+            }
             let id = new_hook_approval_id();
             let approval = HookApproval {
                 id: id.clone(),
-                session: event
-                    .get("session")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                tool: event
-                    .get("tool")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                session: session_id,
+                tool: tool.clone(),
                 command: command.clone(),
                 cwd: event
                     .get("cwd")

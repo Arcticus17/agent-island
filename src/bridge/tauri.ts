@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+﻿import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { availableMonitors, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
 import { clampWindowPlacement, parseWindowPlacement, WINDOW_PLACEMENT_KEY } from "./window-placement";
@@ -20,6 +20,8 @@ import {
   type AgentCommand,
   type AgentIslandBridge,
   type AgentViewSnapshot,
+  type ApprovalAuditEntry,
+  type ApprovalRule,
   type CliVersionProbe,
   type CommandValue,
   type CommandResult,
@@ -248,6 +250,18 @@ export function createTauriBridge(): AgentIslandBridge {
     async listenIslandHotkey(handler) {
       return await listen("island-hotkey", () => handler());
     },
+    async listApprovalRules() {
+      return await invoke<ApprovalRule[]>("list_approval_rules");
+    },
+    async addApprovalRule(tool, pattern) {
+      return await invoke<ApprovalRule[]>("add_approval_rule", { tool, pattern });
+    },
+    async removeApprovalRule(id) {
+      return await invoke<ApprovalRule[]>("remove_approval_rule", { id });
+    },
+    async listApprovalAudit(limit) {
+      return await invoke<ApprovalAuditEntry[]>("list_approval_audit", { limit: limit ?? null });
+    },
     async terminalOpen(request) {
       return await invoke<string>("terminal_open", {
         program: request.program,
@@ -294,3 +308,4 @@ export function createTauriBridge(): AgentIslandBridge {
 }
 
 export const tauriBridge = createTauriBridge();
+

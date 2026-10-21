@@ -1,4 +1,4 @@
-﻿import {
+import {
   assertSupportedSnapshot,
   type AgentCommand,
   type AgentIslandBridge,
@@ -43,6 +43,8 @@ export function createMockBridge(
   let settingsBlob: string | null = null;
   const savedSettings: string[] = [];
   const hotkeyHandlers = new Set<() => void>();
+  const approvalRules: Array<{ id: string; tool: string; pattern: string }> = [];
+  const approvalAudit: Array<{ at_ms: number; id: string; tool: string; command: string; rule: string; decision: string }> = [];
 
   return {
     async getSnapshot() {
@@ -81,6 +83,21 @@ export function createMockBridge(
     async listenIslandHotkey(handler) {
       hotkeyHandlers.add(handler);
       return () => hotkeyHandlers.delete(handler);
+    },
+    async listApprovalRules() {
+      return approvalRules.map((rule) => ({ ...rule }));
+    },
+    async addApprovalRule(tool, pattern) {
+      approvalRules.push({ id: `mock-rule-${approvalRules.length + 1}`, tool, pattern });
+      return approvalRules.map((rule) => ({ ...rule }));
+    },
+    async removeApprovalRule(id) {
+      const index = approvalRules.findIndex((rule) => rule.id === id);
+      if (index >= 0) approvalRules.splice(index, 1);
+      return approvalRules.map((rule) => ({ ...rule }));
+    },
+    async listApprovalAudit(limit) {
+      return approvalAudit.slice(0, limit ?? 20).map((entry) => ({ ...entry }));
     },
     async terminalOpen(request) {
       terminalSequence += 1;
@@ -132,5 +149,6 @@ export function createMockBridge(
     },
   };
 }
+
 
 

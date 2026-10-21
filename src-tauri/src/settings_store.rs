@@ -1,4 +1,4 @@
-//! 用户设置的持久化。
+﻿//! 用户设置的持久化。
 //!
 //! 之前所有设置（主题、图标、布局、窗口位置……）都只存在 WebView 的 localStorage 里：
 //! 进程被强杀时最后一次写入可能还没落盘，重启就回到默认值（实测丢过一次主题）。
@@ -21,7 +21,7 @@ pub(crate) fn settings_path() -> PathBuf {
 
 /// 读设置；文件不存在 / 损坏 / 超大都当"没有设置"，不要让应用起不来。
 pub(crate) fn load_settings(path: &Path) -> Option<String> {
-    let raw = fs::read_to_string(path).ok()?;
+    let raw = fs::read_to_string(path).ok()?.trim_start_matches('\u{feff}').to_string();
     if raw.len() > MAX_SETTINGS_BYTES {
         return None;
     }
@@ -105,3 +105,4 @@ mod tests {
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 }
+
