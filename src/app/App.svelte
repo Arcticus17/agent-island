@@ -179,6 +179,29 @@
     store.selectAgent(visibleAgents[0].id);
   });
 
+  /**
+   * 诊断只显示"当前 Agent"的：后端返回的是所有 adapter 的汇总，
+   * 混着显示会让人误以为当前的 Agent 有问题。
+   */
+  const adapterForName: Record<string, string> = {
+    "claude code": "claude",
+    "codex cli": "codex",
+    opencode: "opencode",
+    hermes: "hermes",
+  };
+  const selectedAdapter = $derived.by(() => {
+    const fromDiagnostic = selectedAgent?.diagnostic?.adapter;
+    if (fromDiagnostic) return fromDiagnostic.toLowerCase();
+    const name = (selectedAgent?.name ?? "").toLowerCase();
+    return adapterForName[name] ?? name;
+  });
+  const agentDiagnosticIssues = $derived(
+    diagnosticIssues.filter((issue) => issue.adapter.toLowerCase() === selectedAdapter),
+  );
+  const agentDiagnosticSources = $derived(
+    diagnosticSources.filter((source) => source.source.toLowerCase().startsWith(selectedAdapter)),
+  );
+
   // 展开时自动检查一次更新（每个 Agent 一次；网络失败不重试，点按钮可手动重试）
   $effect(() => {
     if (!expanded) return;
@@ -974,11 +997,11 @@
         <details class="diagnostics-drawer" data-testid="diagnostics-drawer">
           <summary>
             <span>诊断信息</span>
-            {#if diagnosticIssues.length > 0}<span class="drawer-badge" data-testid="diagnostics-count">{diagnosticIssues.length} 项提示</span>{:else}<span class="drawer-muted">无异常</span>{/if}
+            {#if agentDiagnosticIssues.length > 0}<span class="drawer-badge" data-testid="diagnostics-count">{agentDiagnosticIssues.length} 项提示</span>{:else}<span class="drawer-muted">无异常</span>{/if}
           </summary>
           <DiagnosticsPanel
-            issues={diagnosticIssues}
-            sources={diagnosticSources}
+            issues={agentDiagnosticIssues}
+            sources={agentDiagnosticSources}
             status={diagnosticStatus}
             exportDiagnostics={(destination) => diagnosticsBridge.exportDiagnostics(destination)}
             onLayoutChange={() => void syncWindowSize()}

@@ -1,4 +1,4 @@
-import { mount, unmount } from "svelte";
+﻿import { mount, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 
@@ -519,7 +519,8 @@ describe("Agent Island commands", () => {
       generated_at_ms: 201,
       sources: [],
       issues: [{
-        adapter: "codex",
+        // 当前选中的是 Claude Code，诊断只显示它自己的 adapter
+        adapter: "claude",
         code: "post_stop_diagnostic",
         freshness: { observed_at_ms: 201, stale: false },
         event_type: null,
@@ -898,6 +899,32 @@ describe("island prompt composer", () => {
   });
 });
 
+describe("agent-scoped diagnostics", () => {
+  it("shows only the selected agent's issues and sources", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness, {
+      diagnosticsBridge: diagnosticsBridgeFrom(async () => ({
+        generated_at_ms: 100,
+        issues: [
+          { adapter: "claude", code: "claude_issue", freshness: { observed_at_ms: 100, stale: false }, event_type: null, event_count: 1, message_count: 1 },
+          { adapter: "codex", code: "codex_issue", freshness: { observed_at_ms: 100, stale: false }, event_type: null, event_count: 2, message_count: 2 },
+        ],
+        sources: [
+          { source: "claude_usage", status: "ok", records: 3 },
+          { source: "codex_usage", status: "ok", records: 4 },
+        ],
+      })),
+    });
+
+    const drawer = target.querySelector<HTMLDetailsElement>('[data-testid="diagnostics-drawer"]')!;
+    drawer.open = true;
+    await waitFor(() => target.textContent?.includes("claude_issue") === true);
+    // 另一个 Agent 的诊断不混进来
+    expect(target.textContent).not.toContain("codex_issue");
+    expect(target.textContent).not.toContain("Codex 用量");
+    expect(target.querySelector('[data-testid="diagnostics-count"]')?.textContent).toContain("1 项提示");
+  });
+});
 describe("agent update button", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -1083,6 +1110,7 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
 
 
 
