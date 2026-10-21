@@ -89,11 +89,7 @@
   .settings { position: relative; }
   .settings[open] { flex: 1 0 100%; min-width: 0; }
   .settings[open] summary { width: fit-content; margin-left: auto; }
-  /* 下拉弹层由浏览器渲染：必须让 select/option 都声明深色，且给不透明底色，
-     否则 Windows 上弹层是白底 + 白色文字，只有悬停高亮时才能看见。 */
-  select { color-scheme: dark; }
-  select option { color-scheme: dark; color: var(--island-menu-text); background-color: var(--island-menu-surface); }
-  select option:checked { background-color: var(--island-menu-surface-hover); }
+  /* 下拉弹层的深色样式统一在 tokens.css 的 .agent-island select option 里 */
   summary { min-height: 30px; display: grid; place-items: center; padding: 5px 10px; border: 1px solid var(--island-border-subtle); border-radius: 9px; color: var(--island-text-secondary); background: var(--island-control-surface); cursor: pointer; list-style: none; }
   summary::-webkit-details-marker { display: none; }
   summary:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }

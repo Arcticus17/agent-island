@@ -50,7 +50,27 @@ select option:checked { background-color: var(--island-menu-surface-hover); }
 
 ## 回归门禁
 
-`check` 0/0 · `unit` 123 · `frontend` 26 · `browser` 86 · `visual` 14。
+`check` 0/0 · `unit` 123 · `frontend` 26 · `browser` 95 · `visual` 14。
+
+## 补充：改成全局规则（同日）
+
+第一版只把样式写进了 `SettingsPopover.svelte`。Svelte 的样式是**组件作用域**的，所以
+`LayoutEditor.svelte` 里的「卡片布局预设」下拉（极简 / 监控 / 调试）仍是白底白字——
+用户截图反馈的正是这个。
+
+改法：把规则挪到 `src/themes/tokens.css`，用 `.agent-island select option` 统一兜住
+岛里所有 `<select>`：
+
+```css
+.agent-island select { color-scheme: dark; }
+.agent-island select option { color: var(--island-menu-text); background-color: var(--island-menu-surface); }
+.agent-island select option:checked { background-color: var(--island-menu-surface-hover); }
+```
+
+只作用于 `.agent-island`，总览窗口的浅色模式不受影响。组件里的重复规则已删除。
+
+实机验证：卡片布局下拉现在深底浅字（`mac-island-analysis/layout-preset-popup.png`），
+会话选择、设置里的四个下拉一并覆盖。
 
 ## 已知小瑕疵
 

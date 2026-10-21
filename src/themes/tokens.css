@@ -20,6 +20,24 @@
   --menu-text: #f5f7fb;
 }
 
+/*
+ * 岛里所有原生下拉弹层统一深色。弹层由浏览器单独绘制，不继承组件里
+ * 半透明的控制面底色；组件样式是 scoped 的，所以这条放在全局，
+ * 避免每个组件的 <select> 都要各自写一遍（漏一个就是白底白字）。
+ * 只作用于 .agent-island，总览窗口的浅色模式不受影响。
+ */
+.agent-island select {
+  color-scheme: dark;
+}
+.agent-island select option {
+  color-scheme: dark;
+  color: var(--island-menu-text);
+  background-color: var(--island-menu-surface);
+}
+.agent-island select option:checked {
+  background-color: var(--island-menu-surface-hover);
+}
+
 .agent-island,
 .island-loading,
 .event-layer,
