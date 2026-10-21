@@ -1754,3 +1754,97 @@ fn hook_http_request_reads_canonical_case_headers() {
     assert_eq!(parsed_body, body);
     writer.join().unwrap();
 }
+
+#[test]
+fn incremental_index_reuses_unchanged_session_files() {
+    let root = std::env::temp_dir().join(format!("agent-island-index-cache-{}", epoch_millis()));
+    fs::create_dir_all(&root).unwrap();
+    for index in 0..5 {
+        fs::write(
+            root.join(format!("session-{index}.jsonl")),
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"current\",\"cwd\":\"D:/target\"}}\n",
+        )
+        .unwrap();
+    }
+    let process = process_fact_from_observations(
+        "codex",
+        "Codex CLI",
+        &[ProcessObservation {
+            pid: 7,
+            project_path: Some("D:/target".into()),
+            started_at_ms: epoch_millis(),
+        }],
+    );
+    let mut cache = SessionIndexCache::default();
+
+    cache.begin_scan();
+    let first = scan_session_directory_with("codex", &root, Some(&process.identity), &mut cache);
+    cache.finish_scan();
+    assert_eq!(cache.index_len(), 5, "cold scan indexes every file once");
+    // 冷扫还会额外解析一次活跃会话详情，所以 miss 至少是 5
+    assert!(cache.misses() >= 5, "cold scan misses: {}", cache.misses());
+    assert_eq!(cache.hits(), 0);
+    assert_eq!(first.candidates.len(), 5);
+
+    cache.begin_scan();
+    let second = scan_session_directory_with("codex", &root, Some(&process.identity), &mut cache);
+    cache.finish_scan();
+    assert_eq!(cache.misses(), 0, "unchanged files must not be re-read");
+    assert!(cache.hits() >= 5, "expected cache hits, got {}", cache.hits());
+    assert_eq!(second.candidates.len(), 5);
+    assert_eq!(second.candidates[0].identity.session_id, first.candidates[0].identity.session_id);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn incremental_index_reindexes_a_changed_file_and_prunes_deleted_ones() {
+    let root = std::env::temp_dir().join(format!("agent-island-index-change-{}", epoch_millis()));
+    fs::create_dir_all(&root).unwrap();
+    let kept = root.join("kept.jsonl");
+    let changed = root.join("changed.jsonl");
+    let removed = root.join("removed.jsonl");
+    let meta = "{\"type\":\"session_meta\",\"payload\":{\"id\":\"current\",\"cwd\":\"D:/target\"}}\n";
+    fs::write(&kept, meta).unwrap();
+    fs::write(&changed, meta).unwrap();
+    fs::write(&removed, meta).unwrap();
+    let process = process_fact_from_observations(
+        "codex",
+        "Codex CLI",
+        &[ProcessObservation {
+            pid: 9,
+            project_path: Some("D:/target".into()),
+            started_at_ms: epoch_millis(),
+        }],
+    );
+    let mut cache = SessionIndexCache::default();
+    cache.begin_scan();
+    scan_session_directory_with("codex", &root, Some(&process.identity), &mut cache);
+    cache.finish_scan();
+    assert_eq!(cache.index_len(), 3);
+
+    // 改一个、删一个，再扫一遍：只有改过的文件被重新解析，删掉的条目会被清掉。
+    let mut longer = meta.to_string();
+    longer.push_str("{\"timestamp\":\"2026-09-04T10:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"changed\"}}\n");
+    fs::write(&changed, longer).unwrap();
+    fs::remove_file(&removed).unwrap();
+
+    cache.begin_scan();
+    let scan = scan_session_directory_with("codex", &root, Some(&process.identity), &mut cache);
+    cache.finish_scan();
+    assert!(cache.misses() >= 1, "changed file must be re-indexed");
+    assert_eq!(cache.index_len(), 2, "deleted file is pruned");
+    assert_eq!(scan.candidates.len(), 2);
+    let changed_session = scan
+        .candidates
+        .iter()
+        .find(|candidate| candidate.view.log_path.as_deref() == Some(changed.to_string_lossy().as_ref()))
+        .expect("changed file still indexed");
+    assert!(changed_session
+        .view
+        .records
+        .iter()
+        .any(|record| record.text.contains("changed")));
+
+    fs::remove_dir_all(root).unwrap();
+}

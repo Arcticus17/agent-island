@@ -317,6 +317,7 @@ struct ActivityState {
 
 struct SessionState {
     activity: HashMap<String, ActivityState>,
+    index_cache: session_scan::SessionIndexCache,
     commands: HashMap<String, AgentCommand>,
     stats: HashMap<String, AgentStats>,
     daily: HashMap<String, HashMap<String, AgentStats>>,
@@ -433,6 +434,7 @@ pub fn run() {
             sys: Mutex::new(System::new_all()),
             session: Mutex::new(SessionState {
                 activity: HashMap::new(),
+                index_cache: session_scan::SessionIndexCache::default(),
                 commands: HashMap::new(),
                 stats: load_stats(&stats_path),
                 daily: load_daily(&daily_path),
@@ -502,6 +504,8 @@ pub fn run() {
                         // Background thread: lock y to 0, no initial SetWindowPos
                         std::thread::spawn(move || {
                             let hwnd2 = HWND(raw as *mut _);
+                            let debug = std::env::var_os("AGENT_ISLAND_SCAN_DEBUG").is_some();
+                            let mut corrections = 0u32;
                             loop {
                                 std::thread::sleep(std::time::Duration::from_millis(150));
                                 unsafe {
@@ -510,6 +514,10 @@ pub fn run() {
                                         continue;
                                     }
                                     if rc.top != 0 {
+                                        corrections += 1;
+                                        if debug && corrections <= 20 {
+                                            eprintln!("[pin] correcting top={} left={}", rc.top, rc.left);
+                                        }
                                         let w = rc.right - rc.left;
                                         let h = rc.bottom - rc.top;
                                         let _ = SetWindowPos(
@@ -596,3 +604,4 @@ pub fn run() {
         }
     });
 }
+

@@ -300,7 +300,9 @@ pub(crate) fn scan_agents(
     interface::diagnostics::DiagnosticSnapshot,
     bool,
 ) {
+    let _scan_started = Instant::now();
     refresh_agent_processes(sys);
+    let _after_processes = Instant::now();
     let now = Instant::now();
     let delta = now.duration_since(session.last_poll).as_secs();
     session.last_poll = now;
@@ -311,6 +313,7 @@ pub(crate) fn scan_agents(
     let mut acquisition_issues = Vec::new();
     let mut stats_changed = false;
 
+    session.index_cache.begin_scan();
     for def in agent_defs() {
         let agent_name = &def.name;
         let agent_id = if def.log_kind.is_empty() {
@@ -338,8 +341,11 @@ pub(crate) fn scan_agents(
             .collect();
         let mut process_fact = process_fact_from_observations(agent_id, agent_name, &observations);
         let process_cwd = process_fact.identity.project_path.clone();
-        let mut session_scan =
-            build_session_scan_for_process(agent_name, Some(&process_fact.identity));
+        let mut session_scan = build_session_scan_for_process_cached(
+            agent_name,
+            Some(&process_fact.identity),
+            &mut session.index_cache,
+        );
         if session_scan.acquisition == AcquisitionCompleteness::Incomplete {
             acquisition_issues.push(
                 session_scan
@@ -526,6 +532,14 @@ pub(crate) fn scan_agents(
         process_facts.push(process_fact);
     }
     let generated_at_ms = epoch_millis();
+    session.index_cache.finish_scan();
+    if std::env::var_os("AGENT_ISLAND_SCAN_DEBUG").is_some() {
+        eprintln!(
+            "[scan] processes={}ms agents={}ms",
+            _after_processes.duration_since(_scan_started).as_millis(),
+            _after_processes.elapsed().as_millis()
+        );
+    }
     let mut snapshot = interface::snapshot::build_snapshot_with_acquisition(
         generated_at_ms,
         &process_facts,
@@ -698,3 +712,5 @@ pub(crate) fn update_terminal_statistics_from_snapshot(
     }
     changed
 }
+
+

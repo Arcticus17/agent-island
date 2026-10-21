@@ -1,6 +1,130 @@
 //! Session discovery: bounded reads, per-agent scans, and identity matching.
 
 use crate::*;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+
+/// 按 (路径, mtime, 大小) 缓存单个会话文件的解析结果。
+///
+/// 之前每次轮询都会把 `~/.claude/projects` / `~/.codex/sessions` 下的**每个** jsonl
+/// 重新打开读头部尾部：文件一多，一次扫描就是几百毫秒到几秒（冷启动实测 5.7s）。
+/// 文件没变就完全不用重读——目录遍历 + stat 之外没有 I/O。
+#[derive(Default)]
+pub(crate) struct SessionIndexCache {
+    index: HashMap<PathBuf, FileIndexEntry>,
+    detail: HashMap<PathBuf, DetailEntry>,
+    seen: HashSet<PathBuf>,
+    hits: u64,
+    misses: u64,
+    started_at: Option<std::time::Instant>,
+}
+
+#[derive(Default)]
+struct FileIndexEntry {
+    modified_ms: u64,
+    len: u64,
+    scan: SessionScan,
+}
+
+#[derive(Default)]
+struct DetailEntry {
+    modified_ms: u64,
+    len: u64,
+    scan: Option<SessionScan>,
+}
+
+impl SessionIndexCache {
+    pub(crate) fn begin_scan(&mut self) {
+        self.started_at = Some(std::time::Instant::now());
+        self.seen.clear();
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    /// 丢掉这一轮没再出现的文件，避免长期运行后缓存无限增长。
+    pub(crate) fn finish_scan(&mut self) {
+        let seen = std::mem::take(&mut self.seen);
+        self.index.retain(|path, _| seen.contains(path));
+        self.detail.retain(|path, _| seen.contains(path));
+        self.seen = seen;
+        // 排查性能问题时设 AGENT_ISLAND_SCAN_DEBUG=1 就能看到每轮命中和耗时
+        if std::env::var_os("AGENT_ISLAND_SCAN_DEBUG").is_some() {
+            eprintln!(
+                "[scan] files={} hits={} misses={} elapsed={}ms",
+                self.index.len(),
+                self.hits,
+                self.misses,
+                self.started_at
+                    .map(|start| start.elapsed().as_millis())
+                    .unwrap_or(0)
+            );
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hits(&self) -> u64 {
+        self.hits
+    }
+
+    #[cfg(test)]
+    pub(crate) fn misses(&self) -> u64 {
+        self.misses
+    }
+
+    #[cfg(test)]
+    pub(crate) fn index_len(&self) -> usize {
+        self.index.len()
+    }
+
+    fn index_of(&mut self, agent_id: &str, path: &Path, modified_ms: u64, len: u64) -> SessionScan {
+        self.seen.insert(path.to_path_buf());
+        if let Some(entry) = self.index.get(path) {
+            if entry.modified_ms == modified_ms && entry.len == len {
+                self.hits += 1;
+                return entry.scan.clone();
+            }
+        }
+        self.misses += 1;
+        let scan = index_session_file(agent_id, path);
+        self.index.insert(
+            path.to_path_buf(),
+            FileIndexEntry { modified_ms, len, scan: scan.clone() },
+        );
+        scan
+    }
+
+    fn detail_of(&mut self, agent_id: &str, path: &Path) -> Option<SessionScan> {
+        self.seen.insert(path.to_path_buf());
+        let metadata = fs::metadata(path).ok()?;
+        let modified_ms = metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+            .map(|value| value.as_millis() as u64)
+            .unwrap_or(0);
+        let len = metadata.len();
+        if let Some(entry) = self.detail.get(path) {
+            if entry.modified_ms == modified_ms && entry.len == len {
+                self.hits += 1;
+                return entry.scan.clone();
+            }
+        }
+        self.misses += 1;
+        let scan = session_scan_from_file(agent_id, path);
+        self.detail.insert(
+            path.to_path_buf(),
+            DetailEntry { modified_ms, len, scan: scan.clone() },
+        );
+        scan
+    }
+}
+
+fn file_stamp(modified: SystemTime) -> u64 {
+    modified
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 pub(crate) fn read_tail(path: &Path, max_bytes: u64) -> String {
     let Ok(mut file) = File::open(path) else {
@@ -389,10 +513,21 @@ pub(crate) fn session_candidate_from_legacy(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn scan_session_directory(
     agent_id: &str,
     root: &Path,
     process: Option<&domain::ProcessIdentity>,
+) -> SessionScan {
+    let mut cache = SessionIndexCache::default();
+    scan_session_directory_with(agent_id, root, process, &mut cache)
+}
+
+pub(crate) fn scan_session_directory_with(
+    agent_id: &str,
+    root: &Path,
+    process: Option<&domain::ProcessIdentity>,
+    cache: &mut SessionIndexCache,
 ) -> SessionScan {
     let mut scan = SessionScan::default();
     let mut files = Vec::new();
@@ -426,16 +561,16 @@ pub(crate) fn scan_session_directory(
                 pending.push(entry.path());
             } else if entry.path().extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
                 match metadata.modified() {
-                    Ok(modified) => files.push((modified, entry.path())),
+                    Ok(modified) => files.push((modified, metadata.len(), entry.path())),
                     Err(error) => scan.record_issue(agent_id, io_issue(&error)),
                 }
             }
         }
     }
-    files.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    files.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.cmp(&b.2)));
     // Every file contributes identity evidence. Only selected files get expensive display parsing.
-    for (_, path) in &files {
-        let mut identity_scan = index_session_file(agent_id, path);
+    for (modified, len, path) in &files {
+        let mut identity_scan = cache.index_of(agent_id, path, file_stamp(*modified), *len);
         scan.desktop_root_paths
             .append(&mut identity_scan.desktop_root_paths);
         scan.candidates.append(&mut identity_scan.candidates);
@@ -469,7 +604,7 @@ pub(crate) fn scan_session_directory(
         .filter_map(|candidate| candidate.view.log_path.clone())
         .collect::<Vec<_>>();
     for path in detail_paths {
-        load_session_detail(&mut scan, agent_id, Path::new(&path));
+        load_session_detail_with(&mut scan, agent_id, Path::new(&path), cache);
     }
     if scan.acquisition == AcquisitionCompleteness::Complete
         && indexed_active_session(&scan, process, epoch_millis()) != active_id
@@ -503,8 +638,19 @@ pub(crate) fn indexed_active_session(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn load_session_detail(scan: &mut SessionScan, agent_id: &str, path: &Path) {
-    if let Some(mut detail) = session_scan_from_file(agent_id, path) {
+    let mut cache = SessionIndexCache::default();
+    load_session_detail_with(scan, agent_id, path, &mut cache);
+}
+
+pub(crate) fn load_session_detail_with(
+    scan: &mut SessionScan,
+    agent_id: &str,
+    path: &Path,
+    cache: &mut SessionIndexCache,
+) {
+    if let Some(mut detail) = cache.detail_of(agent_id, path) {
         if detail.acquisition == AcquisitionCompleteness::Incomplete {
             scan.acquisition = AcquisitionCompleteness::Incomplete;
         }
@@ -831,6 +977,17 @@ pub(crate) fn build_session_scan_for_process(
     name: &str,
     process: Option<&domain::ProcessIdentity>,
 ) -> SessionScan {
+    let mut cache = SessionIndexCache::default();
+    build_session_scan_for_process_cached(name, process, &mut cache)
+}
+
+/// 和 `build_session_scan_for_process` 一样，但把单文件解析结果留在缓存里：
+/// 轮询时只有变化过的会话文件会被重新读取。
+pub(crate) fn build_session_scan_for_process_cached(
+    name: &str,
+    process: Option<&domain::ProcessIdentity>,
+    cache: &mut SessionIndexCache,
+) -> SessionScan {
     let defs = agent_defs();
     let kind = defs
         .iter()
@@ -849,7 +1006,7 @@ pub(crate) fn build_session_scan_for_process(
                 scan.record_issue(kind, domain::DataIssue::LogUnavailable);
                 return scan;
             };
-            scan_session_directory(kind, &root, process)
+            scan_session_directory_with(kind, &root, process, cache)
         }
         "opencode" => opencode_session_scan(),
         "hermes" => hermes_session_scan(),
@@ -952,3 +1109,6 @@ pub(crate) fn read_bounded_stream(
     }
     acquired.text = String::from_utf8_lossy(&bytes).into_owned();
 }
+
+
+
