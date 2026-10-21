@@ -333,7 +333,7 @@ describe("island presence: hidden → hover peek → click expand", () => {
     expect(island().getAttribute("data-presence")).toBe("hidden");
     expect(target.querySelector('[data-testid="idle-notch"]')).not.toBeNull();
     expect(target.querySelector('[data-testid="compact-toggle"]')).toBeNull();
-    await waitFor(() => bridge.windowSizes().at(-1)?.height === 10);
+    await waitFor(() => bridge.windowSizes().at(-1)?.height === 13);
 
     // 2. 悬停 → 胶囊态（窗口回到 60px）
     document.body.dispatchEvent(new Event("pointerenter"));
@@ -357,7 +357,7 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "peek");
     document.body.dispatchEvent(new Event("pointerleave"));
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
-    await waitFor(() => bridge.windowSizes().at(-1)?.height === 10);
+    await waitFor(() => bridge.windowSizes().at(-1)?.height === 13);
   });
 
   it("goes back to hidden when the pointer leaves the peek pill", async () => {
@@ -370,6 +370,7 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
 
 
 

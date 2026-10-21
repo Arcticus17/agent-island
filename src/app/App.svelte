@@ -101,7 +101,7 @@
   const notificationTimers = new Map<string, { handle: number; remainingMs: number; startedAt: number; pauseCount: number }>();
   const collapsedWindowHeight = 60;
   /** 隐藏态：只留一条很薄的"热区"，鼠标扫过就回到胶囊态。 */
-  const hiddenWindowHeight = 10;
+  const hiddenWindowHeight = 13;
   let peekTimer: number | undefined;
   let hideTimer: number | undefined;
 
@@ -1029,8 +1029,8 @@
   .idle-notch {
     display: grid;
     place-items: center;
-    width: 68px;
-    height: 6px;
+    width: 104px;
+    height: 9px;
     border: 1px solid var(--island-border-subtle);
     border-radius: 999px;
     background: var(--surface-sticky);
@@ -1038,7 +1038,7 @@
     opacity: .72;
     transition: opacity var(--duration-fast) ease-out, width var(--duration-fast) ease-out;
   }
-  .agent-island.idle-hidden:hover .idle-notch { width: 96px; opacity: 1; }
+  .agent-island.idle-hidden:hover .idle-notch { width: 136px; opacity: 1; }
   .idle-notch-dot {
     width: 5px;
     height: 5px;
