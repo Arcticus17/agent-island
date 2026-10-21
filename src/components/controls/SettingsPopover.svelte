@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import type { CommandFailure, CommandUiState } from "../events/types";
   import { THEME_LABELS, THEME_STYLES, type ThemeStyle } from "../../themes/theme-style";
 
@@ -11,6 +11,8 @@
     hookEnabled,
     hookState,
     hookError,
+    budget = 0,
+    onBudget,
     onPrivacy,
     onFocusMode,
     onThemeStyle,
@@ -30,6 +32,9 @@
     hookEnabled: boolean | null;
     hookState: CommandUiState;
     hookError: CommandFailure | null;
+    /** 每日预算（美元），0 表示不设 */
+    budget?: number;
+    onBudget?: (value: number) => void;
     onPrivacy: (value: boolean) => void;
     onFocusMode: (value: "off" | "errors" | "quiet") => void;
     onThemeStyle: (value: ThemeStyle) => void;
@@ -68,6 +73,17 @@
     <label><span>专注模式</span><select value={focusMode} onchange={(event) => onFocusMode(event.currentTarget.value as "off" | "errors" | "quiet")}><option value="off">全部状态</option><option value="errors">聚焦错误</option><option value="quiet">静音通知</option></select></label>
     <label><span>外观</span><select value={themeStyle} onchange={(event) => onThemeStyle(event.currentTarget.value as ThemeStyle)}>{#each THEME_STYLES as style (style)}<option value={style}>{THEME_LABELS[style]}</option>{/each}</select></label>
     <label><span>图标</span><select value={iconStyle} onchange={(event) => onIconStyle(event.currentTarget.value as "dot" | "pixel")}><option value="pixel">像素吉祥物</option><option value="dot">圆点</option></select></label>
+    {#if onBudget}
+      <label>
+        <span>每日预算</span>
+        <select data-testid="budget-select" value={String(budget)} onchange={(event) => onBudget(Number(event.currentTarget.value))}>
+          <option value="0">不设预算</option>
+          {#each [5, 10, 20, 50] as amount (amount)}
+            <option value={String(amount)}>{"$"}{amount}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
     <label><span>显示</span><select value={agentMode} onchange={(event) => onAgentMode(event.currentTarget.value as "all" | "running")}><option value="all">全部检测</option><option value="running">仅运行中</option></select></label>
     {#if onAdjustWidth || onStartResize}
       <div class="setting-row">
@@ -111,4 +127,7 @@
   @media (prefers-reduced-motion: reduce) { summary, button { transition: none; } }
   .setting-error { margin: -2px 0 0; color: var(--island-refresh-error-text); font-size: 10px; overflow-wrap: anywhere; }
 </style>
+
+
+
 

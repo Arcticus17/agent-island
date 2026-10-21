@@ -1,4 +1,4 @@
-import { mount, unmount } from "svelte";
+﻿import { mount, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
 
@@ -319,6 +319,22 @@ describe("read-only Agent Island", () => {
 });
 
 
+describe("daily budget", () => {
+  it("shows today's spend once a budget is set", async () => {
+    localStorage.clear();
+    const { target } = await renderIsland([snapshot(100)]);
+    const settings = target.querySelector<HTMLDetailsElement>("details.settings")!;
+    settings.open = true;
+    await waitFor(() => target.querySelector('[data-testid="budget-select"]') !== null);
+    const select = target.querySelector<HTMLSelectElement>('[data-testid="budget-select"]')!;
+    select.value = "10";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitFor(() => target.querySelector('[data-testid="usage-spend"]') !== null);
+    expect(localStorage.getItem("agent-island-daily-budget")).toBe("10");
+    expect(target.querySelector('[data-testid="usage-spend"]')?.textContent).toContain("今日 $0.00 / 预算 $10");
+    localStorage.clear();
+  });
+});
 describe("island presence: hidden → hover peek → click expand", () => {
   afterEach(async () => {
     while (mounted.length) await unmount(mounted.pop()!);
@@ -373,6 +389,9 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
+
+
 
 
 

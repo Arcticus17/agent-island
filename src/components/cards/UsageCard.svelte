@@ -1,6 +1,19 @@
-<script lang="ts">
+﻿<script lang="ts">
   import type { AgentView, UsageInfo } from "../../bridge/types";
-  let { agent, refreshFailed }: { agent: AgentView; refreshFailed: boolean } = $props();
+  import { formatUsd } from "../../usage/spend";
+  let {
+    agent,
+    refreshFailed,
+    todaySpend = 0,
+    budget = 0,
+  }: {
+    agent: AgentView;
+    refreshFailed: boolean;
+    /** 今日花费（岛在线期间累计，所有 Agent 合计） */
+    todaySpend?: number;
+    /** 每日预算，0 表示没设 */
+    budget?: number;
+  } = $props();
 
   function formatTokens(value: number): string {
     if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
@@ -28,6 +41,10 @@
   }
 
   const usage = $derived(agent.usage);
+  const spendLabel = $derived(todaySpend > 0 || budget > 0
+    ? `今日 ${formatUsd(todaySpend)}${budget > 0 ? ` / 预算 ${formatUsd(budget)}` : ""}`
+    : "");
+  const spendState = $derived(budget > 0 ? (todaySpend > budget ? "over" : todaySpend >= budget * 0.8 ? "near" : "ok") : "off");
   const detail = $derived(usage ? usageDetails(usage) : "");
   const freshness = $derived(
     usage === null
@@ -53,6 +70,9 @@
   {:else}
     <strong class="unavailable">用量尚未提供</strong>
   {/if}
+  {#if spendLabel}
+    <span class="spend" data-testid="usage-spend" data-budget-state={spendState} title="岛在线期间累计的增量，关闭应用的时间不计">{spendLabel}</span>
+  {/if}
   <span class="freshness" data-testid="usage-freshness">{freshness}</span>
 </article>
 
@@ -63,7 +83,11 @@
   .metric span, .detail, .freshness { color: var(--island-text-secondary); font-size: 11px; }
   .detail { overflow-wrap: anywhere; }
   .freshness { justify-self: end; }
+  .spend { color: var(--island-text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .spend[data-budget-state="near"] { color: var(--island-status-waiting); }
+  .spend[data-budget-state="over"] { color: var(--island-status-error); font-weight: 700; }
   .unavailable { color: var(--island-text-primary); font-size: 13px; }
   .meter { height: 4px; overflow: hidden; border-radius: 999px; background: var(--island-border-subtle); }
   .meter span { display: block; height: 100%; border-radius: inherit; background: var(--island-status-current); }
 </style>
+

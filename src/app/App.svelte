@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import "../themes/tokens.css";
   import "../themes/graphite.css";
@@ -28,6 +28,18 @@
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
   import { preferredAgent } from "../models/agent-priority";
   import { quotaMessage, quotaWarnMark, QUOTA_WARN_KEY, shouldWarnQuota } from "../usage/quota";
+  import {
+    BUDGET_OPTIONS,
+    BUDGET_STORAGE_KEY,
+    SPEND_STORAGE_KEY,
+    budgetStatus,
+    dailyTotal,
+    emptySpendState,
+    formatUsd,
+    recordCost,
+    storedBudget,
+    type SpendState,
+  } from "../usage/spend";
   import {
     compareVersions,
     fetchLatestVersion,
@@ -80,6 +92,9 @@
   const hasPendingApprovals = $derived(approvals.length > 0);
   let notifications = $state<NotificationItem[]>([]);
   let privacy = $state(localStorage.getItem("agent-island-privacy") === "1");
+  /** 今日花费（岛在线期间累计）与每日预算，预算 0 表示关闭 */
+  let spend = $state<SpendState>(loadStoredSpend());
+  let dailyBudget = $state<number>(storedBudget((key) => localStorage.getItem(key)));
   let focusMode = $state<"off" | "errors" | "quiet">(
     localStorage.getItem("agent-island-focus") === "errors"
       ? "errors"
@@ -134,12 +149,38 @@
    * - "all"：显示系统里检测到的全部（运行中 + 已停止/有本地记录的）
    */
   type AgentMode = "all" | "running";
+  const BUDGET_WARN_KEY = "agent-island-budget-warned";
   const AGENT_MODE_KEY = "agent-island-agent-mode";
   function storedAgentMode(): AgentMode {
     try {
       return localStorage.getItem(AGENT_MODE_KEY) === "running" ? "running" : "all";
     } catch {
       return "all";
+    }
+  }
+
+  /** 今日花费从 localStorage 读回；解析失败就当没有（等价于今天从零开始）。 */
+  function loadStoredSpend(): SpendState {
+    try {
+      const raw = localStorage.getItem(SPEND_STORAGE_KEY);
+      if (!raw) return emptySpendState(Date.now());
+      const parsed = JSON.parse(raw) as Partial<SpendState>;
+      if (!parsed || typeof parsed.date !== "string") return emptySpendState(Date.now());
+      return {
+        date: parsed.date,
+        totals: typeof parsed.totals === "object" && parsed.totals ? { ...parsed.totals } : {},
+        baselines: typeof parsed.baselines === "object" && parsed.baselines ? { ...parsed.baselines } : {},
+      };
+    } catch {
+      return emptySpendState(Date.now());
+    }
+  }
+
+  function saveSpend(next: SpendState): void {
+    try {
+      localStorage.setItem(SPEND_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // 存不下就算了，不影响界面
     }
   }
   let agentMode = $state<AgentMode>(storedAgentMode());
@@ -181,6 +222,38 @@
   $effect(() => {
     if (visibleAgents.length === 0 || selectedAgent) return;
     store.selectAgent(visibleAgents[0].id);
+  });
+
+  // 今日花费：把每个 Agent 的窗口累计花费按增量累加，并检查每日预算
+  $effect(() => {
+    const agents = viewState.snapshot?.agents ?? [];
+    if (agents.length === 0) return;
+    const now = Date.now();
+    let next = spend;
+    let changed = false;
+    for (const agent of agents) {
+      const cost = agent.usage?.cost_usd ?? null;
+      if (cost === null) continue;
+      const result = recordCost(next, agent.id, cost, now);
+      next = result.state;
+      changed ||= result.delta > 0;
+    }
+    if (changed || next.date !== spend.date) {
+      spend = next;
+      saveSpend(next);
+    }
+    const budget = dailyBudget;
+    if (budget <= 0) return;
+    const status = budgetStatus(dailyTotal(next, now), budget);
+    if (status.state !== "near" && status.state !== "over") return;
+    const mark = `warned-${next.date}`;
+    if (localStorage.getItem(BUDGET_WARN_KEY) === mark) return;
+    localStorage.setItem(BUDGET_WARN_KEY, mark);
+    pushLocalNotice(
+      selectedAgent?.name ?? "Agent",
+      selectedAgent?.active_session?.id ?? "",
+      `今日花费 ${formatUsd(status.spent)} / 预算 ${formatUsd(budget)}（${Math.round(status.ratio * 100)}%）`,
+    );
   });
 
   // 额度预警：同一额度窗口只提醒一次（用量数据过期时不提醒）
@@ -1163,7 +1236,7 @@
                 </CardBoundary>
               {:else if placement.id === "usage"}
                 <CardBoundary cardName="用量卡片" errorCode="usage_card_render_failed">
-                  <UsageCard agent={selectedAgent} refreshFailed={viewState.refreshError !== null} />
+                  <UsageCard agent={selectedAgent} refreshFailed={viewState.refreshError !== null} todaySpend={dailyTotal(spend, Date.now())} budget={dailyBudget} />
                 </CardBoundary>
               {:else if placement.id === "session"}
                 <CardBoundary cardName="会话卡片" errorCode="session_card_render_failed">
@@ -1218,6 +1291,11 @@
           onPrivacy={setPrivacy}
           onFocusMode={setFocusMode}
           onThemeStyle={setThemeStyle}
+          budget={dailyBudget}
+          onBudget={(value) => {
+            dailyBudget = value;
+            localStorage.setItem(BUDGET_STORAGE_KEY, String(value));
+          }}
           onIconStyle={setIconStyle}
           onAgentMode={setAgentMode}
           onHookToggle={() => void toggleHook()}
@@ -1391,6 +1469,11 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
+
+
+
+
 
 
 
