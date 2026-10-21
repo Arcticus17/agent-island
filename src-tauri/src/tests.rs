@@ -1890,4 +1890,62 @@ fn tauri_config_disables_unused_capabilities() {
     assert_eq!(main["decorations"], false);
     assert_eq!(main["alwaysOnTop"], true);
 }
+/// 性能预算：120 个会话文件规模下，冷扫应该有界，热扫（缓存命中）必须显著更快。
+/// 用相对倍数而不是绝对耗时，避免不同机器上抖动；日志里会打印实际数字。
+#[test]
+fn session_scan_meets_the_performance_budget() {
+    use std::time::Instant;
+
+    let root = std::env::temp_dir().join(format!("agent-island-perf-{}", epoch_millis()));
+    fs::create_dir_all(&root).unwrap();
+    // 每条会话 60 行消息，接近真实文件的规模
+    for index in 0..120 {
+        let mut body = String::from("{\"type\":\"session_meta\",\"payload\":{\"id\":\"current\",\"cwd\":\"D:/target\"}}\n");
+        for line in 0..60 {
+            body.push_str(&format!(
+                "{{\"timestamp\":\"2026-10-21T12:{:02}:00Z\",\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":\"line {line} of session {index}\"}}]}}}}\n",
+                line % 60
+            ));
+        }
+        fs::write(root.join(format!("session-{index}.jsonl")), body).unwrap();
+    }
+
+    let process = process_fact_from_observations(
+        "codex",
+        "Codex CLI",
+        &[ProcessObservation {
+            pid: 7,
+            project_path: Some("D:/target".into()),
+            started_at_ms: epoch_millis(),
+        }],
+    );
+    let mut cache = SessionIndexCache::default();
+
+    cache.begin_scan();
+    let cold_started = Instant::now();
+    let cold_scan = scan_session_directory_with("codex", &root, Some(&process.identity), &mut cache);
+    let cold = cold_started.elapsed();
+    cache.finish_scan();
+    assert_eq!(cold_scan.candidates.len(), 120);
+
+    cache.begin_scan();
+    let warm_started = Instant::now();
+    let warm_scan = scan_session_directory_with("codex", &root, Some(&process.identity), &mut cache);
+    let warm = warm_started.elapsed();
+    cache.finish_scan();
+    assert_eq!(warm_scan.candidates.len(), 120);
+    assert_eq!(cache.misses(), 0, "热扫不应重新读取未变化的文件");
+
+    println!("[perf] cold={cold:?} warm={warm:?}");
+    // 绝对上限放宽到"再慢的 CI 也过不去就真的出问题了"的程度
+    assert!(cold < std::time::Duration::from_secs(5), "冷扫太慢: {cold:?}");
+    assert!(warm < std::time::Duration::from_millis(500), "热扫太慢: {warm:?}");
+    // 关键约束：缓存必须带来数量级的收益（相对比较，抗机器抖动）
+    assert!(
+        warm.as_secs_f64() * 3.0 < cold.as_secs_f64(),
+        "热扫没有明显变快: cold={cold:?} warm={warm:?}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
 

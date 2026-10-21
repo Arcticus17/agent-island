@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import "../themes/tokens.css";
   import "../themes/graphite.css";
@@ -88,6 +88,11 @@
   /** 隐藏 → 悬停显示胶囊 → 点击完全展开。peeked 只在与 expanded 互斥时有效。 */
   let peeked = $state(untrack(() => initiallyExpanded || initiallyPeeked));
   const idleHidden = $derived(!expanded && !peeked);
+  /** 有 Agent 在干活就勤快轮询，全部静止时降频（空闲 CPU 减半以上） */
+  const anyAgentActive = $derived((viewState.snapshot?.agents ?? []).some(
+    (agent) => agent.state.process === "running" && (agent.display_status === "working" || agent.display_status === "waiting"),
+  ));
+  const effectivePollMs = $derived(pollIntervalMs > 0 ? (anyAgentActive ? pollIntervalMs : pollIntervalMs * 3) : 0);
   let islandElement = $state<HTMLElement>();
   let eventLayerElement = $state<HTMLElement>();
   let approvals = $state<ApprovalItem[]>([]);
@@ -1125,9 +1130,6 @@
         else stopHotkey = unlisten;
       }).catch(() => undefined);
     }
-    const timer = pollIntervalMs > 0
-      ? window.setInterval(() => void refreshAll(), pollIntervalMs)
-      : undefined;
     return () => {
       disposed = true;
       diagnosticRequest += 1;
@@ -1145,11 +1147,17 @@
       clearPeekTimer();
       clearHideTimer();
       unsubscribe();
-      if (timer !== undefined) window.clearInterval(timer);
     };
   });
-</script>
 
+  // 轮询：有 Agent 在干活用基础间隔，全部静止时降到 3 倍（配合增量索引，空闲 CPU 明显下降）
+  $effect(() => {
+    const interval = effectivePollMs;
+    if (interval <= 0) return;
+    const handle = window.setInterval(() => void refreshAll(), interval);
+    return () => window.clearInterval(handle);
+  });
+</script>
 <svelte:window
   onresize={() => void syncWindowSize()}
   onkeydown={(event) => {
@@ -1553,3 +1561,5 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
+
