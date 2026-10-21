@@ -1,4 +1,4 @@
-import { mount } from "svelte";
+﻿import { mount } from "svelte";
 
 import App from "../app/App.svelte";
 import { createMockBridge } from "../bridge/mock";
@@ -111,6 +111,7 @@ if (host) {
         },
         pollIntervalMs: 0,
         initiallyExpanded: expanded,
+        initiallyPeeked: !expanded,
         iconStyle: "pixel",
       },
     });
@@ -141,3 +142,4 @@ if (multi && host) {
     },
   });
 }
+

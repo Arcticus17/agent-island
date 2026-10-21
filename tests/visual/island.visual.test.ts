@@ -1,4 +1,4 @@
-import { mount, unmount } from "svelte";
+﻿import { mount, unmount } from "svelte";
 import { afterEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import App from "../../src/app/App.svelte";
@@ -61,7 +61,7 @@ for (const theme of ["graphite", "pure-black"] as const) {
       const status = scenario === "compact-idle" ? "idle" : scenario === "compact-error" ? "error" : "working";
       const bridge = createMockBridge([snapshot(status, scenario === "long-log" || scenario === "single-column")]);
       app = mount(App, { target, props: {
-        bridge, pollIntervalMs: 0, initiallyExpanded: !scenario.startsWith("compact"),
+        bridge, pollIntervalMs: 0, initiallyExpanded: !scenario.startsWith("compact"), initiallyPeeked: scenario.startsWith("compact"),
         diagnosticsBridge: { getDiagnostics: async () => ({ generated_at_ms: NOW, issues: [], sources: [] }), exportDiagnostics: async () => undefined },
       } });
       await expect.poll(() => target.textContent).toContain("Claude Code");
@@ -80,3 +80,4 @@ for (const theme of ["graphite", "pure-black"] as const) {
     });
   }
 }
+

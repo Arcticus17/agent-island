@@ -42,12 +42,15 @@
     diagnosticsBridge = tauriDiagnosticsBridge,
     pollIntervalMs = 1_500,
     initiallyExpanded = false,
+    initiallyPeeked = false,
     iconStyle: initialIconStyle = storedIconStyle(),
   }: {
     bridge?: AgentIslandBridge;
     diagnosticsBridge?: DiagnosticsBridge;
     pollIntervalMs?: number;
     initiallyExpanded?: boolean;
+    /** 预览/测试用：直接从「悬停显示」的胶囊态起步，跳过隐藏态 */
+    initiallyPeeked?: boolean;
     iconStyle?: "dot" | "pixel";
   } = $props();
 
@@ -56,6 +59,9 @@
   const store = createAgentStore(untrack(() => bridge));
   let viewState: AgentStoreState = $state(store.current());
   let expanded = $state(untrack(() => initiallyExpanded));
+  /** 隐藏 → 悬停显示胶囊 → 点击完全展开。peeked 只在与 expanded 互斥时有效。 */
+  let peeked = $state(untrack(() => initiallyExpanded || initiallyPeeked));
+  const idleHidden = $derived(!expanded && !peeked);
   let islandElement = $state<HTMLElement>();
   let eventLayerElement = $state<HTMLElement>();
   let approvals = $state<ApprovalItem[]>([]);
@@ -94,6 +100,10 @@
   let notificationAutoExpanded = false;
   const notificationTimers = new Map<string, { handle: number; remainingMs: number; startedAt: number; pauseCount: number }>();
   const collapsedWindowHeight = 60;
+  /** 隐藏态：只留一条很薄的"热区"，鼠标扫过就回到胶囊态。 */
+  const hiddenWindowHeight = 10;
+  let peekTimer: number | undefined;
+  let hideTimer: number | undefined;
 
   /**
    * Agent 显示模式：
@@ -217,7 +227,9 @@
           Math.max(collapsedWindowHeight, renderedHeight),
           expandedHeightCap,
         )
-      : collapsedWindowHeight;
+      : peeked
+        ? collapsedWindowHeight
+        : hiddenWindowHeight;
     try {
       await bridge.resizeWindow?.({
         width: Math.max(1, Math.round(window.innerWidth)),
@@ -334,13 +346,82 @@
 
   function toggleExpanded(): void {
     notificationAutoExpanded = false;
-    if (!expanded) selectDefaultAgent();
-    expanded = !expanded;
-    // 收起岛时退出终端放大，别让收起后的胶囊还挂着 720 宽
-    if (!expanded && terminalMax) {
-      void toggleTerminalMax();
+    if (!expanded) {
+      selectDefaultAgent();
+      peeked = true;
+      clearHideTimer();
+      expanded = true;
+      void syncWindowSize();
       return;
     }
+    collapseToPeek();
+  }
+
+  /** 完全展开 → 收起成胶囊（鼠标移开后再自动隐藏）。 */
+  function collapseToPeek(): void {
+    notificationAutoExpanded = false;
+    // 收起岛时退出终端放大，别让收起后的胶囊还挂着 720 宽
+    if (terminalMax) void toggleTerminalMax();
+    expanded = false;
+    peeked = true;
+    clearHideTimer();
+    void syncWindowSize();
+  }
+
+  function peekFromHidden(): void {
+    if (expanded || peeked) return;
+    clearHideTimer();
+    peekTimer = window.setTimeout(() => {
+      peekTimer = undefined;
+      if (expanded || peeked || disposed) return;
+      peeked = true;
+      void syncWindowSize();
+    }, 60);
+  }
+
+  function clearPeekTimer(): void {
+    if (peekTimer !== undefined) {
+      window.clearTimeout(peekTimer);
+      peekTimer = undefined;
+    }
+  }
+
+  function clearHideTimer(): void {
+    if (hideTimer !== undefined) {
+      window.clearTimeout(hideTimer);
+      hideTimer = undefined;
+    }
+  }
+
+  /** 鼠标离开：胶囊态过一会自动隐藏；展开态保持不动，避免打断操作。 */
+  function scheduleIdleHide(): void {
+    clearPeekTimer();
+    if (expanded || !peeked) return;
+    clearHideTimer();
+    hideTimer = window.setTimeout(() => {
+      hideTimer = undefined;
+      if (expanded || disposed) return;
+      peeked = false;
+      void syncWindowSize();
+    }, 480);
+  }
+
+  function handleIslandPointerEnter(): void {
+    clearHideTimer();
+    if (expanded) return;
+    if (!peeked) peekFromHidden();
+  }
+
+  function handleIslandPointerLeave(): void {
+    scheduleIdleHide();
+  }
+
+  function hideIsland(): void {
+    clearPeekTimer();
+    clearHideTimer();
+    if (terminalMax) void toggleTerminalMax();
+    expanded = false;
+    peeked = false;
     void syncWindowSize();
   }
 
@@ -671,29 +752,46 @@
       for (const timer of notificationTimers.values()) window.clearTimeout(timer.handle);
       notificationTimers.clear();
       endLayoutInteraction();
+      clearPeekTimer();
+      clearHideTimer();
       unsubscribe();
       if (timer !== undefined) window.clearInterval(timer);
     };
   });
 </script>
 
-<svelte:window onresize={() => void syncWindowSize()} />
+<svelte:window
+  onresize={() => void syncWindowSize()}
+  onkeydown={(event) => { if (event.key === "Escape" && (expanded || peeked)) { event.preventDefault(); hideIsland(); } }}
+/>
+<!-- 悬停检测放在 body 上：pointerenter 不冒泡，挂在 window 上收不到 -->
+<svelte:body
+  onpointerenter={handleIslandPointerEnter}
+  onpointerleave={handleIslandPointerLeave}
+/>
 
 {#if viewState.snapshot}
   <main
     class={`agent-island status-${selectedAgent?.display_status ?? "idle"}`}
     class:expanded
+    class:peeked
+    class:idle-hidden={idleHidden}
     class:privacy
     data-testid="agent-island"
+    data-presence={idleHidden ? "hidden" : expanded ? "expanded" : "peek"}
     data-theme-style={themeStyle}
     aria-label="Agent Island"
     bind:this={islandElement}
   >
     <span class="sr-only" data-testid="selected-agent-id">{viewState.selectedAgentId ?? ""}</span>
+    {#if idleHidden}
+      <div class="idle-notch" data-testid="idle-notch" aria-hidden="true"><span class="idle-notch-dot"></span></div>
+    {:else}
     <div class="compact-header">
       <CompactIsland agent={selectedAgent} {expanded} onToggle={toggleExpanded} {iconStyle} />
       {#if bridge.startWindowDrag}<button class="window-handle" aria-label="拖动窗口" title="按住并拖动窗口" onpointerdown={(event) => { if (event.button === 0) { event.preventDefault(); void windowAction(() => bridge.startWindowDrag!()); } }}>⠿</button>{/if}
     </div>
+    {/if}
     {#if expanded}
       {#if windowError}<p class="refresh-note" role="alert">{windowError}</p>{/if}
       <section id="expanded-island" class="adaptive-details" class:terminal-max={terminalOpen && terminalMax} aria-label="Agent 详情">
@@ -918,6 +1016,36 @@
     isolation: isolate;
   }
   .agent-island.expanded { max-height: 100vh; overflow-y: auto; scrollbar-color: var(--island-scrollbar-thumb) var(--island-scrollbar-track); }
+  /* 隐藏态：只剩一条很淡的"存在感"热区，鼠标扫过 → 胶囊，点一下 → 展开 */
+  .agent-island.idle-hidden {
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+    cursor: default;
+  }
+  .idle-notch {
+    display: grid;
+    place-items: center;
+    width: 68px;
+    height: 6px;
+    border: 1px solid var(--island-border-subtle);
+    border-radius: 999px;
+    background: var(--surface-sticky);
+    box-shadow: var(--island-inset-highlight);
+    opacity: .72;
+    transition: opacity var(--duration-fast) ease-out, width var(--duration-fast) ease-out;
+  }
+  .agent-island.idle-hidden:hover .idle-notch { width: 96px; opacity: 1; }
+  .idle-notch-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--island-status-current);
+    box-shadow: 0 0 6px var(--island-status-current);
+  }
   .agent-island.expanded > .compact-header { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface-sticky); backdrop-filter: var(--effect-backdrop); }
   :global(.agent-island.expanded > .action-bar) { position: sticky; bottom: 0; z-index: var(--z-sticky); background: var(--surface-sticky); backdrop-filter: var(--effect-backdrop); }
   .adaptive-details { min-width: 0; border-top: 1px solid var(--island-border-subtle); padding: 12px; }

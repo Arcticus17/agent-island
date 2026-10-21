@@ -1,4 +1,4 @@
-import { mount, unmount } from "svelte";
+﻿import { mount, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
 
@@ -119,7 +119,7 @@ async function waitFor(check: () => boolean, timeoutMs = 1_000) {
 
 async function renderIsland(
   snapshots: unknown[],
-  options: { expanded?: boolean; pollIntervalMs?: number } = {},
+  options: { expanded?: boolean; peeked?: boolean; pollIntervalMs?: number } = {},
 ) {
   const target = document.createElement("div");
   document.body.append(target);
@@ -130,6 +130,7 @@ async function renderIsland(
       bridge,
       pollIntervalMs: options.pollIntervalMs ?? 0,
       initiallyExpanded: options.expanded ?? true,
+      initiallyPeeked: options.peeked ?? options.expanded === false,
     },
   });
   mounted.push(component);
@@ -313,3 +314,62 @@ describe("read-only Agent Island", () => {
     await waitFor(() => bridge.windowSizes().at(-1)?.height === 60);
   });
 });
+
+
+describe("island presence: hidden → hover peek → click expand", () => {
+  afterEach(async () => {
+    while (mounted.length) await unmount(mounted.pop()!);
+    document.body.replaceChildren();
+    localStorage.clear();
+    await page.viewport(800, 700);
+  });
+
+  it("hides by default, peeks on hover, then expands on click", async () => {
+    await page.viewport(360, 700);
+    const { target, bridge } = await renderIsland([snapshot(100)], { expanded: false, peeked: false });
+    const island = () => target.querySelector<HTMLElement>('[data-testid="agent-island"]')!;
+
+    // 1. 隐藏态：只有一条热区，窗口压到 10px
+    expect(island().getAttribute("data-presence")).toBe("hidden");
+    expect(target.querySelector('[data-testid="idle-notch"]')).not.toBeNull();
+    expect(target.querySelector('[data-testid="compact-toggle"]')).toBeNull();
+    await waitFor(() => bridge.windowSizes().at(-1)?.height === 10);
+
+    // 2. 悬停 → 胶囊态（窗口回到 60px）
+    document.body.dispatchEvent(new Event("pointerenter"));
+    await waitFor(() => island().getAttribute("data-presence") === "peek");
+    await waitFor(() => bridge.windowSizes().at(-1)?.height === 60);
+    expect(target.querySelector('[data-testid="compact-toggle"]')).not.toBeNull();
+    expect(target.querySelector('[data-testid="idle-notch"]')).toBeNull();
+
+    // 3. 点击 → 完全展开
+    target.querySelector<HTMLButtonElement>('[data-testid="compact-toggle"]')!.click();
+    await waitFor(() => island().getAttribute("data-presence") === "expanded");
+    expect(target.querySelector("#expanded-island")).not.toBeNull();
+
+    // 4. 展开态鼠标移开不自动收起（避免打断阅读/输入）
+    document.body.dispatchEvent(new Event("pointerleave"));
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(island().getAttribute("data-presence")).toBe("expanded");
+
+    // 5. 收起 → 胶囊；再移开鼠标 → 隐藏
+    target.querySelector<HTMLButtonElement>('[data-testid="compact-toggle"]')!.click();
+    await waitFor(() => island().getAttribute("data-presence") === "peek");
+    document.body.dispatchEvent(new Event("pointerleave"));
+    await waitFor(() => island().getAttribute("data-presence") === "hidden");
+    await waitFor(() => bridge.windowSizes().at(-1)?.height === 10);
+  });
+
+  it("goes back to hidden when the pointer leaves the peek pill", async () => {
+    await page.viewport(360, 700);
+    const { target } = await renderIsland([snapshot(100)], { expanded: false, peeked: false });
+    const island = () => target.querySelector<HTMLElement>('[data-testid="agent-island"]')!;
+    document.body.dispatchEvent(new Event("pointerenter"));
+    await waitFor(() => island().getAttribute("data-presence") === "peek");
+    document.body.dispatchEvent(new Event("pointerleave"));
+    await waitFor(() => island().getAttribute("data-presence") === "hidden");
+  });
+});
+
+
+
