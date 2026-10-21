@@ -5,6 +5,7 @@ mod commands;
 mod domain;
 mod hooks;
 mod hotkey;
+mod logging;
 pub mod interface;
 mod process_scan;
 mod session_scan;
@@ -21,6 +22,7 @@ use approval_rules::*;
 use commands::*;
 use hooks::*;
 use hotkey::*;
+use logging::*;
 use process_scan::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -481,6 +483,7 @@ pub fn run() {
             terminal_list,
             probe_cli_version,
             load_app_settings,
+            read_recent_logs,
             list_approval_rules,
             add_approval_rule,
             remove_approval_rule,
@@ -503,6 +506,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            log_event("INFO", "app", &format!("started version={}", env!("CARGO_PKG_VERSION")));
             // 全局快捷键：Ctrl+Shift+A 唤出 / 收起
             spawn_toggle_hotkey(app.handle().clone());
             #[cfg(target_os = "windows")]
@@ -618,6 +622,8 @@ pub fn run() {
         }
     });
 }
+
+
 
 
 

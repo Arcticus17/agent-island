@@ -1,4 +1,4 @@
-//! Claude hooks bridge: settings merge, local event server, and approval cards.
+﻿//! Claude hooks bridge: settings merge, local event server, and approval cards.
 
 use crate::*;
 
@@ -483,6 +483,9 @@ pub(crate) fn handle_hook_conn(mut stream: std::net::TcpStream, app: tauri::AppH
             if let Some(rule) = match_rule(&rules, &tool, &command) {
                 let id = new_hook_approval_id();
                 record_auto_allow(&audit_path(), &id, &tool, &command, rule);
+                // 只记工具/规则/程序名，不记完整命令行（命令里可能有密钥）
+                let program = command.split_whitespace().next().unwrap_or("");
+                log_event("INFO", "hook", &format!("auto-allowed tool={tool} rule={} program={program} len={}", rule.id, command.len()));
                 use tauri::Emitter;
                 let _ = app.emit(
                     "hook-event",
@@ -657,3 +660,5 @@ pub(crate) fn dismiss_hook_approval(
     }
     Ok(())
 }
+
+
