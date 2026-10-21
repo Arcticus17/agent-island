@@ -109,6 +109,10 @@ function snapshot(
   };
 }
 
+async function waitForElementValue(target: HTMLElement, selector: string): Promise<HTMLInputElement> {
+  await waitFor(() => target.querySelector(selector) !== null);
+  return target.querySelector<HTMLInputElement>(selector)!;
+}
 async function waitFor(check: () => boolean, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
@@ -335,6 +339,25 @@ describe("daily budget", () => {
     localStorage.clear();
   });
 });
+describe("session log search", () => {
+  it("filters records and highlights matches", async () => {
+    const { target } = await renderIsland([snapshot(100)]);
+    const input = await waitForElementValue(target, '[data-testid="log-search"]');
+    expect(target.querySelectorAll('[data-testid="log-scroll"] .record').length).toBeGreaterThan(1);
+    input.value = "line 7";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitFor(() => target.querySelectorAll('[data-testid="log-scroll"] .record').length === 1);
+    expect(input.value).toBe("line 7");
+    input.value = "line";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitFor(() => Array.from(target.querySelectorAll('[data-testid="log-scroll"] mark')).some((node) => node.textContent === "line"), 500);
+    expect(target.querySelector('[data-testid="log-count"]')?.textContent).toContain("/");
+    // 搜不到时给空状态
+    input.value = "不存在的词";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitFor(() => target.querySelector('[data-testid="log-empty"]') !== null);
+  });
+});
 describe("pinned agent", () => {
   it("keeps the pinned agent selected when a busier one appears", async () => {
     localStorage.clear();
@@ -444,6 +467,13 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
+
+
+
+
+
+
 
 
 

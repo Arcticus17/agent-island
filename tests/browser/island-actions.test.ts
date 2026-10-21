@@ -1,4 +1,4 @@
-﻿import { mount, unmount } from "svelte";
+import { mount, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 
@@ -693,7 +693,8 @@ describe("Agent Island event priority", () => {
       ],
       [pendingApproval.promise],
     );
-    const target = await renderIsland(harness, { pollIntervalMs: 40 });
+    // 不轮询：改用事件显式触发刷新，避免"第二次快照在点击之前就到了"的竞态
+    const target = await renderIsland(harness);
     const eventLayer = target.querySelector<HTMLElement>('[data-testid="event-layer"]');
 
     expect(eventLayer).not.toBeNull();
@@ -716,7 +717,10 @@ describe("Agent Island event priority", () => {
     });
     expect(allow!.disabled).toBe(true);
 
+    // 审批命令挂起期间，明确请求一次刷新：新快照必须被推迟
+    harness.emit({ kind: "stop", session: "alpha-live" });
     await waitFor(() => harness.snapshotCalls() >= 2);
+    await new Promise((resolve) => setTimeout(resolve, 30));
     expect(target.querySelector('[data-testid="expanded-status"]')?.textContent).toBe("工作中");
     expect(target.textContent).not.toContain("Deferred snapshot marker");
 
