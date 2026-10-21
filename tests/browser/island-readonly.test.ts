@@ -335,6 +335,37 @@ describe("daily budget", () => {
     localStorage.clear();
   });
 });
+describe("command palette", () => {
+  it("opens with Ctrl+K, filters and runs a command", async () => {
+    const { target } = await renderIsland([snapshot(100)]);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }));
+    await waitFor(() => target.querySelector('[data-testid="palette"]') !== null);
+
+    const input = target.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+    input.value = "终端";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitFor(() => target.querySelectorAll('[data-testid="palette-option"]').length === 1);
+    expect(target.querySelector('[data-testid="palette-option"]')?.getAttribute("data-command-id")).toBe("action:terminal");
+
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await waitFor(() => target.querySelector('[data-testid="palette"]') === null);
+    await waitFor(() => target.querySelector('[data-testid="terminal-toggle"]')?.textContent?.includes("收起终端") === true
+      || target.textContent?.includes("终端") === true);
+  });
+
+  it("navigates with the arrow keys and closes on Escape", async () => {
+    const { target } = await renderIsland([snapshot(100)]);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "K", ctrlKey: true, bubbles: true }));
+    await waitFor(() => target.querySelector('[data-testid="palette"]') !== null);
+    const input = target.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+    const options = () => target.querySelectorAll('[role="option"]');
+    expect(options().length).toBeGreaterThan(1);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await waitFor(() => target.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-command-id") === options()[1]?.getAttribute("data-command-id"));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await waitFor(() => target.querySelector('[data-testid="palette"]') === null);
+  });
+});
 describe("island presence: hidden → hover peek → click expand", () => {
   afterEach(async () => {
     while (mounted.length) await unmount(mounted.pop()!);
@@ -389,6 +420,7 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
 
 
 

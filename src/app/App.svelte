@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import "../themes/tokens.css";
   import "../themes/graphite.css";
@@ -8,6 +8,8 @@
   import CompactIsland from "../components/island/CompactIsland.svelte";
   import ApprovalStack from "../components/approvals/ApprovalStack.svelte";
   import ApprovalRules from "../components/approvals/ApprovalRules.svelte";
+  import CommandPalette from "../components/palette/CommandPalette.svelte";
+  import { buildPaletteCommands, type PaletteCommand } from "../palette/commands";
   import LogCard from "../components/cards/LogCard.svelte";
   import SessionCard from "../components/cards/SessionCard.svelte";
   import StatusCard from "../components/cards/StatusCard.svelte";
@@ -113,6 +115,8 @@
   let diagnosticIssues = $state<DiagnosticView[]>([]);
   let diagnosticSources = $state<SourceHealth[]>([]);
   let diagnosticStatus = $state<"loading" | "ready" | "failed">("loading");
+  /** 命令面板（Ctrl+K） */
+  let paletteOpen = $state(false);
   let diagnosticRequest = 0;
   let diagnosticInFlight: Promise<void> | null = null;
   let diagnosticRefreshQueued = false;
@@ -213,6 +217,11 @@
     return current;
   });
   let inspectedSession = $state<{ agentId: string; sessionId: string } | null>(null);
+  /** 命令面板的命令列表：随快照和当前选中的 Agent 变化 */
+  const paletteCommands = $derived(buildPaletteCommands({
+    agents: visibleAgents,
+    selectedAgentId: selectedAgent?.id ?? null,
+  }));
   let inspectingHistory = $derived(inspectedSession?.agentId === selectedAgent?.id && inspectedSession !== null);
   let selectedSession = $derived(inspectingHistory
     ? selectedAgent?.history_sessions.find((session) => session.id === inspectedSession?.sessionId) ?? null
@@ -871,6 +880,42 @@
     localStorage.setItem("agent-island-privacy", value ? "1" : "0");
   }
 
+  /** 执行命令面板里选中的一条：Agent / 会话 / 固定动作 */
+  function runPaletteCommand(command: PaletteCommand): void {
+    paletteOpen = false;
+    if (command.kind === "agent") {
+      const id = command.id.slice("agent:".length);
+      inspectedSession = null;
+      store.selectAgent(id);
+      return;
+    }
+    if (command.kind === "session") {
+      if (!selectedAgent) return;
+      const sessionId = command.id.slice("session:".length);
+      inspectedSession = sessionId === selectedAgent.active_session?.id
+        ? null
+        : { agentId: selectedAgent.id, sessionId };
+      return;
+    }
+    switch (command.id) {
+      case "action:terminal":
+        void toggleTerminal();
+        break;
+      case "action:refresh":
+        void refreshAll();
+        break;
+      case "action:privacy":
+        setPrivacy(!privacy);
+        break;
+      case "action:focus":
+        setFocusMode(focusMode === "off" ? "errors" : focusMode === "errors" ? "quiet" : "off");
+        break;
+      case "action:hide":
+        hideIsland();
+        break;
+    }
+  }
+
   function setFocusMode(value: "off" | "errors" | "quiet"): void {
     focusMode = value;
     localStorage.setItem("agent-island-focus", value);
@@ -1084,7 +1129,17 @@
 
 <svelte:window
   onresize={() => void syncWindowSize()}
-  onkeydown={(event) => { if (event.key === "Escape" && (expanded || peeked)) { event.preventDefault(); hideIsland(); } }}
+  onkeydown={(event) => {
+    // Ctrl/Cmd+K：命令面板（岛可能还是隐藏态，先展开再打开）
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      if (!expanded) expandIsland();
+      paletteOpen = !paletteOpen;
+      return;
+    }
+    if (event.key === "Escape" && paletteOpen) { event.preventDefault(); paletteOpen = false; return; }
+    if (event.key === "Escape" && (expanded || peeked)) { event.preventDefault(); hideIsland(); }
+  }}
 />
 <!-- 悬停检测放在 body 上：pointerenter 不冒泡，挂在 window 上收不到 -->
 <svelte:body
@@ -1324,6 +1379,10 @@
       <NotificationStack items={notifications} onDismiss={dismissNotification} onPause={pauseNotification} />
     </aside>
   {/if}
+  <!-- 命令面板挂最外层：岛自身有 backdrop-filter，会给 fixed 后代建立新的包含块 -->
+  {#if paletteOpen}
+    <CommandPalette commands={paletteCommands} onRun={runPaletteCommand} onClose={() => (paletteOpen = false)} />
+  {/if}
 {:else}
   <div class="island-loading" data-theme-style={themeStyle} aria-live="polite" bind:this={islandElement}>正在连接 Agent Island…</div>
 {/if}
@@ -1469,6 +1528,7 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
 
 
 
