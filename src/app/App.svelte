@@ -738,6 +738,35 @@
         else stopTerminalEvents = unlisten;
       }).catch(() => undefined);
     }
+    // 展开时点了外面（窗口失焦）就收起：先回到胶囊，鼠标本来就在外面，很快自动隐藏。
+    // 延迟 220ms 并复查 document.hasFocus()：原生下拉弹层会短暂抢焦点，不能因此误收起。
+    let blurTimer: number | undefined;
+    const cancelBlur = () => {
+      if (blurTimer !== undefined) {
+        window.clearTimeout(blurTimer);
+        blurTimer = undefined;
+      }
+    };
+    let stopWindowFocus: (() => void) | undefined;
+    if (bridge.onWindowFocusChange) {
+      void bridge.onWindowFocusChange((focused) => {
+        if (focused) {
+          cancelBlur();
+          return;
+        }
+        if (disposed || !expanded) return;
+        cancelBlur();
+        blurTimer = window.setTimeout(() => {
+          blurTimer = undefined;
+          if (disposed || !expanded) return;
+          collapseToPeek();
+          scheduleIdleHide();
+        }, 220);
+      }).then((unlisten) => {
+        if (disposed) unlisten();
+        else stopWindowFocus = unlisten;
+      }).catch(() => undefined);
+    }
     const timer = pollIntervalMs > 0
       ? window.setInterval(() => void refreshAll(), pollIntervalMs)
       : undefined;
@@ -749,6 +778,8 @@
       stopListening?.();
       stopPlacement?.();
       stopTerminalEvents?.();
+      stopWindowFocus?.();
+      cancelBlur();
       for (const timer of notificationTimers.values()) window.clearTimeout(timer.handle);
       notificationTimers.clear();
       endLayoutInteraction();

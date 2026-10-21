@@ -230,6 +230,9 @@ export function createTauriBridge(): AgentIslandBridge {
       }
       if (position.x !== value.x || position.y !== value.y) await window.setPosition(new PhysicalPosition(value.x, value.y));
     },
+    async onWindowFocusChange(handler) {
+      return await getCurrentWindow().onFocusChanged(({ payload }) => handler(payload));
+    },
     async terminalOpen(request) {
       return await invoke<string>("terminal_open", {
         program: request.program,

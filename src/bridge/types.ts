@@ -347,6 +347,8 @@ export interface AgentIslandBridge {
   runCommand(command: AgentCommand): Promise<CommandResult>;
   listenHookEvents(handler: (event: HookEvent) => void): Promise<() => void>;
   resizeWindow?(size: { width: number; height: number }): Promise<void>;
+  /** 窗口获得/失去焦点：展开态点外面空白处收起靠它判断 */
+  onWindowFocusChange?(handler: (focused: boolean) => void): Promise<() => void>;
   startWindowDrag?(): Promise<void>;
   startWindowResize?(): Promise<void>;
   initializeWindowPlacement?(onError?: (error: unknown) => void): Promise<() => void>;

@@ -1,4 +1,4 @@
-﻿import { mount, unmount } from "svelte";
+import { mount, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import { page } from "vitest/browser";
 
@@ -93,6 +93,7 @@ interface BridgeHarness {
   readonly resizeCalls: () => Array<{ width: number; height: number }>;
   emit(event: HookEvent): void;
   emitTerminal(event: TerminalEvent): void;
+  emitWindowFocus(focused: boolean): void;
 }
 
 function createBridgeHarness(
@@ -108,6 +109,7 @@ function createBridgeHarness(
   const commands: AgentCommand[] = [];
   const handlers = new Set<(event: HookEvent) => void>();
   const terminalHandlers = new Set<(event: TerminalEvent) => void>();
+  const focusHandlers = new Set<(focused: boolean) => void>();
   const terminalLog: Array<{ kind: string; [key: string]: unknown }> = [];
   const resizeLog: Array<{ width: number; height: number }> = [];
   let terminalSequence = 0;
@@ -152,6 +154,10 @@ function createBridgeHarness(
       terminalHandlers.add(handler);
       return () => terminalHandlers.delete(handler);
     },
+    async onWindowFocusChange(handler) {
+      focusHandlers.add(handler);
+      return () => focusHandlers.delete(handler);
+    },
   };
 
   return {
@@ -166,6 +172,9 @@ function createBridgeHarness(
     },
     emitTerminal(event) {
       for (const handler of terminalHandlers) handler({ ...event });
+    },
+    emitWindowFocus(focused: boolean) {
+      for (const handler of focusHandlers) handler(focused);
     },
   };
 }
@@ -877,6 +886,32 @@ describe("island prompt composer", () => {
   });
 });
 
+describe("collapse on window blur", () => {
+  it("collapses the expanded island when the window loses focus", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    const island = () => target.querySelector<HTMLElement>('[data-testid="agent-island"]')!;
+    expect(island().getAttribute("data-presence")).toBe("expanded");
+
+    // 点岛外面（窗口失焦）→ 收起成胶囊
+    harness.emitWindowFocus(false);
+    await waitFor(() => island().getAttribute("data-presence") === "peek");
+    expect(target.querySelector("#expanded-island")).toBeNull();
+
+    // 再失焦一次不该有副作用
+    harness.emitWindowFocus(false);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(island().getAttribute("data-presence")).toBe("peek");
+  });
+
+  it("keeps the island expanded while the window has focus", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    harness.emitWindowFocus(true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(target.querySelector('[data-testid="agent-island"]')!.getAttribute("data-presence")).toBe("expanded");
+  });
+});
 describe("pixel mascot motion", () => {
   it.each([
     { status: "stopped" as const, resting: true },
@@ -995,6 +1030,8 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
+
 
 
 
