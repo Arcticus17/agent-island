@@ -1,4 +1,4 @@
-import {
+﻿import {
   assertSupportedSnapshot,
   type AgentCommand,
   type AgentIslandBridge,
@@ -18,6 +18,7 @@ export interface MockAgentIslandBridge extends AgentIslandBridge {
   emitHookEvent(event: HookEvent): void;
   listenerCount(): number;
   windowSizes(): readonly { width: number; height: number }[];
+  savedSettings(): readonly string[];
   terminalCalls(): readonly { kind: string; [key: string]: unknown }[];
   emitTerminal(event: TerminalEvent): void;
 }
@@ -38,6 +39,8 @@ export function createMockBridge(
   const resizeLog: Array<{ width: number; height: number }> = [];
   const terminalLog: Array<{ kind: string; [key: string]: unknown }> = [];
   let terminalSequence = 0;
+  let settingsBlob: string | null = null;
+  const savedSettings: string[] = [];
 
   return {
     async getSnapshot() {
@@ -65,6 +68,13 @@ export function createMockBridge(
     },
     async probeCliVersion(program) {
       return { program, version: options.cliVersion ?? "0.1.0", raw: "mock", ok: true };
+    },
+    async loadAppSettings() {
+      return settingsBlob;
+    },
+    async saveAppSettings(settings) {
+      settingsBlob = settings;
+      savedSettings.push(settings);
     },
     async terminalOpen(request) {
       terminalSequence += 1;
@@ -105,8 +115,12 @@ export function createMockBridge(
     listenerCount() {
       return handlers.size;
     },
+    savedSettings() {
+      return savedSettings.map((entry) => entry);
+    },
     windowSizes() {
       return resizeLog.map(clone);
     },
   };
 }
+

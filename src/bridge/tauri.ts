@@ -239,6 +239,12 @@ export function createTauriBridge(): AgentIslandBridge {
     async probeCliVersion(program) {
       return await invoke<CliVersionProbe>("probe_cli_version", { program });
     },
+    async loadAppSettings() {
+      return await invoke<string | null>("load_app_settings");
+    },
+    async saveAppSettings(settings) {
+      await invoke("save_app_settings", { settings });
+    },
     async terminalOpen(request) {
       return await invoke<string>("terminal_open", {
         program: request.program,

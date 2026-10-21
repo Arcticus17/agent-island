@@ -1,4 +1,6 @@
 import { frontendMode, type FrontendMode } from "./frontend-mode";
+import { tauriBridge } from "./bridge/tauri";
+import { restoreStoredSettings, startSettingsPersistence } from "./settings/persistence";
 
 interface SvelteIslandModule {
   mountSvelteIsland(target: HTMLElement): void;
@@ -69,6 +71,12 @@ if (typeof document !== "undefined") {
       loadLegacy: () => import("./main.js"),
     });
 
-    void startFrontend();
+    // 先把磁盘上的设置镜像回 localStorage，再挂载界面（否则会先用默认主题渲染一帧）；
+    // 挂载后再开始"变更即落盘"，避免把默认值覆盖掉用户已有的设置。
+    void (async () => {
+      await restoreStoredSettings(tauriBridge);
+      await startFrontend();
+      startSettingsPersistence(tauriBridge);
+    })();
   }
 }

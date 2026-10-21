@@ -361,6 +361,10 @@ export interface AgentIslandBridge {
   listenTerminalEvents?(handler: (event: TerminalEvent) => void): Promise<() => void>;
   /** 探测 Agent CLI 的本地版本（跑 `<cli> --version`，不需要联网）。 */
   probeCliVersion?(program: string): Promise<CliVersionProbe>;
+  /** 设置的磁盘镜像（强杀进程也不丢）：读回上次保存的 JSON。 */
+  loadAppSettings?(): Promise<string | null>;
+  /** 设置的磁盘镜像：原子写入 JSON。 */
+  saveAppSettings?(settings: string): Promise<void>;
 }
 
 export interface CliVersionProbe {

@@ -6,6 +6,7 @@ mod hooks;
 pub mod interface;
 mod process_scan;
 mod session_scan;
+mod settings_store;
 #[cfg(target_os = "windows")]
 mod single_instance;
 mod stats_store;
@@ -20,6 +21,7 @@ use process_scan::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use session_scan::*;
+use settings_store::*;
 use stats_store::*;
 use terminal::*;
 use updates::*;
@@ -474,6 +476,8 @@ pub fn run() {
             terminal_close,
             terminal_list,
             probe_cli_version,
+            load_app_settings,
+            save_app_settings,
             get_autostart,
             set_autostart,
             privacy_active,
@@ -604,4 +608,5 @@ pub fn run() {
         }
     });
 }
+
 
