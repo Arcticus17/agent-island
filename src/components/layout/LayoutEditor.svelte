@@ -119,14 +119,32 @@
       <span class="eyebrow">自适应布局</span>
       <strong>{editing ? "正在编辑卡片" : "卡片布局"}</strong>
     </div>
-    <button
-      class:active={editing}
-      data-testid="layout-edit-toggle"
-      type="button"
-      aria-label={editing ? "完成布局编辑" : "编辑布局"}
-      aria-pressed={editing}
-      onclick={() => { editing = !editing; }}
-    >{editing ? "完成" : "编辑"}</button>
+    <div class="toolbar-actions">
+      <select
+        class="preset-select"
+        data-testid="layout-preset-select"
+        aria-label="布局预设"
+        title="切换布局预设：极简只留状态与对话"
+        value={layout.preset}
+        onchange={(event) => {
+          const value = event.currentTarget.value;
+          if (value !== "custom") usePreset(value as DefaultLayoutName);
+        }}
+      >
+        {#each presetIds as preset (preset)}
+          <option value={preset}>{presetNames[preset]}</option>
+        {/each}
+        {#if layout.preset === "custom"}<option value="custom">自定义</option>{/if}
+      </select>
+      <button
+        class:active={editing}
+        data-testid="layout-edit-toggle"
+        type="button"
+        aria-label={editing ? "完成布局编辑" : "编辑布局"}
+        aria-pressed={editing}
+        onclick={() => { editing = !editing; }}
+      >{editing ? "完成" : "编辑"}</button>
+    </div>
   </div>
 
   {#if editing}
@@ -267,6 +285,18 @@
     min-width: 0;
     display: grid;
     gap: 2px;
+  }
+
+  .editor-toolbar > .toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .preset-select {
+    min-height: 32px;
+    padding: 4px 6px;
+    color-scheme: dark;
   }
 
   .eyebrow {

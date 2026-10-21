@@ -1,4 +1,4 @@
-import { mount, unmount } from "svelte";
+﻿import { mount, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import { page } from "vitest/browser";
 
@@ -12,6 +12,7 @@ import type {
   DisplayStatus,
   HookApproval,
   HookEvent,
+  TerminalEvent,
 } from "../../src/bridge/types";
 
 const mounted: Array<ReturnType<typeof mount>> = [];
@@ -88,7 +89,10 @@ interface BridgeHarness {
   readonly commands: AgentCommand[];
   readonly snapshotCalls: () => number;
   readonly listenerCount: () => number;
+  readonly terminalCalls: () => Array<{ kind: string; [key: string]: unknown }>;
+  readonly resizeCalls: () => Array<{ width: number; height: number }>;
   emit(event: HookEvent): void;
+  emitTerminal(event: TerminalEvent): void;
 }
 
 function createBridgeHarness(
@@ -103,6 +107,10 @@ function createBridgeHarness(
   const outcomes = [...commandOutcomes];
   const commands: AgentCommand[] = [];
   const handlers = new Set<(event: HookEvent) => void>();
+  const terminalHandlers = new Set<(event: TerminalEvent) => void>();
+  const terminalLog: Array<{ kind: string; [key: string]: unknown }> = [];
+  const resizeLog: Array<{ width: number; height: number }> = [];
+  let terminalSequence = 0;
 
   const bridge: AgentIslandBridge = {
     async getSnapshot() {
@@ -122,7 +130,28 @@ function createBridgeHarness(
       handlers.add(handler);
       return () => handlers.delete(handler);
     },
-    async resizeWindow() {},
+    async resizeWindow(size) {
+      resizeLog.push({ ...size });
+    },
+    async terminalOpen(request) {
+      terminalSequence += 1;
+      const id = `term-${terminalSequence}`;
+      terminalLog.push({ kind: "open", id, program: request.program, cwd: request.cwd ?? null });
+      return id;
+    },
+    async terminalWrite(id, data) {
+      terminalLog.push({ kind: "write", id, data });
+    },
+    async terminalResize(id, cols, rows) {
+      terminalLog.push({ kind: "resize", id, cols, rows });
+    },
+    async terminalClose(id) {
+      terminalLog.push({ kind: "close", id });
+    },
+    async listenTerminalEvents(handler) {
+      terminalHandlers.add(handler);
+      return () => terminalHandlers.delete(handler);
+    },
   };
 
   return {
@@ -130,8 +159,13 @@ function createBridgeHarness(
     commands,
     snapshotCalls: () => getSnapshotCalls,
     listenerCount: () => handlers.size,
+    terminalCalls: () => terminalLog.map((entry) => ({ ...entry })),
+    resizeCalls: () => resizeLog.map((entry) => ({ ...entry })),
     emit(event) {
       for (const handler of handlers) handler(structuredClone(event));
+    },
+    emitTerminal(event) {
+      for (const handler of terminalHandlers) handler({ ...event });
     },
   };
 }
@@ -779,3 +813,152 @@ describe("Agent Island display settings", () => {
     expect(localStorage.getItem("agent-island-focus")).toBe("errors");
   });
 });
+
+describe("island prompt composer", () => {
+  function snapshotWithHistory(): AgentViewSnapshot {
+    const base = snapshot(100);
+    const agent = base.agents[0];
+    const live = structuredClone(agent.active_session!);
+    agent.history_sessions = [{ ...live, id: "alpha-history", name: "Alpha history", lifecycle: "Historical" }];
+    return base;
+  }
+
+  it("sends a prompt from the island and streams the agent reply", async () => {
+    const harness = createBridgeHarness(
+      [snapshot(100)],
+      [
+        { ok: true, value: "send-task-1" },
+        { ok: true, value: { done: false, lines: ["正在检查构建…"] } },
+        { ok: true, value: { done: true, lines: ["正在检查构建…", "构建已通过"] } },
+      ],
+    );
+    const target = await renderIsland(harness);
+
+    const input = target.querySelector<HTMLInputElement>('[data-testid="prompt-input"]')!;
+    expect(input.disabled).toBe(false);
+    input.value = "帮我看看构建为什么失败";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const send = target.querySelector<HTMLButtonElement>('[data-testid="prompt-send"]')!;
+    await waitFor(() => !send.disabled);
+    send.click();
+
+    await waitFor(() => harness.commands.some((command) => command.name === "send_to_session"));
+    expect(harness.commands.find((command) => command.name === "send_to_session")).toEqual({
+      name: "send_to_session",
+      agentName: "Claude Code",
+      sessionId: "alpha-live",
+      prompt: "帮我看看构建为什么失败",
+    });
+
+    await waitFor(
+      () => target.querySelector('[data-testid="prompt-output"]')?.textContent?.includes("正在检查构建…") === true,
+      4_000,
+    );
+    await waitFor(
+      () => target.querySelector('[data-testid="prompt-output"]')?.textContent?.includes("构建已通过") === true,
+      4_000,
+    );
+    expect(target.querySelector('[data-testid="prompt-output"]')?.textContent).toContain("已结束");
+    // 发出去之后输入框清空，避免重复发送同一条指令
+    expect(target.querySelector<HTMLInputElement>('[data-testid="prompt-input"]')?.value).toBe("");
+  });
+
+  it("disables sending while inspecting a historical session", async () => {
+    const harness = createBridgeHarness([snapshotWithHistory()], []);
+    const target = await renderIsland(harness);
+    const picker = target.querySelector<HTMLSelectElement>('[data-testid="session-picker"]')!;
+    picker.value = "alpha-history";
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitFor(
+      () => target.querySelector<HTMLInputElement>('[data-testid="prompt-input"]')?.disabled === true,
+    );
+    expect(target.querySelector('[data-testid="prompt-send"]')?.hasAttribute("disabled")).toBe(true);
+  });
+});
+
+describe("island built-in terminal", () => {
+  it("opens a PTY for the selected agent and closes it when toggled off", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-toggle"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="terminal-panel"]') !== null);
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
+    const opened = harness.terminalCalls().find((call) => call.kind === "open")!;
+    // 选中的是 Claude Code，默认就用 claude 启动，并把会话目录带过去
+    expect(opened.program).toBe("claude");
+    expect(opened.cwd).toBe("D:\\work\\alpha");
+    await waitFor(() => target.querySelector('[data-testid="terminal-phase"]')?.getAttribute("data-phase") === "running");
+
+    // 终端输出经桥接流回来（内容最终画在 xterm 里，这里只验证事件通道不抛错）
+    harness.emitTerminal({ kind: "data", id: String(opened.id), data: "pty-ready\r\n" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-stop"]')!.click();
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
+    await waitFor(() => target.querySelector('[data-testid="terminal-phase"]')?.getAttribute("data-phase") === "idle");
+  });
+
+  it("closes the PTY when the terminal panel is hidden again", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    const toggle = target.querySelector<HTMLButtonElement>('[data-testid="terminal-toggle"]')!;
+    toggle.click();
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
+    toggle.click();
+    await waitFor(() => target.querySelector('[data-testid="terminal-panel"]') === null);
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
+  });
+});
+
+
+describe("island terminal maximize", () => {
+  it("expands the terminal with the window and restores both", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-toggle"]')!.click();
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
+    const viewport = window.innerWidth;
+
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-maximize"]')!.click();
+    await waitFor(
+      () => target.querySelector(".adaptive-details")?.classList.contains("terminal-max") === true,
+    );
+    expect(
+      target.querySelector('[data-testid="terminal-screen"]')?.classList.contains("maximized"),
+    ).toBe(true);
+    // 放大时至少请求过一次窗口尺寸调整（宽度/高度由宿主决定）
+    await waitFor(() => harness.resizeCalls().length > 0);
+
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-maximize"]')!.click();
+    await waitFor(
+      () => target.querySelector(".adaptive-details")?.classList.contains("terminal-max") === false,
+    );
+    expect(
+      target.querySelector('[data-testid="terminal-screen"]')?.classList.contains("maximized"),
+    ).toBe(false);
+  });
+
+  it("restores the window width when the terminal is closed while maximized", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    const toggle = target.querySelector<HTMLButtonElement>('[data-testid="terminal-toggle"]')!;
+    toggle.click();
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-maximize"]')!.click();
+    await waitFor(
+      () => target.querySelector(".adaptive-details")?.classList.contains("terminal-max") === true,
+    );
+
+    toggle.click();
+    await waitFor(() => target.querySelector('[data-testid="terminal-panel"]') === null);
+    await waitFor(
+      () => target.querySelector(".adaptive-details")?.classList.contains("terminal-max") === false,
+    );
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
+  });
+});
+
+

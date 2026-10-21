@@ -289,10 +289,12 @@ describe("read-only Agent Island", () => {
     await waitFor(() => (bridge.windowSizes().at(-1)?.height ?? 0) > 60);
     const island = target.querySelector<HTMLElement>('[data-testid="agent-island"]')!;
     const renderedHeight = Math.ceil(Math.max(island.scrollHeight, island.getBoundingClientRect().height));
-    const safeHeight = Math.max(60, Math.floor((window.screen.availHeight || renderedHeight) * 0.92));
+    // 展开面板有高度上限：内容再多也不让窗口无限变长（超出部分在岛内滚动）。
+    const availableHeight = window.screen.availHeight || renderedHeight;
+    const heightCap = Math.max(60, Math.min(620, Math.floor(availableHeight * 0.78)));
     expect(bridge.windowSizes().at(-1)).toEqual({
       width: window.innerWidth,
-      height: Math.min(renderedHeight, safeHeight),
+      height: Math.min(Math.max(60, renderedHeight), heightCap),
     });
     expect(getComputedStyle(island).overflowY).toBe("auto");
     expect(island.scrollWidth).toBeLessThanOrEqual(island.clientWidth);

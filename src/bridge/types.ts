@@ -351,4 +351,22 @@ export interface AgentIslandBridge {
   startWindowResize?(): Promise<void>;
   initializeWindowPlacement?(onError?: (error: unknown) => void): Promise<() => void>;
   adjustWindowWidth?(delta: number): Promise<void>;
+  /** 内置终端：在岛里直接跑 Agent 的交互式 CLI（Windows 走 ConPTY）。 */
+  terminalOpen?(request: TerminalOpenRequest): Promise<string>;
+  terminalWrite?(id: string, data: string): Promise<void>;
+  terminalResize?(id: string, cols: number, rows: number): Promise<void>;
+  terminalClose?(id: string): Promise<void>;
+  listenTerminalEvents?(handler: (event: TerminalEvent) => void): Promise<() => void>;
 }
+
+export interface TerminalOpenRequest {
+  program: string;
+  args?: string[];
+  cwd?: string | null;
+  cols: number;
+  rows: number;
+}
+
+export type TerminalEvent =
+  | { kind: "data"; id: string; data: string }
+  | { kind: "exit"; id: string };

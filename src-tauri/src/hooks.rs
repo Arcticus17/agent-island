@@ -401,20 +401,22 @@ pub(crate) fn read_http_request(
             let headers = text[..idx].to_string();
             let first = headers.lines().next().unwrap_or("").to_string();
             let uri = first.split_whitespace().nth(1).unwrap_or("/").to_string();
-            let token = headers
-                .lines()
-                .find_map(|l| {
-                    l.strip_prefix("x-agent-island-token:")
-                        .map(|v| v.trim().to_string())
+            // HTTP 头名大小写不敏感：Node 的 undici 发小写，curl/其他客户端发
+            // `Content-Length` 这种规范写法。只认小写会让别的 agent 的 hook
+            // 静默丢掉 body（审批永远不弹），所以这里统一按不区分大小写匹配。
+            let header = |name: &str| -> Option<String> {
+                headers.lines().find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    if key.trim().eq_ignore_ascii_case(name) {
+                        Some(value.trim().to_string())
+                    } else {
+                        None
+                    }
                 })
-                .unwrap_or_default();
-            let content_length: usize = headers
-                .lines()
-                .find_map(|l| {
-                    l.strip_prefix("content-length:")
-                        .map(|v| v.trim().parse::<usize>().ok())
-                })
-                .flatten()
+            };
+            let token = header("x-agent-island-token").unwrap_or_default();
+            let content_length: usize = header("content-length")
+                .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(0);
             let body_start = idx + 4;
             if all.len() - body_start >= content_length {

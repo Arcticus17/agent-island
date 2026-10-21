@@ -1725,3 +1725,32 @@ fn hooks_merge_preserves_user_settings_and_secrets() {
     assert!(!text.contains("hook-bridge.mjs"));
     fs::remove_dir_all(&dir).ok();
 }
+
+/// HTTP 头名大小写不敏感：Node/undici 发小写，curl 等客户端发 `Content-Length`。
+/// 只认小写会让别的客户端的 body 被当成空，审批事件永远弹不出来。
+#[test]
+fn hook_http_request_reads_canonical_case_headers() {
+    use std::io::Write;
+    use std::net::{TcpListener, TcpStream};
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let body = r#"{"name":"PreToolUse","session":"s1","tool":"Bash","command":"rm -rf /tmp/x"}"#;
+    let request = format!(
+        "POST /event HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Agent-Island-Token: tok-1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let writer = std::thread::spawn(move || {
+        let mut stream = TcpStream::connect(address).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        stream.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(80));
+    });
+    let (mut stream, _) = listener.accept().unwrap();
+    let (uri, token, parsed_body) = hooks::read_http_request(&mut stream).expect("request parsed");
+    assert_eq!(uri, "/event");
+    assert_eq!(token, "tok-1");
+    assert_eq!(parsed_body, body);
+    writer.join().unwrap();
+}

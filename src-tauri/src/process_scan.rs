@@ -9,8 +9,7 @@ pub(crate) fn keyword_for(name: &str) -> Option<String> {
         .map(|d| d.keyword.clone())
 }
 
-pub(crate) fn matching_processes<'a>(sys: &'a System, keyword: &str) -> Vec<&'a sysinfo::Process> {
-    sys.processes()
+pub(crate) fn matching_processes<'a>(sys: &'a System, keyword: &str) -> Vec<&'a sysinfo::Process> {    sys.processes()
         .iter()
         .filter(|(_pid, process)| {
             let name = process.name().to_string_lossy().to_lowercase();
@@ -49,7 +48,7 @@ pub(crate) fn matches_agent_process(name: &str, args: &[String], keyword: &str) 
 
 #[cfg(test)]
 mod process_classifier_tests {
-    use super::matches_agent_process;
+    use super::{known_program_paths, matches_agent_process, program_available};
 
     fn matches(name: &str, args: &[&str], keyword: &str) -> bool {
         matches_agent_process(
@@ -121,6 +120,98 @@ mod process_classifier_tests {
             "custom-agent-probe"
         ));
     }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn detects_installed_cli_and_rejects_uninstalled_leftovers() {
+        // 系统自带的 cmd 一定能解析到；随机名字不应被当成已安装。
+        assert!(program_available("cmd"));
+        assert!(!program_available("missing-agent-87a310"));
+        assert!(known_program_paths("claude").iter().any(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().starts_with("claude"))
+                .unwrap_or(false)
+        }));
+    }
+}
+
+/// CLI 是否仍装在系统上：先查 PATH（Windows 用 `where.exe`），再兜底常见安装目录。
+///
+/// 只认可执行文件——卸载后残留的日志/会话记录**不算**存在，所以"下载过又卸载"
+/// 的 Agent 不会再出现在岛上。
+pub(crate) fn program_available(program: &str) -> bool {
+    let program = program.trim();
+    if program.is_empty() {
+        return false;
+    }
+    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, bool)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = program.to_lowercase();
+    if let Ok(guard) = cache.lock() {
+        if let Some((checked_at, value)) = guard.get(&key) {
+            if checked_at.elapsed().as_secs() < 60 {
+                return *value;
+            }
+        }
+    }
+    let value = resolve_program(program);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(key, (Instant::now(), value));
+    }
+    value
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_program(program: &str) -> bool {
+    // 显式路径与 PATH 都交给 where.exe 之外的同一套解析；`where.exe` 只认 PATH，所以再兜一次常见安装目录。
+    if matches!(
+        crate::commands::restart_program_available(program, None),
+        Ok(true)
+    ) {
+        return true;
+    }
+    known_program_paths(program).iter().any(|path| path.is_file())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_program(program: &str) -> bool {
+    if known_program_paths(program).iter().any(|path| path.is_file()) {
+        return true;
+    }
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths)
+                .any(|directory| directory.join(program).is_file())
+        })
+        .unwrap_or(false)
+}
+
+/// `where.exe` 只看 PATH；这里补上各包管理器/安装器的常见落点。
+fn known_program_paths(program: &str) -> Vec<PathBuf> {
+    let mut bases: Vec<PathBuf> = Vec::new();
+    if let Some(home) = home_dir() {
+        for relative in [
+            ".local/bin",
+            ".cargo/bin",
+            ".bun/bin",
+            ".opencode/bin",
+            ".claude/local",
+        ] {
+            bases.push(home.join(relative));
+        }
+    }
+    for variable in ["APPDATA", "LOCALAPPDATA"] {
+        if let Some(base) = std::env::var_os(variable) {
+            bases.push(PathBuf::from(base).join("npm"));
+        }
+    }
+    let mut candidates = Vec::new();
+    for base in bases {
+        for extension in ["", ".exe", ".cmd", ".bat", ".ps1"] {
+            candidates.push(base.join(format!("{program}{extension}")));
+        }
+    }
+    candidates
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,6 +319,13 @@ pub(crate) fn scan_agents(
             def.log_kind.as_str()
         };
         let processes = matching_processes(sys, &def.keyword);
+        if processes.is_empty() && !program_available(&def.keyword) {
+            // 系统上已经找不到这个 CLI（可能是装了又卸载）：不再出现在岛上，
+            // 也不再扫它残留的会话日志——残留日志不能证明 Agent 还在。
+            session.activity.remove(agent_name);
+            session.runtime_start.remove(agent_name);
+            continue;
+        }
         let observations: Vec<ProcessObservation> = processes
             .iter()
             .map(|process| ProcessObservation {

@@ -122,6 +122,17 @@ function isHookApproval(payload: unknown): payload is HookApproval {
   );
 }
 
+function isTerminalData(payload: unknown): payload is { id: string; data: string } {
+  if (!payload || typeof payload !== "object") return false;
+  const value = payload as Record<string, unknown>;
+  return typeof value.id === "string" && typeof value.data === "string";
+}
+
+function isTerminalId(payload: unknown): payload is { id: string } {
+  return Boolean(payload) && typeof payload === "object" &&
+    typeof (payload as Record<string, unknown>).id === "string";
+}
+
 export function createTauriBridge(): AgentIslandBridge {
   async function placement(delta = 0) {
     const window = getCurrentWindow();
@@ -218,6 +229,48 @@ export function createTauriBridge(): AgentIslandBridge {
         await window.setSize(new LogicalSize(value.width, boundedHeight));
       }
       if (position.x !== value.x || position.y !== value.y) await window.setPosition(new PhysicalPosition(value.x, value.y));
+    },
+    async terminalOpen(request) {
+      return await invoke<string>("terminal_open", {
+        program: request.program,
+        args: request.args ?? [],
+        cwd: request.cwd ?? null,
+        cols: request.cols,
+        rows: request.rows,
+      });
+    },
+    async terminalWrite(id, data) {
+      await invoke("terminal_write", { id, data });
+    },
+    async terminalResize(id, cols, rows) {
+      await invoke("terminal_resize", { id, cols, rows });
+    },
+    async terminalClose(id) {
+      await invoke("terminal_close", { id });
+    },
+    async listenTerminalEvents(handler) {
+      const unlistenData = await listen<unknown>("terminal-output", ({ payload }) => {
+        if (isTerminalData(payload)) handler({ kind: "data", id: payload.id, data: payload.data });
+      });
+      let unlistenExit: () => void;
+      try {
+        unlistenExit = await listen<unknown>("terminal-exit", ({ payload }) => {
+          if (isTerminalId(payload)) handler({ kind: "exit", id: payload.id });
+        });
+      } catch (error) {
+        unlistenData();
+        throw error;
+      }
+      let listening = true;
+      return () => {
+        if (!listening) return;
+        listening = false;
+        try {
+          unlistenExit();
+        } finally {
+          unlistenData();
+        }
+      };
     },
   };
 }

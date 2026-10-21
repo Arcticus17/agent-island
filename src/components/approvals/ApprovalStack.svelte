@@ -15,7 +15,7 @@
     <article class="approval" data-approval-id={item.approval.id} aria-busy={item.state === "pending"}>
       <div class="heading">
         <span class="badge">需要审批</span>
-        <span class="tool">{item.approval.tool || "未知工具"}</span>
+        <span class="tool">{item.agentName ? `${item.agentName} · ` : ""}{item.approval.tool || "未知工具"}</span>
       </div>
       <code class="sensitive">{item.approval.command || "未提供命令"}</code>
       <span class="context sensitive">{item.approval.cwd || "未提供目录"} · {item.approval.session.slice(0, 8) || "无会话"}</span>

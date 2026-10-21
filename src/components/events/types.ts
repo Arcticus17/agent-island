@@ -10,6 +10,8 @@ export interface CommandFailure {
 
 export interface ApprovalItem {
   approval: HookApproval;
+  /** 请求来自哪个 Agent（按会话反查快照；查不到时为空） */
+  agentName?: string;
   state: CommandUiState;
   decision: boolean | null;
   error: CommandFailure | null;

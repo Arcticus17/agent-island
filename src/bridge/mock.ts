@@ -4,6 +4,7 @@ import {
   type AgentIslandBridge,
   type CommandResult,
   type HookEvent,
+  type TerminalEvent,
 } from "./types";
 
 export interface MockBridgeOptions {
@@ -15,6 +16,8 @@ export interface MockAgentIslandBridge extends AgentIslandBridge {
   emitHookEvent(event: HookEvent): void;
   listenerCount(): number;
   windowSizes(): readonly { width: number; height: number }[];
+  terminalCalls(): readonly { kind: string; [key: string]: unknown }[];
+  emitTerminal(event: TerminalEvent): void;
 }
 
 function clone<T>(value: T): T {
@@ -29,7 +32,10 @@ export function createMockBridge(
   const resultQueue = (options.commandResults ?? []).map(clone);
   const commandLog: AgentCommand[] = [];
   const handlers = new Set<(event: HookEvent) => void>();
+  const terminalHandlers = new Set<(event: TerminalEvent) => void>();
   const resizeLog: Array<{ width: number; height: number }> = [];
+  const terminalLog: Array<{ kind: string; [key: string]: unknown }> = [];
+  let terminalSequence = 0;
 
   return {
     async getSnapshot() {
@@ -54,6 +60,36 @@ export function createMockBridge(
     },
     async resizeWindow(size) {
       resizeLog.push(clone(size));
+    },
+    async terminalOpen(request) {
+      terminalSequence += 1;
+      const id = `mock-term-${terminalSequence}`;
+      terminalLog.push({ kind: "open", id, program: request.program, cwd: request.cwd ?? null });
+      return id;
+    },
+    async terminalWrite(id, data) {
+      terminalLog.push({ kind: "write", id, data });
+    },
+    async terminalResize(id, cols, rows) {
+      terminalLog.push({ kind: "resize", id, cols, rows });
+    },
+    async terminalClose(id) {
+      terminalLog.push({ kind: "close", id });
+    },
+    async listenTerminalEvents(handler) {
+      terminalHandlers.add(handler);
+      let listening = true;
+      return () => {
+        if (!listening) return;
+        listening = false;
+        terminalHandlers.delete(handler);
+      };
+    },
+    terminalCalls() {
+      return terminalLog.map((entry) => clone(entry));
+    },
+    emitTerminal(event) {
+      for (const handler of [...terminalHandlers]) handler({ ...event });
     },
     commands() {
       return commandLog.map(clone);

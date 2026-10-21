@@ -15,14 +15,20 @@
     privacy,
     focusMode,
     themeStyle,
+    iconStyle,
+    agentMode,
     hookEnabled,
     hookState,
     hookError,
     onPrivacy,
     onFocusMode,
     onThemeStyle,
+    onIconStyle,
+    onAgentMode,
     onHookToggle,
     onSettingsOpen,
+    onAdjustWidth,
+    onStartResize,
   }: {
     agent: AgentView | null;
     session?: SessionView | null;
@@ -32,14 +38,20 @@
     privacy: boolean;
     focusMode: "off" | "errors" | "quiet";
     themeStyle: "graphite" | "pure-black";
+    iconStyle: "dot" | "pixel";
+    agentMode: "all" | "running";
     hookEnabled: boolean | null;
     hookState: CommandUiState;
     hookError: CommandFailure | null;
     onPrivacy: (value: boolean) => void;
     onFocusMode: (value: "off" | "errors" | "quiet") => void;
     onThemeStyle: (value: "graphite" | "pure-black") => void;
+    onIconStyle: (value: "dot" | "pixel") => void;
+    onAgentMode: (value: "all" | "running") => void;
     onHookToggle: () => void;
     onSettingsOpen: () => void;
+    onAdjustWidth?: (delta: number) => void;
+    onStartResize?: () => void;
   } = $props();
 
   let states = $state<Record<ActionKey, CommandUiState>>({ overview: "idle", directory: "idle", terminal: "idle", focus: "idle", restart: "idle", stop: "idle" });
@@ -145,14 +157,16 @@
       {states.stop === "confirming" ? "确认停止" : states.stop === "pending" ? "停止中…" : states.stop === "succeeded" ? "已停止" : "停止"}
     </button>
   </div>
-  <SettingsPopover {privacy} {focusMode} {themeStyle} {hookEnabled} {hookState} {hookError} {onPrivacy} {onFocusMode} {onThemeStyle} {onHookToggle} onOpen={onSettingsOpen} {onLayoutChange} />
+  <SettingsPopover {privacy} {focusMode} {themeStyle} {iconStyle} {agentMode} {hookEnabled} {hookState} {hookError} {onPrivacy} {onFocusMode} {onThemeStyle} {onIconStyle} {onAgentMode} {onHookToggle} onOpen={onSettingsOpen} {onLayoutChange} {onAdjustWidth} {onStartResize} />
   </div>
 </footer>
 
 <style>
   .action-bar { display: grid; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid var(--island-border-subtle); max-height: calc(100dvh - 66px); overflow-y: auto; box-sizing: border-box; }
   .action-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
-  .actions { min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .actions { min-width: 0; display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+  .actions::-webkit-scrollbar { display: none; }
+  .actions button { flex: 0 0 auto; }
   button { min-height: 30px; padding: 5px 10px; border: 1px solid var(--island-border-subtle); border-radius: 9px; color: var(--island-text-secondary); background: var(--island-control-surface); cursor: pointer; }
   button:hover:not(:disabled) { color: var(--island-text-primary); background: var(--island-control-hover); }
   button.danger { color: var(--island-status-error); }
@@ -160,5 +174,5 @@
   button:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
   .feedback { display: flex; justify-content: space-between; gap: 8px; max-height: 120px; overflow: auto; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 10px; color: var(--island-refresh-error-text); background: var(--island-refresh-error-surface); font-size: 11px; }
   .feedback button { color: inherit; }
-  @media (max-width: 420px) { .action-bar { align-items: flex-start; } .actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 1; } button { min-height: 38px; padding-inline: 7px; } }
+  @media (max-width: 420px) { .action-bar { align-items: flex-start; } .actions { display: flex; flex-wrap: nowrap; flex: 1 1 auto; overflow-x: auto; } button { min-height: 38px; padding-inline: 7px; flex: 0 0 auto; } }
 </style>

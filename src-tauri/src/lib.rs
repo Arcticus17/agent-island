@@ -9,6 +9,7 @@ mod session_scan;
 #[cfg(target_os = "windows")]
 mod single_instance;
 mod stats_store;
+mod terminal;
 mod usage;
 
 use adapters::AgentAdapter;
@@ -19,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use session_scan::*;
 use stats_store::*;
+use terminal::*;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
@@ -340,6 +342,7 @@ struct AppState {
     stats_path: PathBuf,
     daily_path: PathBuf,
     send_tasks: Mutex<HashMap<String, Arc<SendTask>>>,
+    terminals: TerminalMap,
     hook_enabled: AtomicBool,
     hook_token: Mutex<String>,
     approvals: Mutex<HashMap<String, HookApproval>>,
@@ -439,6 +442,7 @@ pub fn run() {
             stats_path,
             daily_path,
             send_tasks: Mutex::new(HashMap::new()),
+            terminals: Mutex::new(HashMap::new()),
             hook_enabled: AtomicBool::new(hook_enabled),
             hook_token: Mutex::new(hook_token),
             approvals: Mutex::new(HashMap::new()),
@@ -460,6 +464,11 @@ pub fn run() {
             stop_session,
             send_to_session,
             get_send_output,
+            terminal_open,
+            terminal_write,
+            terminal_resize,
+            terminal_close,
+            terminal_list,
             get_autostart,
             set_autostart,
             privacy_active,

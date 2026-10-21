@@ -11,6 +11,8 @@
   import UsageCard from "../components/cards/UsageCard.svelte";
   import CardBoundary from "../components/common/CardBoundary.svelte";
   import ActionBar from "../components/controls/ActionBar.svelte";
+  import PromptComposer from "../components/controls/PromptComposer.svelte";
+  import TerminalPanel from "../components/terminal/TerminalPanel.svelte";
   import DiagnosticsPanel from "../components/diagnostics/DiagnosticsPanel.svelte";
   import LayoutEditor from "../components/layout/LayoutEditor.svelte";
   import NotificationStack from "../components/notifications/NotificationStack.svelte";
@@ -23,17 +25,33 @@
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
   import { preferredAgent } from "../models/agent-priority";
 
+  /**
+   * 图标风格：默认像素吉祥物；把 localStorage 的 agent-island-icon-style 设成 "dot"
+   * 即回到原来的圆点语言（设置面板里的"图标"就是这个开关）。
+   */
+  function storedIconStyle(): "dot" | "pixel" {
+    try {
+      return localStorage.getItem("agent-island-icon-style") === "dot" ? "dot" : "pixel";
+    } catch {
+      return "pixel";
+    }
+  }
+
   let {
     bridge = tauriBridge,
     diagnosticsBridge = tauriDiagnosticsBridge,
     pollIntervalMs = 1_500,
     initiallyExpanded = false,
+    iconStyle: initialIconStyle = storedIconStyle(),
   }: {
     bridge?: AgentIslandBridge;
     diagnosticsBridge?: DiagnosticsBridge;
     pollIntervalMs?: number;
     initiallyExpanded?: boolean;
+    iconStyle?: "dot" | "pixel";
   } = $props();
+
+  let iconStyle = $state<"dot" | "pixel">(untrack(() => initialIconStyle));
 
   const store = createAgentStore(untrack(() => bridge));
   let viewState: AgentStoreState = $state(store.current());
@@ -76,12 +94,54 @@
   let notificationAutoExpanded = false;
   const notificationTimers = new Map<string, { handle: number; remainingMs: number; startedAt: number; pauseCount: number }>();
   const collapsedWindowHeight = 60;
-  let selectedAgent = $derived(viewState.selectedAgent);
+
+  /**
+   * Agent 显示模式：
+   * - "running"：只显示正在跑的（有几个运行显示几个）
+   * - "all"：显示系统里检测到的全部（运行中 + 已停止/有本地记录的）
+   */
+  type AgentMode = "all" | "running";
+  const AGENT_MODE_KEY = "agent-island-agent-mode";
+  function storedAgentMode(): AgentMode {
+    try {
+      return localStorage.getItem(AGENT_MODE_KEY) === "running" ? "running" : "all";
+    } catch {
+      return "all";
+    }
+  }
+  let agentMode = $state<AgentMode>(storedAgentMode());
+  let terminalOpen = $state(false);
+  function agentCliName(agent: { name: string } | null): string {
+    const map: Record<string, string> = { "Claude Code": "claude", "Codex CLI": "codex", OpenCode: "opencode", Hermes: "hermes" };
+    return (agent && map[agent.name]) ?? "Shell";
+  }
+  function setAgentMode(value: AgentMode): void {
+    agentMode = value;
+    try { localStorage.setItem(AGENT_MODE_KEY, value); } catch { /* 存储不可用时只影响持久化 */ }
+    void syncWindowSize();
+  }
+  const visibleAgents = $derived.by(() => {
+    const agents = viewState.snapshot?.agents ?? [];
+    return agentMode === "running" ? agents.filter((agent) => agent.state.process === "running") : agents;
+  });
+  let selectedAgent = $derived.by(() => {
+    const current = viewState.selectedAgent;
+    if (!current || !visibleAgents.some((agent) => agent.id === current.id)) return null;
+    return current;
+  });
   let inspectedSession = $state<{ agentId: string; sessionId: string } | null>(null);
+  let terminalMax = $state(false);
+  let widthBeforeMax = 0;
   let inspectingHistory = $derived(inspectedSession?.agentId === selectedAgent?.id && inspectedSession !== null);
   let selectedSession = $derived(inspectingHistory
     ? selectedAgent?.history_sessions.find((session) => session.id === inspectedSession?.sessionId) ?? null
     : selectedAgent?.active_session ?? null);
+
+  // 显示模式过滤掉当前选中的 Agent 时，自动落到第一个可见的（都不可见则保持空态）
+  $effect(() => {
+    if (visibleAgents.length === 0 || selectedAgent) return;
+    store.selectAgent(visibleAgents[0].id);
+  });
 
   async function loadDiagnostics(): Promise<void> {
     if (disposed) return;
@@ -137,14 +197,18 @@
       : 0;
     const renderedHeight = Math.ceil(Math.max(islandHeight, eventHeight));
     const availableHeight = window.screen?.availHeight || renderedHeight;
-    const safeExpandedHeight = Math.max(
+    // 展开面板高度上限：内容再多也不让岛无限变长，超出部分在岛内滚动。
+    // 终端放大模式特殊：要留出足够高度给 PTY，只留一点点余量。
+    const expandedHeightCap = Math.max(
       collapsedWindowHeight,
-      Math.floor(availableHeight * 0.92),
+      terminalOpen && terminalMax
+        ? Math.floor(availableHeight * 0.92)
+        : Math.min(620, Math.floor(availableHeight * 0.78)),
     );
     const height = targetExpanded
       ? Math.min(
           Math.max(collapsedWindowHeight, renderedHeight),
-          safeExpandedHeight,
+          expandedHeightCap,
         )
       : collapsedWindowHeight;
     try {
@@ -157,9 +221,41 @@
     }
   }
 
+  /** 终端放大：连窗口一起放大，还原时回到原来的宽度。 */
+  async function toggleTerminalMax(): Promise<void> {
+    const next = !terminalMax;
+    terminalMax = next;
+    if (next) {
+      widthBeforeMax = Math.round(window.innerWidth);
+      // 窄岛（默认 420）放大时把窗口一起放宽；本来就够宽就只加高，不缩窗口。
+      const target = Math.min(760, Math.max(widthBeforeMax, 720));
+      try {
+        await bridge.resizeWindow?.({ width: target, height: Math.round(window.innerHeight) });
+      } catch {
+        // 浏览器预览不支持真实窗口尺寸，忽略即可
+      }
+    } else if (widthBeforeMax > 0) {
+      const restore = widthBeforeMax;
+      widthBeforeMax = 0;
+      try {
+        await bridge.resizeWindow?.({ width: restore, height: Math.round(window.innerHeight) });
+      } catch {
+        // 同上
+      }
+    }
+    // 等一帧让 window.innerWidth 反映新的窗口宽度，再按新尺寸算高度
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await syncWindowSize();
+  }
+
+  async function toggleTerminal(): Promise<void> {
+    if (terminalOpen && terminalMax) await toggleTerminalMax();
+    terminalOpen = !terminalOpen;
+    await syncWindowSize();
+  }
+
   function windowFailure(error: unknown): void {
-    if (disposed) return;
-    windowError = `窗口调整或保存失败：${error instanceof Error ? error.message : String(error)}`;
+    if (disposed) return;    windowError = `窗口调整或保存失败：${error instanceof Error ? error.message : String(error)}`;
     expanded = true;
   }
 
@@ -181,7 +277,8 @@
     // Explicit error focus keeps its existing behavior. Failed refreshes do not
     // provide new evidence for automatically switching the displayed agent.
     if (focusMode === "errors" || current.refreshError || !current.snapshot) return;
-    const preferred = preferredAgent(current.snapshot, current.selectedAgentId);
+    if (visibleAgents.length === 0) return;
+    const preferred = preferredAgent({ ...current.snapshot, agents: visibleAgents }, current.selectedAgentId);
     if (preferred) store.selectAgent(preferred.id);
   }
 
@@ -273,7 +370,17 @@
 
   function pushApproval(event: Extract<HookEvent, { kind: "approval" }>): void {
     if (approvals.some((item) => item.approval.id === event.approval.id)) return;
-    approvals = [...approvals, { approval: event.approval, state: "idle", decision: null, error: null } satisfies ApprovalItem];
+    // 审批只带 session，不带上是谁；这里按会话反查一次，卡片上就能说清"哪个 Agent 在请求"。
+    const owner = viewState.snapshot?.agents.find(
+      (agent) => agent.active_session?.id === event.approval.session,
+    );
+    approvals = [...approvals, {
+      approval: event.approval,
+      agentName: owner?.name,
+      state: "idle",
+      decision: null,
+      error: null,
+    } satisfies ApprovalItem];
     notificationAutoExpanded = false;
     expanded = true;
     void syncWindowSize();
@@ -347,6 +454,12 @@
   function setThemeStyle(value: "graphite" | "pure-black"): void {
     themeStyle = value;
     localStorage.setItem("agent-island-theme-style-v2", value);
+    void syncWindowSize();
+  }
+
+  function setIconStyle(value: "dot" | "pixel"): void {
+    iconStyle = value;
+    localStorage.setItem("agent-island-icon-style", value);
     void syncWindowSize();
   }
 
@@ -478,7 +591,7 @@
 
 {#if viewState.snapshot}
   <main
-    class={`agent-island status-${viewState.selectedAgent?.display_status ?? "idle"}`}
+    class={`agent-island status-${selectedAgent?.display_status ?? "idle"}`}
     class:expanded
     class:privacy
     data-testid="agent-island"
@@ -488,21 +601,14 @@
   >
     <span class="sr-only" data-testid="selected-agent-id">{viewState.selectedAgentId ?? ""}</span>
     <div class="compact-header">
-      <CompactIsland agent={viewState.selectedAgent} {expanded} onToggle={toggleExpanded} />
+      <CompactIsland agent={selectedAgent} {expanded} onToggle={toggleExpanded} {iconStyle} />
       {#if bridge.startWindowDrag}<button class="window-handle" aria-label="拖动窗口" title="按住并拖动窗口" onpointerdown={(event) => { if (event.button === 0) { event.preventDefault(); void windowAction(() => bridge.startWindowDrag!()); } }}>⠿</button>{/if}
     </div>
     {#if expanded}
-      {#if bridge.adjustWindowWidth || bridge.startWindowResize}
-        <div class="window-tools" aria-label="窗口布局">
-          <span>窗口宽度</span>
-          {#if bridge.adjustWindowWidth}<button aria-label="缩窄窗口" onclick={() => void windowAction(() => bridge.adjustWindowWidth!(-40))}>−</button><button aria-label="加宽窗口" onclick={() => void windowAction(() => bridge.adjustWindowWidth!(40))}>＋</button>{/if}
-          {#if bridge.startWindowResize}<button title="按住拖动，或使用左右方向键" aria-label="拖动调整窗口宽度" onpointerdown={(event) => { if (event.button === 0) { event.preventDefault(); void windowAction(() => bridge.startWindowResize!()); } }} onkeydown={(event) => { if (bridge.adjustWindowWidth && (event.key === "ArrowLeft" || event.key === "ArrowRight")) { event.preventDefault(); void windowAction(() => bridge.adjustWindowWidth!(event.key === "ArrowRight" ? 20 : -20)); } }}>↔</button>{/if}
-        </div>
-      {/if}
       {#if windowError}<p class="refresh-note" role="alert">{windowError}</p>{/if}
-      <section id="expanded-island" class="adaptive-details" aria-label="Agent 详情">
+      <section id="expanded-island" class="adaptive-details" class:terminal-max={terminalOpen && terminalMax} aria-label="Agent 详情">
         <nav class="agent-strip" aria-label="切换 Agent">
-          {#each viewState.snapshot.agents as agent (agent.id)}
+          {#each visibleAgents as agent (agent.id)}
             <button
               type="button"
               class:active={agent.id === selectedAgent?.id}
@@ -512,6 +618,30 @@
             ><span class={`mini-dot status-${agent.display_status}`} aria-hidden="true"></span><span class="sensitive">{agent.name}</span></button>
           {/each}
         </nav>
+        <details class="diagnostics-drawer" data-testid="diagnostics-drawer">
+          <summary>
+            <span>诊断信息</span>
+            {#if diagnosticIssues.length > 0}<span class="drawer-badge" data-testid="diagnostics-count">{diagnosticIssues.length} 项提示</span>{:else}<span class="drawer-muted">无异常</span>{/if}
+          </summary>
+          <DiagnosticsPanel
+            issues={diagnosticIssues}
+            sources={diagnosticSources}
+            status={diagnosticStatus}
+            exportDiagnostics={(destination) => diagnosticsBridge.exportDiagnostics(destination)}
+            onLayoutChange={() => void syncWindowSize()}
+          />
+        </details>
+        {#if selectedAgent}
+          <div class="composer-slot">
+            <PromptComposer
+              agent={selectedAgent}
+              session={selectedSession}
+              runCommand={runActionCommand}
+              onLayoutChange={() => void syncWindowSize()}
+              disabledReason={inspectingHistory ? "正在查看本地历史记录，不能向历史会话发送指令" : null}
+            />
+          </div>
+        {/if}
         {#if selectedAgent && (selectedAgent.history_sessions.length > 0 || inspectingHistory)}
           <label class="session-picker">查看会话
             <select data-testid="session-picker" value={inspectingHistory ? inspectedSession?.sessionId : ""} onchange={(event) => {
@@ -528,6 +658,25 @@
           {#if inspectingHistory}<p class="refresh-note" role="status" data-testid="history-inspection-note">正在查看手动选择的本地会话记录，不代表桌面端当前任务。{selectedSession ? "目录和终端操作使用此会话；停止、重启和跳回已禁用。" : "该记录已不在当前快照中，请重新选择。"}</p>{/if}
         {/if}
         {#if viewState.refreshError}<p class="refresh-note" role="status">数据刷新暂时失败，已保留最近状态。</p>{/if}
+        {#if selectedAgent}
+          <div class="terminal-toolbar">
+            <button
+              type="button"
+              class="terminal-toggle"
+              class:active={terminalOpen}
+              data-testid="terminal-toggle"
+              aria-pressed={terminalOpen}
+              onclick={() => void toggleTerminal()}
+            >{terminalOpen ? "收起终端" : "内置终端"}</button>
+            {#if terminalOpen}
+              <span class="terminal-hint">在岛内直接跑 {agentCliName(selectedAgent)}</span>
+            {/if}
+          </div>
+          {#if terminalOpen}
+            <TerminalPanel agent={selectedAgent} {bridge} maximized={terminalMax} onToggleMax={() => void toggleTerminalMax()} onLayoutChange={() => void syncWindowSize()} />
+          {/if}
+        {/if}
+        <div class="cards-region" class:terminal-open={terminalOpen}>
         {#if selectedAgent}
           <LayoutEditor
             bind:layout
@@ -570,20 +719,19 @@
           {#if layoutPersistenceFailed}
             <p class="layout-persistence-status" data-testid="layout-persistence-status" role="status">布局已应用，但暂时未保存；下次调整时会重试。</p>
           {/if}
+        {:else if visibleAgents.length === 0}
+          <div class="empty" data-testid="empty-agents" role="status">
+            <strong>{agentMode === "running" ? "当前没有运行中的 Agent" : "未检测到任何 Agent"}</strong>
+            <span>{agentMode === "running" ? "设置里把「显示」切成「全部检测」，即可看到已安装或有本地记录的 Agent。" : "启动一个 Agent 后会自动出现在这里。"}</span>
+          </div>
         {:else}
           <div class="empty" data-testid="empty-session" role="status"><strong>无法确认当前会话</strong><span>为避免串入历史对话，灵动岛不会显示其他会话内容。</span></div>
         {/if}
+        </div>
       </section>
-      <DiagnosticsPanel
-        issues={diagnosticIssues}
-        sources={diagnosticSources}
-        status={diagnosticStatus}
-        exportDiagnostics={(destination) => diagnosticsBridge.exportDiagnostics(destination)}
-        onLayoutChange={() => void syncWindowSize()}
-      />
-      {#key JSON.stringify([viewState.selectedAgent?.id, inspectingHistory, selectedSession?.id, selectedSession?.cwd])}
+      {#key JSON.stringify([selectedAgent?.id, inspectingHistory, selectedSession?.id, selectedSession?.cwd])}
         <ActionBar
-          agent={viewState.selectedAgent}
+          agent={selectedAgent}
           session={selectedSession}
           {inspectingHistory}
           runCommand={runActionCommand}
@@ -591,14 +739,20 @@
           {privacy}
           {focusMode}
           {themeStyle}
+          {iconStyle}
+          {agentMode}
           {hookEnabled}
           {hookState}
           {hookError}
           onPrivacy={setPrivacy}
           onFocusMode={setFocusMode}
           onThemeStyle={setThemeStyle}
+          onIconStyle={setIconStyle}
+          onAgentMode={setAgentMode}
           onHookToggle={() => void toggleHook()}
           onSettingsOpen={() => void loadHookStatus()}
+          onAdjustWidth={bridge.adjustWindowWidth ? (delta) => void windowAction(() => bridge.adjustWindowWidth!(delta)) : undefined}
+          onStartResize={bridge.startWindowResize ? () => windowAction(() => bridge.startWindowResize!()) : undefined}
         />
       {/key}
     {/if}
@@ -623,10 +777,18 @@
 
 <style>
   .compact-header { display: flex; align-items: center; }
-  .window-handle, .window-tools button { border: 1px solid var(--island-border-subtle); border-radius: 8px; color: var(--island-text-secondary); background: var(--island-control-surface); min-height: 30px; min-width: 30px; cursor: pointer; }
-  .window-handle { margin-right: 10px; cursor: move; touch-action: none; }
-  .window-tools { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 6px 12px; font-size: 11px; color: var(--island-text-secondary); }
-  .window-tools button:focus-visible, .window-handle:focus-visible { outline: 2px solid var(--island-accent-primary); }
+  .window-handle { border: 1px solid var(--island-border-subtle); border-radius: 8px; color: var(--island-text-secondary); background: var(--island-control-surface); min-height: 30px; min-width: 30px; cursor: move; touch-action: none; }
+  .window-handle { margin-right: 10px; }
+  .window-handle:focus-visible { outline: 2px solid var(--island-accent-primary); }
+  /* 诊断默认收成一行，用时点开（"隐藏，用时弹出"） */
+  .diagnostics-drawer { border-top: 1px solid var(--island-border-subtle); }
+  .diagnostics-drawer > summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; list-style: none; cursor: pointer; color: var(--island-text-secondary); font-size: 11px; }
+  .diagnostics-drawer > summary::-webkit-details-marker { display: none; }
+  .diagnostics-drawer > summary:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: -2px; }
+  .diagnostics-drawer > summary::after { content: "⌄"; margin-left: auto; color: var(--island-text-tertiary); }
+  .diagnostics-drawer[open] > summary::after { content: "⌃"; }
+  .drawer-badge { padding: 1px 7px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--island-status-waiting) 45%, transparent); background: color-mix(in srgb, var(--island-status-waiting) 16%, transparent); color: var(--island-status-waiting); font-size: 10px; font-weight: 700; }
+  .drawer-muted { color: var(--island-text-tertiary); font-size: 10px; }
   .session-picker { display: grid; gap: 5px; margin-bottom: 10px; color: var(--island-text-secondary); font-size: 11px; }
   .session-picker select { width: 100%; min-width: 0; padding: 8px; border-radius: 8px; color-scheme: dark; color: var(--island-text-primary); background: var(--island-control-surface); border: 1px solid var(--island-border-subtle); }
   .agent-island, .island-loading {
@@ -648,6 +810,19 @@
   .agent-island.expanded > .compact-header { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface-sticky); backdrop-filter: var(--effect-backdrop); }
   :global(.agent-island.expanded > .action-bar) { position: sticky; bottom: 0; z-index: var(--z-sticky); background: var(--surface-sticky); backdrop-filter: var(--effect-backdrop); }
   .adaptive-details { min-width: 0; border-top: 1px solid var(--island-border-subtle); padding: 12px; }
+  /* 内置终端：开终端时把卡片区收起，面板高度不炸 */
+  .terminal-toolbar { display: flex; align-items: center; gap: 8px; margin: 8px 0 6px; }
+  .terminal-toggle { min-height: 28px; padding: 4px 10px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 11px; cursor: pointer; }
+  .terminal-toggle.active { color: var(--island-accent-primary); border-color: var(--island-accent-primary); }
+  .terminal-toggle:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
+  .terminal-hint { color: var(--island-text-tertiary); font-size: 10px; }
+  .cards-region.terminal-open { display: none; }
+  /* 终端放大：把诊断、指令输入、会话选择、卡片都让位给终端 */
+  .adaptive-details.terminal-max .diagnostics-drawer,
+  .adaptive-details.terminal-max .composer-slot,
+  .adaptive-details.terminal-max .session-picker,
+  .adaptive-details.terminal-max .cards-region,
+  .adaptive-details.terminal-max .refresh-note.note { display: none; }
   .agent-strip { display: flex; gap: 7px; padding: 0 0 11px; overflow-x: auto; scrollbar-width: none; }
   .agent-strip button { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid transparent; border-radius: 999px; color: var(--island-text-secondary); background: transparent; cursor: pointer; }
   .agent-strip button.active { color: var(--island-text-primary); border-color: var(--island-border-subtle); background: var(--island-surface-raised); }
