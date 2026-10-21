@@ -20,6 +20,7 @@ import {
   type AgentCommand,
   type AgentIslandBridge,
   type AgentViewSnapshot,
+  type CliVersionProbe,
   type CommandValue,
   type CommandResult,
   type HookApproval,
@@ -234,6 +235,9 @@ export function createTauriBridge(): AgentIslandBridge {
     },
     async onWindowFocusChange(handler) {
       return await getCurrentWindow().onFocusChanged(({ payload }) => handler(payload));
+    },
+    async probeCliVersion(program) {
+      return await invoke<CliVersionProbe>("probe_cli_version", { program });
     },
     async terminalOpen(request) {
       return await invoke<string>("terminal_open", {

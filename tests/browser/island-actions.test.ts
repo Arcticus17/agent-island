@@ -1,8 +1,9 @@
 import { mount, unmount } from "svelte";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 
 import App from "../../src/app/App.svelte";
+import { resetUpdateCache } from "../../src/agent/updates";
 import type { DiagnosticsBridge, DiagnosticsResponse } from "../../src/bridge/diagnostics";
 import type {
   AgentCommand,
@@ -110,6 +111,7 @@ function createBridgeHarness(
   const handlers = new Set<(event: HookEvent) => void>();
   const terminalHandlers = new Set<(event: TerminalEvent) => void>();
   const focusHandlers = new Set<(focused: boolean) => void>();
+  const cliVersion = "0.1.0";
   const terminalLog: Array<{ kind: string; [key: string]: unknown }> = [];
   const resizeLog: Array<{ width: number; height: number }> = [];
   let terminalSequence = 0;
@@ -138,7 +140,7 @@ function createBridgeHarness(
     async terminalOpen(request) {
       terminalSequence += 1;
       const id = `term-${terminalSequence}`;
-      terminalLog.push({ kind: "open", id, program: request.program, cwd: request.cwd ?? null });
+      terminalLog.push({ kind: "open", id, program: request.program, args: request.args ?? [], cwd: request.cwd ?? null });
       return id;
     },
     async terminalWrite(id, data) {
@@ -157,6 +159,9 @@ function createBridgeHarness(
     async onWindowFocusChange(handler) {
       focusHandlers.add(handler);
       return () => focusHandlers.delete(handler);
+    },
+    async probeCliVersion(program) {
+      return { program, version: cliVersion, raw: `mock ${cliVersion}`, ok: true };
     },
   };
 
@@ -248,10 +253,17 @@ function claudeSnapshot(): AgentViewSnapshot {
   return value;
 }
 
+beforeEach(() => {
+  // 每个用例都别真的打 npm registry：默认返回与本地一致的版本
+  resetUpdateCache();
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ version: "0.1.0" }), { status: 200 })));
+});
+
 afterEach(async () => {
   while (mounted.length) await unmount(mounted.pop()!);
   document.body.replaceChildren();
   localStorage.clear();
+  vi.unstubAllGlobals();
   await page.viewport(800, 700);
 });
 
@@ -886,6 +898,47 @@ describe("island prompt composer", () => {
   });
 });
 
+describe("agent update button", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("checks the registry and offers an update when a newer version exists", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ version: "9.9.9" }), { status: 200 })));
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    const button = () => target.querySelector<HTMLButtonElement>('[data-testid="agent-update"]')!;
+
+    await waitFor(() => button().getAttribute("data-update-state") === "ready");
+    expect(button().textContent).toContain("更新 v9.9.9");
+    expect(button().getAttribute("title")).toContain("0.1.0");
+
+    button().click();
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
+    const opened = harness.terminalCalls().find((call) => call.kind === "open")!;
+    expect(opened.program).toBe("cmd.exe");
+    expect(opened.args).toEqual(["/C", "npm install -g @anthropic-ai/claude-code@latest"]);
+  });
+
+  it("says up to date when the registry matches the local version", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ version: "0.1.0" }), { status: 200 })));
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    const button = () => target.querySelector<HTMLButtonElement>('[data-testid="agent-update"]')!;
+    await waitFor(() => button().getAttribute("data-update-state") === "ready");
+    expect(button().textContent).toContain("已是最新");
+    expect(button().classList.contains("available")).toBe(false);
+  });
+
+  it("falls back to a retry label when the registry is unreachable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("boom", { status: 503 })));
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    const button = () => target.querySelector<HTMLButtonElement>('[data-testid="agent-update"]')!;
+    await waitFor(() => button().getAttribute("data-update-state") === "error");
+    expect(button().textContent).toContain("重试检查");
+  });
+});
 describe("collapse on window blur", () => {
   it("collapses the expanded island when the window loses focus", async () => {
     const harness = createBridgeHarness([snapshot(100)]);
@@ -1030,6 +1083,8 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
+
 
 
 

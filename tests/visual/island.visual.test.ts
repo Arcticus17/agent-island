@@ -1,5 +1,5 @@
-﻿import { mount, unmount } from "svelte";
-import { afterEach, expect, it, vi } from "vitest";
+import { mount, unmount } from "svelte";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import App from "../../src/app/App.svelte";
 import { createMockBridge } from "../../src/bridge/mock";
@@ -42,7 +42,13 @@ afterEach(async () => {
   document.body.replaceChildren();
   localStorage.clear();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+beforeEach(() => {
+  // 更新检查要联网：截图时固定成"已是最新"，避免真实网络让按钮文字抖动
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ version: "0.1.0" }), { status: 200 })));
 });
 
 for (const theme of ["graphite", "pure-black"] as const) {

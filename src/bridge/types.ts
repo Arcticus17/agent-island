@@ -359,6 +359,15 @@ export interface AgentIslandBridge {
   terminalResize?(id: string, cols: number, rows: number): Promise<void>;
   terminalClose?(id: string): Promise<void>;
   listenTerminalEvents?(handler: (event: TerminalEvent) => void): Promise<() => void>;
+  /** 探测 Agent CLI 的本地版本（跑 `<cli> --version`，不需要联网）。 */
+  probeCliVersion?(program: string): Promise<CliVersionProbe>;
+}
+
+export interface CliVersionProbe {
+  program: string;
+  version: string | null;
+  raw: string;
+  ok: boolean;
 }
 
 export interface TerminalOpenRequest {

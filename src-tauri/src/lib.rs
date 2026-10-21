@@ -10,6 +10,7 @@ mod session_scan;
 mod single_instance;
 mod stats_store;
 mod terminal;
+mod updates;
 mod usage;
 
 use adapters::AgentAdapter;
@@ -21,6 +22,7 @@ use serde_json::Value;
 use session_scan::*;
 use stats_store::*;
 use terminal::*;
+use updates::*;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
@@ -469,6 +471,7 @@ pub fn run() {
             terminal_resize,
             terminal_close,
             terminal_list,
+            probe_cli_version,
             get_autostart,
             set_autostart,
             privacy_active,

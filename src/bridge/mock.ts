@@ -9,6 +9,8 @@ import {
 
 export interface MockBridgeOptions {
   commandResults?: CommandResult[];
+  /** probe_cli_version 返回的本地版本 */
+  cliVersion?: string;
 }
 
 export interface MockAgentIslandBridge extends AgentIslandBridge {
@@ -60,6 +62,9 @@ export function createMockBridge(
     },
     async resizeWindow(size) {
       resizeLog.push(clone(size));
+    },
+    async probeCliVersion(program) {
+      return { program, version: options.cliVersion ?? "0.1.0", raw: "mock", ok: true };
     },
     async terminalOpen(request) {
       terminalSequence += 1;

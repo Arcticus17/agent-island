@@ -24,6 +24,13 @@
   import type { CardId, CardPlacement, LayoutConfigV1 } from "../layout/schema";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
   import { preferredAgent } from "../models/agent-priority";
+  import {
+    compareVersions,
+    fetchLatestVersion,
+    packageForAgent,
+    parseVersion,
+    updateCommand,
+  } from "../agent/updates";
 
   /**
    * 图标风格：默认像素吉祥物；把 localStorage 的 agent-island-icon-style 设成 "dot"
@@ -108,6 +115,14 @@
   let restingWidth = 0;
   /** 正在请求中的窗口宽度：webview 的 innerWidth 更新滞后，同步高度时不能拿旧宽度把窗口缩回去 */
   let targetWindowWidth = 0;
+  /** Agent CLI 更新检查：本地版本走 Rust，最新版本走 npm registry（WebView fetch）。 */
+  type UpdateStatus = "idle" | "checking" | "ready" | "error";
+  let updateStatus = $state<UpdateStatus>("idle");
+  let updateInstalled = $state<string | null>(null);
+  let updateLatest = $state<string | null>(null);
+  let updateMessage = $state<string | null>(null);
+  let updateCheckedFor = "";
+  let updateRunning = $state(false);
   let peekTimer: number | undefined;
   let hideTimer: number | undefined;
 
@@ -164,6 +179,20 @@
   $effect(() => {
     if (visibleAgents.length === 0 || selectedAgent) return;
     store.selectAgent(visibleAgents[0].id);
+  });
+
+  // 展开时自动检查一次更新（每个 Agent 一次；网络失败不重试，点按钮可手动重试）
+  $effect(() => {
+    if (!expanded) return;
+    const name = selectedAgent?.name ?? "";
+    if (!name || !agentPackage || updateCheckedFor === name) return;
+    untrack(() => { void checkAgentUpdate(); });
+  });
+  // 更新命令跑完（PTY 退出）后重新探测版本
+  $effect(() => {
+    if (!updateRunning || !terminalExited || terminalId) return;
+    updateRunning = false;
+    untrack(() => { void checkAgentUpdate(true); });
   });
 
   async function loadDiagnostics(): Promise<void> {
@@ -282,10 +311,73 @@
   }
 
   /**
+   * 更新检查：本地版本走 Rust 的 `probe_cli_version`（跑 `<cli> --version`），
+   * 最新版本直接 fetch npm registry —— registry 带 CORS 头，WebView 里可以跨域拿。
+   */
+  const agentPackage = $derived(packageForAgent(selectedAgent?.name ?? null));
+  const updateAvailable = $derived(
+    updateStatus === "ready" &&
+      !!updateInstalled &&
+      !!updateLatest &&
+      compareVersions(updateLatest, updateInstalled) > 0,
+  );
+  const updateLabel = $derived.by(() => {
+    if (!agentPackage) return "不支持更新";
+    if (updateRunning) return "更新中…";
+    if (updateStatus === "checking") return "检查中…";
+    if (updateStatus === "error") return "重试检查";
+    if (updateStatus === "ready") {
+      if (updateAvailable) return `更新 v${updateLatest}`;
+      return updateInstalled ? `已是最新` : "检查更新";
+    }
+    return "检查更新";
+  });
+
+  async function checkAgentUpdate(force = false): Promise<void> {
+    const pkg = agentPackage;
+    const name = selectedAgent?.name ?? "";
+    if (!pkg || !bridge.probeCliVersion) {
+      updateStatus = "error";
+      updateMessage = "当前 Agent 不支持自动更新";
+      return;
+    }
+    if (updateStatus === "checking") return;
+    // 同一个 Agent 已经查过就不再重复；换 Agent 必须重查
+    if (!force && updateCheckedFor === name && updateStatus === "ready") return;
+    updateStatus = "checking";
+    updateMessage = null;
+    updateCheckedFor = name;
+    try {
+      const probe = await bridge.probeCliVersion(pkg.cli);
+      updateInstalled = probe.version ?? parseVersion(probe.raw);
+      updateLatest = await fetchLatestVersion(pkg.package);
+      updateStatus = "ready";
+      if (!updateInstalled) updateMessage = "本地版本未知，按 npm 最新版本提示";
+    } catch (cause) {
+      updateStatus = "error";
+      updateMessage = cause instanceof Error ? `检查失败：${cause.message}` : "检查失败";
+    }
+  }
+
+  /** 更新：把 `npm install -g …@latest` 丢进岛内终端跑，过程直接可见。 */
+  async function runAgentUpdate(): Promise<void> {
+    const pkg = agentPackage;
+    if (!pkg || updateRunning) return;
+    if (!updateAvailable) {
+      await checkAgentUpdate(true);
+      return;
+    }
+    updateRunning = true;
+    terminalOpen = true;
+    await syncWindowSize();
+    await startTerminal("cmd.exe", ["/C", updateCommand(pkg.package)]);
+  }
+
+  /**
    * 内置终端会话归 App 持有：收起面板/收起岛都不会重启 Agent，
    * 只有点「关闭」或「收起终端」才真正结束 PTY。
    */
-  async function startTerminal(program?: string): Promise<void> {
+  async function startTerminal(program?: string, args: string[] = []): Promise<void> {
     const target = program ?? agentCliName(selectedAgent);
     if (!bridge.terminalOpen) {
       terminalError = "当前宿主不支持内置终端";
@@ -299,6 +391,7 @@
     try {
       const id = await bridge.terminalOpen({
         program: target,
+        args,
         cwd: selectedAgent?.active_session?.cwd ?? null,
         cols: terminalSize.cols,
         rows: terminalSize.rows,
@@ -930,6 +1023,19 @@
               aria-pressed={terminalOpen}
               onclick={() => void toggleTerminal()}
             >{terminalOpen ? "收起终端" : "内置终端"}</button>
+            <button
+              type="button"
+              class="update-button"
+              class:available={updateAvailable}
+              data-testid="agent-update"
+              data-update-state={updateStatus}
+              disabled={!agentPackage || updateRunning || updateStatus === "checking"}
+              title={updateMessage
+                ?? (updateInstalled && updateLatest
+                  ? `本地 v${updateInstalled} → npm 最新 v${updateLatest}`
+                  : "检查 Agent CLI 是否有新版本（需要联网）")}
+              onclick={() => void (updateAvailable ? runAgentUpdate() : checkAgentUpdate(true))}
+            >{updateLabel}</button>
             {#if terminalOpen}
               <span class="terminal-hint">在岛内直接跑 {agentCliName(selectedAgent)}</span>
             {/if}
@@ -1128,6 +1234,10 @@
   .terminal-toggle { min-height: 28px; padding: 4px 10px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 11px; cursor: pointer; }
   .terminal-toggle.active { color: var(--island-accent-primary); border-color: var(--island-accent-primary); }
   .terminal-toggle:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
+  .update-button { min-height: 28px; padding: 4px 10px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 11px; cursor: pointer; }
+  .update-button.available { color: var(--island-accent-primary); border-color: var(--island-accent-primary); background: color-mix(in srgb, var(--island-accent-primary) 12%, transparent); font-weight: 700; }
+  .update-button:disabled { opacity: .55; cursor: progress; }
+  .update-button:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
   .terminal-hint { color: var(--island-text-tertiary); font-size: 10px; }
   .cards-region.terminal-open { display: none; }
   /* 终端放大：把诊断、指令输入、会话选择、卡片都让位给终端 */
