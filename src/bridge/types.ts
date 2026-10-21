@@ -365,6 +365,8 @@ export interface AgentIslandBridge {
   loadAppSettings?(): Promise<string | null>;
   /** 设置的磁盘镜像：原子写入 JSON。 */
   saveAppSettings?(settings: string): Promise<void>;
+  /** 全局快捷键（Ctrl+Shift+A）唤出/收起。 */
+  listenIslandHotkey?(handler: () => void): Promise<() => void>;
 }
 
 export interface CliVersionProbe {

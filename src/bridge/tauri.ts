@@ -245,6 +245,9 @@ export function createTauriBridge(): AgentIslandBridge {
     async saveAppSettings(settings) {
       await invoke("save_app_settings", { settings });
     },
+    async listenIslandHotkey(handler) {
+      return await listen("island-hotkey", () => handler());
+    },
     async terminalOpen(request) {
       return await invoke<string>("terminal_open", {
         program: request.program,

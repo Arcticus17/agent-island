@@ -95,6 +95,7 @@ interface BridgeHarness {
   emit(event: HookEvent): void;
   emitTerminal(event: TerminalEvent): void;
   emitWindowFocus(focused: boolean): void;
+  emitIslandHotkey(): void;
 }
 
 function createBridgeHarness(
@@ -111,6 +112,7 @@ function createBridgeHarness(
   const handlers = new Set<(event: HookEvent) => void>();
   const terminalHandlers = new Set<(event: TerminalEvent) => void>();
   const focusHandlers = new Set<(focused: boolean) => void>();
+  const hotkeyHandlers = new Set<() => void>();
   const cliVersion = "0.1.0";
   const terminalLog: Array<{ kind: string; [key: string]: unknown }> = [];
   const resizeLog: Array<{ width: number; height: number }> = [];
@@ -160,6 +162,10 @@ function createBridgeHarness(
       focusHandlers.add(handler);
       return () => focusHandlers.delete(handler);
     },
+    async listenIslandHotkey(handler) {
+      hotkeyHandlers.add(handler);
+      return () => hotkeyHandlers.delete(handler);
+    },
     async probeCliVersion(program) {
       return { program, version: cliVersion, raw: `mock ${cliVersion}`, ok: true };
     },
@@ -180,6 +186,9 @@ function createBridgeHarness(
     },
     emitWindowFocus(focused: boolean) {
       for (const handler of focusHandlers) handler(focused);
+    },
+    emitIslandHotkey() {
+      for (const handler of hotkeyHandlers) handler();
     },
   };
 }
@@ -925,6 +934,24 @@ describe("agent-scoped diagnostics", () => {
     expect(target.querySelector('[data-testid="diagnostics-count"]')?.textContent).toContain("1 项提示");
   });
 });
+describe("global hotkey", () => {
+  it("summons the island from hidden and hides it again", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    const island = () => target.querySelector<HTMLElement>('[data-testid="agent-island"]')!;
+    expect(island().getAttribute("data-presence")).toBe("expanded");
+
+    // 展开态按快捷键 → 直接隐藏
+    harness.emitIslandHotkey();
+    await waitFor(() => island().getAttribute("data-presence") === "hidden");
+    await waitFor(() => target.querySelector('[data-testid="idle-notch"]') !== null);
+
+    // 隐藏态再按一次 → 展开
+    harness.emitIslandHotkey();
+    await waitFor(() => island().getAttribute("data-presence") === "expanded");
+    expect(target.querySelector("#expanded-island")).not.toBeNull();
+  });
+});
 describe("agent update button", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -1110,6 +1137,8 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
+
 
 
 

@@ -3,6 +3,7 @@ mod application;
 mod commands;
 mod domain;
 mod hooks;
+mod hotkey;
 pub mod interface;
 mod process_scan;
 mod session_scan;
@@ -17,6 +18,7 @@ mod usage;
 use adapters::AgentAdapter;
 use commands::*;
 use hooks::*;
+use hotkey::*;
 use process_scan::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -495,6 +497,8 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // 全局快捷键：Ctrl+Shift+A 唤出 / 收起
+            spawn_toggle_hotkey(app.handle().clone());
             #[cfg(target_os = "windows")]
             {
                 use windows::Win32::Foundation::{HWND, RECT};
@@ -608,5 +612,6 @@ pub fn run() {
         }
     });
 }
+
 
 

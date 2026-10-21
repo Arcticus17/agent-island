@@ -19,6 +19,7 @@ export interface MockAgentIslandBridge extends AgentIslandBridge {
   listenerCount(): number;
   windowSizes(): readonly { width: number; height: number }[];
   savedSettings(): readonly string[];
+  emitIslandHotkey(): void;
   terminalCalls(): readonly { kind: string; [key: string]: unknown }[];
   emitTerminal(event: TerminalEvent): void;
 }
@@ -41,6 +42,7 @@ export function createMockBridge(
   let terminalSequence = 0;
   let settingsBlob: string | null = null;
   const savedSettings: string[] = [];
+  const hotkeyHandlers = new Set<() => void>();
 
   return {
     async getSnapshot() {
@@ -75,6 +77,10 @@ export function createMockBridge(
     async saveAppSettings(settings) {
       settingsBlob = settings;
       savedSettings.push(settings);
+    },
+    async listenIslandHotkey(handler) {
+      hotkeyHandlers.add(handler);
+      return () => hotkeyHandlers.delete(handler);
     },
     async terminalOpen(request) {
       terminalSequence += 1;
@@ -115,6 +121,9 @@ export function createMockBridge(
     listenerCount() {
       return handlers.size;
     },
+    emitIslandHotkey() {
+      for (const handler of hotkeyHandlers) handler();
+    },
     savedSettings() {
       return savedSettings.map((entry) => entry);
     },
@@ -123,4 +132,5 @@ export function createMockBridge(
     },
   };
 }
+
 

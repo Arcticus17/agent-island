@@ -924,6 +924,18 @@
         else stopWindowFocus = unlisten;
       }).catch(() => undefined);
     }
+    // 全局快捷键（Ctrl+Shift+A）：展开态再按一次直接隐藏，隐藏/胶囊态按一次展开
+    let stopHotkey: (() => void) | undefined;
+    if (bridge.listenIslandHotkey) {
+      void bridge.listenIslandHotkey(() => {
+        if (disposed) return;
+        if (expanded) hideIsland();
+        else expandIsland();
+      }).then((unlisten) => {
+        if (disposed) unlisten();
+        else stopHotkey = unlisten;
+      }).catch(() => undefined);
+    }
     const timer = pollIntervalMs > 0
       ? window.setInterval(() => void refreshAll(), pollIntervalMs)
       : undefined;
@@ -936,6 +948,7 @@
       stopPlacement?.();
       stopTerminalEvents?.();
       stopWindowFocus?.();
+      stopHotkey?.();
       cancelBlur();
       for (const timer of notificationTimers.values()) window.clearTimeout(timer.handle);
       notificationTimers.clear();
