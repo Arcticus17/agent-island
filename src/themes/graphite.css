@@ -1,4 +1,4 @@
-.agent-island[data-theme-style="graphite"],
+﻿.agent-island[data-theme-style="graphite"],
 .event-layer[data-theme-style="graphite"],
 .overview[data-theme-style="graphite"],
 .island-loading[data-theme-style="graphite"] {
@@ -17,9 +17,9 @@
   --border-subtle: rgba(255, 255, 255, 0.11);
   --border-event: rgba(125, 211, 252, 0.26);
   --border-log-divider: rgba(255, 255, 255, 0.06);
-  --accent-primary: #7dd3fc;
+  --accent-primary: var(--accent-activation);
   --status-idle: #94a3b8;
-  --status-working: #38bdf8;
+  --status-working: var(--accent-activation);
   --status-error: #fb7185;
   --status-done: #4ade80;
   --status-waiting: #fbbf24;
@@ -55,3 +55,5 @@
     --control-hover: rgba(0, 0, 0, 0.08);
   }
 }
+
+

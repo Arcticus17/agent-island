@@ -1,4 +1,4 @@
-.agent-island[data-theme-style="pure-black"],
+﻿.agent-island[data-theme-style="pure-black"],
 .event-layer[data-theme-style="pure-black"],
 .overview[data-theme-style="pure-black"],
 .island-loading[data-theme-style="pure-black"] {
@@ -17,9 +17,9 @@
   --border-subtle: #29292e;
   --border-event: #294453;
   --border-log-divider: #202024;
-  --accent-primary: #7dd3fc;
+  --accent-primary: var(--accent-activation);
   --status-idle: #a1a1aa;
-  --status-working: #38bdf8;
+  --status-working: var(--accent-activation);
   --status-error: #fb7185;
   --status-done: #4ade80;
   --status-waiting: #fbbf24;
@@ -36,3 +36,5 @@
   --log-role-user: #c4b5fd;
   --island-background: var(--surface-island);
 }
+
+
