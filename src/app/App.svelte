@@ -884,6 +884,9 @@
 {/if}
 
 <style>
+  /* 整个岛是深色的：把文档级 color-scheme 也设成 dark，
+     <select> 的弹层、滚动条等原生控件才会按深色渲染（否则是白底白字）。 */
+  :global(html) { color-scheme: dark; }
   .compact-header { display: flex; align-items: center; }
   .window-handle { border: 1px solid var(--island-border-subtle); border-radius: 8px; color: var(--island-text-secondary); background: var(--island-control-surface); min-height: 30px; min-width: 30px; cursor: move; touch-action: none; }
   .window-handle { margin-right: 10px; }

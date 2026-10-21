@@ -13,6 +13,11 @@
   --duration-fast: 100ms;
   --duration-normal: 180ms;
   --duration-slow: 320ms;
+  /* 原生 <select> 弹层由浏览器单独绘制：底色必须不透明、且不能依赖
+     半透明的 --control-surface，否则会变成白底白字。 */
+  --menu-surface: #14181f;
+  --menu-surface-hover: #26303d;
+  --menu-text: #f5f7fb;
 }
 
 .agent-island,
@@ -48,6 +53,9 @@
   --island-scrollbar-track: var(--scrollbar-track);
   --island-control-surface: var(--control-surface);
   --island-control-hover: var(--control-hover);
+  --island-menu-surface: var(--menu-surface);
+  --island-menu-surface-hover: var(--menu-surface-hover);
+  --island-menu-text: var(--menu-text);
   --island-event-surface: var(--surface-event);
   --island-event-border: var(--border-event);
   --island-notification-surface: var(--surface-notification);
