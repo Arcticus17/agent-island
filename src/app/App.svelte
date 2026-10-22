@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import "../themes/tokens.css";
   import "../themes/graphite.css";
@@ -12,7 +12,7 @@
   import WelcomeCard from "../components/onboarding/WelcomeCard.svelte";
   import GlobalSearch from "../components/search/GlobalSearch.svelte";
   import { markOnboarded, shouldShowOnboarding } from "../onboarding/state";
-  import { checkAppUpdate, initialAppUpdateState, type AppUpdateState } from "./release";
+  import { appUpdateFromPlugin, checkAppUpdate, initialAppUpdateState, type AppUpdateState } from "./release";
   import { buildPaletteCommands, type PaletteActionId, type PaletteCommand } from "../palette/commands";
   import LogCard from "../components/cards/LogCard.svelte";
   import SessionCard from "../components/cards/SessionCard.svelte";
@@ -716,8 +716,43 @@
   async function checkAppRelease(): Promise<void> {
     if (appUpdate.status === "checking") return;
     appUpdate = { ...appUpdate, status: "checking", message: "正在检查…" };
-    const result = await checkAppUpdate(appVersion);
-    appUpdate = result;
+    // 优先走 updater 插件（带签名校验的内置通道）；不可用时退回 GitHub release 提示
+    if (bridge.checkAppUpdate) {
+      try {
+        const info = await bridge.checkAppUpdate();
+        appUpdate = appUpdateFromPlugin(appVersion, info);
+      } catch (cause) {
+        appUpdate = {
+          ...appUpdate,
+          status: "failed",
+          message: `检查失败：${cause instanceof Error ? cause.message : String(cause)}`,
+        };
+      }
+      return;
+    }
+    appUpdate = await checkAppUpdate(appVersion);
+  }
+
+  async function installAppRelease(): Promise<void> {
+    if (!bridge.installAppUpdate || appUpdate.status === "installing") return;
+    appUpdate = { ...appUpdate, status: "installing", message: "正在下载更新…", progress: 0 };
+    try {
+      await bridge.installAppUpdate((downloaded, total) => {
+        const progress = total && total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : null;
+        appUpdate = {
+          ...appUpdate,
+          progress,
+          message: progress === null ? "正在下载更新…" : `正在下载更新… ${progress}%`,
+        };
+      });
+      appUpdate = { ...appUpdate, status: "installed", message: "安装完成，重启应用后生效", progress: 100 };
+    } catch (cause) {
+      appUpdate = {
+        ...appUpdate,
+        status: "failed",
+        message: `安装失败：${cause instanceof Error ? cause.message : String(cause)}`,
+      };
+    }
   }
 
   async function openReleasePage(): Promise<void> {
@@ -1296,8 +1331,19 @@
           <button type="button" data-testid="app-update-check" disabled={appUpdate.status === "checking" || !appVersion} onclick={() => void checkAppRelease()}>
             {appUpdate.status === "checking" ? "检查中…" : "检查更新"}
           </button>
-          {#if appUpdate.status === "available" && appUpdate.latest && bridge.openExternal}
-            <button type="button" class="primary" data-testid="app-update-open" onclick={() => void openReleasePage()}>打开下载页</button>
+          {#if (appUpdate.status === "available" || appUpdate.status === "installing") && appUpdate.latest}
+            {#if bridge.installAppUpdate}
+              <button
+                type="button"
+                class="primary"
+                data-testid="app-update-install"
+                data-progress={appUpdate.progress ?? ""}
+                disabled={appUpdate.status === "installing"}
+                onclick={() => void installAppRelease()}
+              >{appUpdate.status === "installing" ? "下载中…" : "下载并安装"}</button>
+            {:else if bridge.openExternal}
+              <button type="button" class="primary" data-testid="app-update-open" onclick={() => void openReleasePage()}>打开下载页</button>
+            {/if}
           {/if}
           {#if appUpdate.message}
             <span class="about-message" data-testid="app-update-message" role="status">{appUpdate.message}</span>
@@ -1644,6 +1690,8 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
+
 
 
 

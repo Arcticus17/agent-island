@@ -367,6 +367,10 @@ export interface AgentIslandBridge {
   saveAppSettings?(settings: string): Promise<void>;
   /** 应用自身版本（用于"关于/更新"提示）。 */
   getAppVersion?(): Promise<string>;
+  /** 通过 Tauri updater 检查（签名校验的内置更新通道）；null 表示已是最新。 */
+  checkAppUpdate?(): Promise<AppUpdateInfo | null>;
+  /** 下载并安装更新；安装完成后应用会退出。 */
+  installAppUpdate?(onProgress?: (downloaded: number, total: number | null) => void): Promise<void>;
   /** 跨会话搜索：在本地会话文件里找关键字。 */
   searchSessions?(query: string, limit?: number): Promise<SessionSearchHit[]>;
   /** 在资源管理器里定位会话文件。 */
@@ -380,6 +384,11 @@ export interface AgentIslandBridge {
   addApprovalRule?(tool: string, pattern: string): Promise<ApprovalRule[]>;
   removeApprovalRule?(id: string): Promise<ApprovalRule[]>;
   listApprovalAudit?(limit?: number): Promise<ApprovalAuditEntry[]>;
+}
+
+export interface AppUpdateInfo {
+  version: string;
+  notes: string;
 }
 
 export interface SessionSearchHit {
@@ -424,5 +433,6 @@ export interface TerminalOpenRequest {
 export type TerminalEvent =
   | { kind: "data"; id: string; data: string }
   | { kind: "exit"; id: string };
+
 
 

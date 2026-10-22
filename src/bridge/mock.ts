@@ -1,4 +1,4 @@
-import {
+﻿import {
   assertSupportedSnapshot,
   type AgentCommand,
   type AgentIslandBridge,
@@ -13,6 +13,12 @@ export interface MockBridgeOptions {
   cliVersion?: string;
   /** 应用自身版本（getAppVersion） */
   appVersion?: string;
+  /** updater 插件返回的可用版本；null/缺省表示已是最新 */
+  appUpdateInfo?: { version: string; notes: string } | null;
+  /** installAppUpdate 是否失败（用于测错误分支） */
+  installFails?: boolean;
+  /** 模拟"宿主没有 updater 插件"，用来覆盖退回到 GitHub release 提示的路径 */
+  disableUpdater?: boolean;
   /** searchSessions 返回的假数据 */
   searchHits?: Array<{ agent: string; session: string; role: string; snippet: string; at_ms: number; path: string }>;
 }
@@ -55,7 +61,7 @@ export function createMockBridge(
   const approvalRules: Array<{ id: string; tool: string; pattern: string }> = [];
   const approvalAudit: Array<{ at_ms: number; id: string; tool: string; command: string; rule: string; decision: string }> = [];
 
-  return {
+  const bridge: MockAgentIslandBridge = {
     async getSnapshot() {
       if (snapshotQueue.length === 0) throw new Error("mock_snapshot_queue_empty");
       const snapshot = snapshotQueue.shift();
@@ -91,6 +97,14 @@ export function createMockBridge(
     },
     async getAppVersion() {
       return options.appVersion ?? "1.9.0";
+    },
+    async checkAppUpdate() {
+      return options.appUpdateInfo ?? null;
+    },
+    async installAppUpdate(onProgress) {
+      if (options.installFails) throw new Error("download failed");
+      onProgress?.(50, 100);
+      onProgress?.(100, 100);
     },
     async searchSessions(query, limit = 20) {
       const needle = query.trim().toLowerCase();
@@ -179,7 +193,16 @@ export function createMockBridge(
       return resizeLog.map(clone);
     },
   };
+  if (options.disableUpdater) {
+    // 模拟没有 updater 插件的宿主：界面应退回"打开下载页"
+    delete (bridge as Partial<MockAgentIslandBridge>).checkAppUpdate;
+    delete (bridge as Partial<MockAgentIslandBridge>).installAppUpdate;
+  }
+  return bridge;
 }
+
+
+
 
 
 

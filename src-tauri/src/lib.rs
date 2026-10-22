@@ -1,4 +1,4 @@
-﻿mod adapters;
+mod adapters;
 mod approval_rules;
 mod application;
 mod commands;
@@ -442,6 +442,7 @@ pub fn run() {
     let hook_enabled = hook_cfg.as_ref().map(|c| c.enabled).unwrap_or(false);
     let hook_token = hook_cfg.map(|c| c.token).unwrap_or_default();
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             sys: Mutex::new(System::new_all()),
             session: Mutex::new(SessionState {

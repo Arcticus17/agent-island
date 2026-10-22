@@ -1952,5 +1952,25 @@ fn session_scan_meets_the_performance_budget() {
 
     fs::remove_dir_all(root).unwrap();
 }
-
-
+#[test]
+fn tauri_config_wires_the_signed_updater() {
+    // 自动更新依赖三件事同时成立：产出签名产物、配置公钥、配置清单地址
+    let raw = include_str!("../tauri.conf.json");
+    let config: serde_json::Value =
+        serde_json::from_str(raw).expect("tauri.conf.json 必须是合法 JSON");
+    assert_eq!(
+        config["bundle"]["createUpdaterArtifacts"],
+        serde_json::Value::Bool(true),
+        "必须产出签名更新包"
+    );
+    let updater = &config["plugins"]["updater"];
+    let pubkey = updater["pubkey"].as_str().unwrap_or("");
+    assert!(pubkey.len() > 40, "公钥缺失或太短: {pubkey}");
+    let endpoints = updater["endpoints"].as_array().expect("endpoints 必须是数组");
+    assert!(!endpoints.is_empty(), "至少要有一个更新清单地址");
+    let endpoint = endpoints[0].as_str().unwrap_or("");
+    assert!(
+        endpoint.starts_with("https://") && endpoint.ends_with("latest.json"),
+        "清单地址必须是 https 且指向 latest.json: {endpoint}"
+    );
+}

@@ -386,7 +386,8 @@ describe("app version and update check", () => {
   it("shows the version, reports a newer release and opens the download page", async () => {
     localStorage.clear();
     localStorage.setItem("agent-island-onboarded", "1");
-    const { target, bridge } = await renderIsland([snapshot(100)]);
+    // 宿主没有 updater 插件时退回 GitHub release 提示
+    const { target, bridge } = await renderIsland([snapshot(100)], { mockOptions: { disableUpdater: true } });
     await waitFor(() => target.querySelector('[data-testid="app-version"]')?.textContent === "v1.9.0");
 
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
@@ -438,6 +439,38 @@ describe("agent strip keyboard navigation", () => {
 
     buttons()[buttons().length - 1].dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
     await waitFor(() => document.activeElement === buttons()[0]);
+  });
+});
+describe("signed app update", () => {
+  it("installs a signed update through the updater plugin", async () => {
+    localStorage.clear();
+    localStorage.setItem("agent-island-onboarded", "1");
+    const { target } = await renderIsland([snapshot(100)], {
+      mockOptions: { appUpdateInfo: { version: "1.10.0", notes: "notes" } },
+    });
+    await waitFor(() => target.querySelector('[data-testid="app-version"]')?.textContent === "v1.9.0");
+    target.querySelector<HTMLButtonElement>('[data-testid="app-update-check"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="app-update-message"]')?.textContent?.includes("1.10.0") === true);
+
+    const install = target.querySelector<HTMLButtonElement>('[data-testid="app-update-install"]');
+    expect(install).not.toBeNull();
+    install!.click();
+    await waitFor(() => target.querySelector('[data-testid="app-update-message"]')?.textContent === "安装完成，重启应用后生效");
+    // 安装完成后不再显示安装按钮
+    expect(target.querySelector('[data-testid="app-update-install"]')).toBeNull();
+  });
+
+  it("reports install failures instead of pretending success", async () => {
+    localStorage.clear();
+    localStorage.setItem("agent-island-onboarded", "1");
+    const { target } = await renderIsland([snapshot(100)], {
+      mockOptions: { appUpdateInfo: { version: "1.10.0", notes: "" }, installFails: true },
+    });
+    await waitFor(() => target.querySelector('[data-testid="app-version"]')?.textContent === "v1.9.0");
+    target.querySelector<HTMLButtonElement>('[data-testid="app-update-check"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="app-update-install"]') !== null);
+    target.querySelector<HTMLButtonElement>('[data-testid="app-update-install"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="app-update-message"]')?.textContent?.startsWith("安装失败") === true);
   });
 });
 describe("global session search", () => {
@@ -577,6 +610,9 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
+
+
 
 
 

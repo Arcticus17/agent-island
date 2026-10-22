@@ -21,6 +21,7 @@ import {
   type AgentIslandBridge,
   type AgentViewSnapshot,
   type ApprovalAuditEntry,
+  type AppUpdateInfo,
   type ApprovalRule,
   type SessionSearchHit,
   type CliVersionProbe,
@@ -252,6 +253,30 @@ export function createTauriBridge(): AgentIslandBridge {
       const { getVersion } = await import("@tauri-apps/api/app");
       return await getVersion();
     },
+    async checkAppUpdate() {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const update = await check();
+      if (!update) return null;
+      return { version: update.version, notes: update.body ?? "" };
+    },
+    async installAppUpdate(onProgress) {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const update = await check();
+      if (!update) return;
+      let downloaded = 0;
+      let total: number | null = null;
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? null;
+          onProgress?.(0, total);
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          onProgress?.(downloaded, total);
+        } else if (event.event === "Finished") {
+          onProgress?.(total ?? downloaded, total);
+        }
+      });
+    },
     async searchSessions(query, limit) {
       return await invoke<SessionSearchHit[]>("search_sessions_command", { query, limit: limit ?? null });
     },
@@ -322,6 +347,7 @@ export function createTauriBridge(): AgentIslandBridge {
 }
 
 export const tauriBridge = createTauriBridge();
+
 
 
 

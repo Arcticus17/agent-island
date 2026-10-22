@@ -10,6 +10,7 @@
     "beforeBuildCommand": "npm run build"
   },
   "bundle": {
+    "createUpdaterArtifacts": true,
     "active": true,
     "targets": ["nsis", "msi"],
     "icon": ["icons/icon.ico"],
@@ -50,6 +51,16 @@
     "security": {
       "csp": "default-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://registry.npmjs.org https://api.github.com ws://localhost:1420 http://localhost:1420"
     }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Arcticus17/agent-island/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI0OENFQTQ5NkMyMkYzOEYKUldTUDh5SnNTZXFNdEx6SUo1eXNjK2ZpTGNvckpzYm44S2FQSGN6STgvbVliQXRsSStJdVZiT3AK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
-

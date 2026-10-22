@@ -20,10 +20,30 @@ export interface ReleaseInfo {
 }
 
 export interface AppUpdateState {
-  status: "idle" | "checking" | "available" | "latest" | "failed";
+  status: "idle" | "checking" | "available" | "latest" | "failed" | "installing" | "installed";
   current: string;
   latest: ReleaseInfo | null;
   message: string;
+  /** 下载进度百分比；null 表示总大小未知 */
+  progress?: number | null;
+}
+
+export interface AppUpdateInfo {
+  version: string;
+  notes: string;
+}
+
+/** 把 updater 插件的检查结果转成界面状态（null 表示已是最新）。 */
+export function appUpdateFromPlugin(current: string, info: AppUpdateInfo | null): AppUpdateState {
+  if (!info) {
+    return { status: "latest", current, latest: null, message: "已是最新版本（已校验签名）" };
+  }
+  return {
+    status: "available",
+    current,
+    latest: { version: info.version, url: "", notes: info.notes },
+    message: `有新版本 v${info.version}（可一键安装）`,
+  };
 }
 
 export function initialAppUpdateState(current: string): AppUpdateState {
@@ -104,4 +124,6 @@ export async function checkAppUpdate(
     clearTimeout(timer);
   }
 }
+
+
 

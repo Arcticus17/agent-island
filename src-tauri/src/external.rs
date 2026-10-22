@@ -1,9 +1,7 @@
-//! 打开外部链接（自更新提示里的"下载页"）。
+﻿//! 打开外部链接（自更新提示里的"下载页"）。
 //!
 //! 只允许 https，且做最小校验：这是应用里唯一能把任意字符串交给系统的入口，
 //! 不能让它变成"用任意参数启动任意程序"的通道。
-
-use crate::*;
 
 /// 允许打开的 URL：必须是 https、有主机名、没有控制字符。
 pub(crate) fn validate_external_url(url: &str) -> Result<(), String> {
@@ -72,3 +70,4 @@ mod tests {
         assert!(validate_external_url(&format!("https://example.com/{}", "a".repeat(2_100))).is_err());
     }
 }
+

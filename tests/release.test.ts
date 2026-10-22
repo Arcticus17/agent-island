@@ -1,6 +1,7 @@
 ﻿import { describe, expect, it } from "vitest";
 
 import {
+  appUpdateFromPlugin,
   checkAppUpdate,
   decideAppUpdate,
   initialAppUpdateState,
@@ -45,6 +46,14 @@ describe("app update check", () => {
     expect(initialAppUpdateState("1.9.0")).toEqual({ status: "idle", current: "1.9.0", latest: null, message: "" });
   });
 
+  it("maps the updater plugin result to UI state", () => {
+    expect(appUpdateFromPlugin("1.9.0", null)).toMatchObject({ status: "latest", message: "已是最新版本（已校验签名）" });
+    const available = appUpdateFromPlugin("1.9.0", { version: "1.10.0", notes: "fixes" });
+    expect(available.status).toBe("available");
+    expect(available.latest).toEqual({ version: "1.10.0", url: "", notes: "fixes" });
+    expect(available.message).toContain("1.10.0");
+  });
+
   it("turns network and http failures into failed states", async () => {
     const networkError = await checkAppUpdate("1.9.0", (async () => {
       throw new Error("offline");
@@ -85,4 +94,5 @@ describe("app update check", () => {
     expect(state.latest?.version).toBe("1.10.0");
   });
 });
+
 
