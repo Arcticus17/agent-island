@@ -124,6 +124,22 @@ export async function checkAppUpdate(
     clearTimeout(timer);
   }
 }
-
-
-
+/**
+ * 给"外部调用"加超时：插件检查在清单 404/网络挂起时不会自己返回，
+ * 不设超时按钮就会永远停在"检查中…"。
+ */
+export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}

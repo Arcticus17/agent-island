@@ -2,6 +2,7 @@
 
 import {
   appUpdateFromPlugin,
+  withTimeout,
   checkAppUpdate,
   decideAppUpdate,
   initialAppUpdateState,
@@ -44,6 +45,13 @@ describe("app update check", () => {
 
   it("starts idle with the current version", () => {
     expect(initialAppUpdateState("1.9.0")).toEqual({ status: "idle", current: "1.9.0", latest: null, message: "" });
+  });
+
+  it("times out a hanging updater check", async () => {
+    const hanging = new Promise<string>(() => undefined);
+    await expect(withTimeout(hanging, 20, "检查超时")).rejects.toThrow("检查超时");
+    await expect(withTimeout(Promise.resolve("ok"), 20, "检查超时")).resolves.toBe("ok");
+    await expect(withTimeout(Promise.reject(new Error("boom")), 20, "检查超时")).rejects.toThrow("boom");
   });
 
   it("maps the updater plugin result to UI state", () => {
@@ -94,5 +102,6 @@ describe("app update check", () => {
     expect(state.latest?.version).toBe("1.10.0");
   });
 });
+
 
 

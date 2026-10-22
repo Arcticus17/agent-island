@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import "../themes/tokens.css";
   import "../themes/graphite.css";
@@ -12,7 +12,7 @@
   import WelcomeCard from "../components/onboarding/WelcomeCard.svelte";
   import GlobalSearch from "../components/search/GlobalSearch.svelte";
   import { markOnboarded, shouldShowOnboarding } from "../onboarding/state";
-  import { appUpdateFromPlugin, checkAppUpdate, initialAppUpdateState, type AppUpdateState } from "./release";
+  import { appUpdateFromPlugin, checkAppUpdate, initialAppUpdateState, withTimeout, type AppUpdateState } from "./release";
   import { buildPaletteCommands, type PaletteActionId, type PaletteCommand } from "../palette/commands";
   import LogCard from "../components/cards/LogCard.svelte";
   import SessionCard from "../components/cards/SessionCard.svelte";
@@ -719,7 +719,7 @@
     // 优先走 updater 插件（带签名校验的内置通道）；不可用时退回 GitHub release 提示
     if (bridge.checkAppUpdate) {
       try {
-        const info = await bridge.checkAppUpdate();
+        const info = await withTimeout(bridge.checkAppUpdate(), 10_000, "检查超时：网络似乎不可达");
         appUpdate = appUpdateFromPlugin(appVersion, info);
       } catch (cause) {
         appUpdate = {
@@ -1690,6 +1690,7 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
 
 
 

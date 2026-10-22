@@ -59,6 +59,7 @@ npx tauri signer generate -w ~/.tauri/agent-island.key --ci
 | --- | --- |
 | Rust（1 条） | `tauri_config_wires_the_signed_updater`：`createUpdaterArtifacts=true`、公钥长度足够、endpoint 是 https 且以 `latest.json` 结尾 |
 | 单测（1 条） | `appUpdateFromPlugin`：null → 已是最新；有版本 → available 且文案含版本号 |
+| 单测（1 条） | `withTimeout`：挂起 → 超时、正常值透传、原生错误透传 |
 | 浏览器（2 条） | 签名通道：检查 → 「下载并安装」→ 完成提示、安装按钮消失；安装失败 → 文案以「安装失败」开头。另有 1 条覆盖插件缺席时退回「打开下载页」 |
 
 本地还跑了一次**签名发布构建**（见下节结论），确认 `createUpdaterArtifacts` 能产出 `.sig`。
@@ -88,4 +89,15 @@ npx tauri build --bundles nsis -- --no-default-features
 - 真机上的"下载并安装"要等第一个**已签名**的 release 出现才能完整验证（本地只有安装包与签名，没有可拉取的 `latest.json`）；
 - 安装后目前提示"重启应用后生效"，没有自动 relaunch（需要 `tauri-plugin-process` 的 `relaunch`，可以下一步加）；
 - 本地这把密钥的口令是 `agentisland-dev`（**只用于本机构建**）；正式发布请另外生成密钥、设置强口令，私钥与口令都进 CI Secrets，公钥写进配置。
+## 七、实机发现：清单不存在时检查会"冻住"
+
+发布 `latest.json` 之前先点了「检查更新」，界面停在「检查中…」十几秒没有反应。
+原因：清单地址（`releases/latest/download/latest.json`）此刻不存在，请求被重定向后挂起，
+而 updater 插件的 `check()` 自己不超时。
+
+修法：给插件检查套 10 秒超时（`withTimeout`），超时后显示
+`检查失败：检查超时：网络似乎不可达`。实机已确认（截图 `mac-island-analysis/updater-timeout-live.png`）。
+单测覆盖了"超时 / 正常 / 原生 reject"三条路径。
+
+这也说明：**在发布第一个签名版本之前**，检查更新必然失败——这是预期行为，不是 bug。
 
