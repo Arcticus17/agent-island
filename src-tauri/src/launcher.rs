@@ -1,4 +1,4 @@
-//! 启动者绑定（Launcher binding）的判定核心。
+﻿//! 启动者绑定（Launcher binding）的判定核心。
 //!
 //! 岛内置终端用 `portable-pty` 启动 shell，shell 再启动 Agent。于是：
 //! 从 Agent 进程沿父进程链向上走，若命中某个 PTY 根 pid，就能**确定**这个 Agent 是
@@ -147,4 +147,68 @@ mod tests {
         assert_eq!(SessionBinding::default(), SessionBinding::Inferred);
     }
 }
+/// 保留"启动之后才有动静"的会话候选。
+///
+/// 岛内启动 Agent 时我们知道启动时刻；比它更早的会话一定不是这次产生的，
+/// 把它们排除掉，能消掉"挑到上一次的旧会话"这类错误归属。
+/// 如果一个都不剩（比如 Agent 还没写日志），就退回原列表——不制造空状态。
+pub(crate) fn keep_after_launch<'a, T>(
+    items: &'a [T],
+    launched_at_ms: u64,
+    at_ms: impl Fn(&T) -> u64,
+) -> Vec<&'a T> {
+    let kept: Vec<&T> = items.iter().filter(|item| at_ms(item) >= launched_at_ms).collect();
+    if kept.is_empty() {
+        items.iter().collect()
+    } else {
+        kept
+    }
+}
 
+/// 终端里跑的程序是否对应某个 Agent（用 agent_id/keyword 比对）。
+pub(crate) fn agent_for_program(program: &str, agent_ids: &[String]) -> Option<String> {
+    let base = program.rsplit(['\\', '/']).next().unwrap_or(program).to_lowercase();
+    let base = base.trim_end_matches(".exe").trim_end_matches(".cmd").trim_end_matches(".bat");
+    agent_ids
+        .iter()
+        .find(|id| id.eq_ignore_ascii_case(base))
+        .cloned()
+}
+#[cfg(test)]
+mod launch_filter_tests {
+    use super::*;
+
+    #[derive(Clone, Copy)]
+    struct Candidate {
+        at: u64,
+    }
+
+    fn at(candidate: &Candidate) -> u64 {
+        candidate.at
+    }
+
+    #[test]
+    fn keeps_only_sessions_touched_after_launch() {
+        let items = [Candidate { at: 100 }, Candidate { at: 900 }, Candidate { at: 1_000 }];
+        let kept = keep_after_launch(&items, 500, at);
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|candidate| candidate.at >= 500));
+    }
+
+    #[test]
+    fn falls_back_to_everything_when_nothing_is_new() {
+        let items = [Candidate { at: 10 }, Candidate { at: 20 }];
+        let kept = keep_after_launch(&items, 5_000, at);
+        assert_eq!(kept.len(), 2, "没有新会话时不能清空候选");
+        assert!(keep_after_launch::<Candidate>(&[], 1, at).is_empty());
+    }
+
+    #[test]
+    fn maps_terminal_programs_to_agents() {
+        let ids = vec!["claude".to_string(), "codex".to_string(), "opencode".to_string()];
+        assert_eq!(agent_for_program("claude", &ids).as_deref(), Some("claude"));
+        assert_eq!(agent_for_program("C:\\tools\\Codex.exe", &ids).as_deref(), Some("codex"));
+        assert_eq!(agent_for_program("cmd", &ids), None);
+        assert_eq!(agent_for_program("powershell.exe", &ids), None);
+    }
+}

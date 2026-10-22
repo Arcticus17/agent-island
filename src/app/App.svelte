@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import "../themes/tokens.css";
   import "../themes/graphite.css";
@@ -1454,6 +1454,7 @@
               exited={terminalExited}
               error={terminalError}
               maximized={terminalMax}
+              binding={selectedAgent?.binding ?? "inferred"}
               onToggleMax={() => void toggleTerminalMax()}
               onStart={(program) => void startTerminal(program)}
               onStop={() => void stopTerminal()}
@@ -1726,6 +1727,7 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
 
 
 

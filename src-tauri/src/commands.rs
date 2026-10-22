@@ -166,9 +166,21 @@ pub(crate) fn collect_agent_data(
     let mut cache = session.cache.take();
     // 岛内终端的 shell pid：Agent 作为它们的后代即可被权威识别
     let pty_roots: std::collections::HashSet<u32> = state.terminals.lock_recover().values().filter_map(|terminal| terminal.pid).collect();
+    // 岛内启动过哪些 Agent、各自什么时候启动的（用于只认"启动之后"的会话）
+    let agent_ids: Vec<String> = agent_defs()
+        .iter()
+        .map(|def| if def.log_kind.is_empty() { def.keyword.clone() } else { def.log_kind.clone() })
+        .collect();
+    let mut launch_facts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for terminal in state.terminals.lock_recover().values() {
+        if let Some(agent_id) = launcher::agent_for_program(&terminal.program, &agent_ids) {
+            let entry = launch_facts.entry(agent_id).or_insert(terminal.started_at_ms);
+            *entry = (*entry).max(terminal.started_at_ms);
+        }
+    }
     let (agents, snapshot, _diagnostics, scan_result) =
         collect_cached_with(&mut cache, Instant::now, || {
-            scan_agents(&mut sys, &mut session, &pty_roots)
+            scan_agents(&mut sys, &mut session, &pty_roots, &launch_facts)
         });
     session.cache = cache;
     if let Some((changed, completed_at)) = scan_result {

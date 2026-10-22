@@ -1,4 +1,4 @@
-import { mount, unmount } from "svelte";
+﻿import { mount, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 
@@ -1157,6 +1157,29 @@ describe("pixel mascot motion", () => {
     expect(mascot!.classList.contains("resting")).toBe(resting);
   });
 });
+describe("terminal launch binding", () => {
+  it("marks the terminal as bound when the agent was launched from the island", async () => {
+    const bound = snapshot(100);
+    (bound.agents[0] as { binding?: string }).binding = "launched";
+    const harness = createBridgeHarness([bound]);
+    const target = await renderIsland(harness);
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-toggle"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="terminal-panel"]') !== null);
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
+    const badge = await waitForElement(target, '[data-testid="terminal-binding"]');
+    expect(badge.textContent).toContain("已绑定");
+    expect(badge.getAttribute("data-binding")).toBe("launched");
+
+    // 不是岛内启动时不显示
+    const inferredHarness = createBridgeHarness([snapshot(100)]);
+    const inferredTarget = await renderIsland(inferredHarness);
+    inferredTarget.querySelector<HTMLButtonElement>('[data-testid="terminal-toggle"]')!.click();
+    await waitFor(() => inferredTarget.querySelector('[data-testid="terminal-panel"]') !== null);
+    await waitFor(() => inferredHarness.terminalCalls().some((call) => call.kind === "open"));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(inferredTarget.querySelector('[data-testid="terminal-binding"]')).toBeNull();
+  });
+});
 describe("island built-in terminal", () => {
   it("opens a PTY for the selected agent and closes it when toggled off", async () => {
     const harness = createBridgeHarness([snapshot(100)]);
@@ -1260,6 +1283,7 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
 
 
 

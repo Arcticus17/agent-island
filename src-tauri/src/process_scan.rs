@@ -1,4 +1,4 @@
-﻿//! Process matching, runtime facts, and status projection onto snapshots.
+//! Process matching, runtime facts, and status projection onto snapshots.
 
 use crate::*;
 
@@ -295,6 +295,7 @@ pub(crate) fn scan_agents(
     sys: &mut System,
     session: &mut SessionState,
     pty_roots: &std::collections::HashSet<u32>,
+    launch_facts: &std::collections::HashMap<String, u64>,
 ) -> (
     Vec<AgentInfo>,
     interface::snapshot::AgentViewSnapshot,
@@ -353,6 +354,17 @@ pub(crate) fn scan_agents(
             Some(&process_fact.identity),
             &mut session.index_cache,
         );
+        // 岛内启动过这个 Agent：只保留启动之后有动静的会话，避免挑到上一次的旧会话
+        if let Some(&launched_at) = launch_facts.get(agent_id) {
+            let kept: Vec<interface::snapshot::SessionCandidate> =
+                launcher::keep_after_launch(&session_scan.candidates, launched_at, |candidate| {
+                    candidate.identity.last_event_at_ms
+                })
+                .into_iter()
+                .cloned()
+                .collect();
+            session_scan.candidates = kept;
+        }
         if session_scan.acquisition == AcquisitionCompleteness::Incomplete {
             acquisition_issues.push(
                 session_scan
@@ -728,6 +740,7 @@ pub(crate) fn update_terminal_statistics_from_snapshot(
     }
     changed
 }
+
 
 
 

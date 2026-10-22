@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
@@ -14,6 +14,7 @@
     exited = false,
     error = null,
     maximized = false,
+    binding = "inferred",
     onToggleMax,
     onStart,
     onStop,
@@ -30,6 +31,8 @@
     exited?: boolean;
     error?: string | null;
     maximized?: boolean;
+    /** 选中 Agent 的会话身份来源：launched/hooked 时显示"已绑定" */
+    binding?: "launched" | "hooked" | "inferred";
     onToggleMax?: () => void;
     onStart?: (program: string) => void;
     onStop?: () => void;
@@ -170,6 +173,9 @@
       {:else if phase === "error"}出错
       {:else}未启动{/if}
     </span>
+    {#if binding !== "inferred" && program}
+      <span class="binding" data-testid="terminal-binding" data-binding={binding} title="这个终端里的 Agent 由岛内启动，写出的会话会自动关联">已绑定 · 会话自动关联</span>
+    {/if}
     <div class="actions">
       {#if agentCli}
         <button type="button" data-testid="terminal-start-agent" onclick={() => onStart?.(agentCli)}>{agentCli}</button>
@@ -215,6 +221,7 @@
   .phase { color: var(--island-text-tertiary); font-size: 10px; }
   .phase[data-phase="running"] { color: var(--island-status-done); }
   .phase[data-phase="error"] { color: var(--island-status-error); }
+  .binding { padding: 1px 7px; border: 1px solid var(--island-accent-primary); border-radius: 999px; color: var(--island-accent-primary); font-size: 9px; font-weight: 700; white-space: nowrap; }
   .actions { margin-left: auto; display: flex; gap: 6px; }
   .actions button { min-height: 26px; padding: 3px 9px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 11px; cursor: pointer; }
   .actions button:hover { color: var(--island-text-primary); background: var(--island-control-hover); }
@@ -234,3 +241,4 @@
   .terminal-panel:has(.screen.maximized) { gap: 8px; }
   .error { margin: 0; color: var(--island-refresh-error-text); font-size: 11px; overflow-wrap: anywhere; }
 </style>
+
