@@ -123,6 +123,9 @@
   let diagnosticStatus = $state<"loading" | "ready" | "failed">("loading");
   /** 命令面板（Ctrl+K） */
   let paletteOpen = $state(false);
+  /** 诊断抽屉是否展开：只有展开时才每次轮询都去取诊断 */
+  let diagnosticsOpen = $state(false);
+  let diagnosticsLoadedOnce = false;
   /** 固定盯住的 Agent（重启后仍然生效） */
   let pinnedAgentId = $state<string | null>(storedPinnedAgent((key) => localStorage.getItem(key)));
   let diagnosticRequest = 0;
@@ -366,7 +369,11 @@
 
   async function refreshAll(): Promise<void> {
     await store.refresh();
-    if (!disposed) void loadDiagnostics();
+    // 首轮取一次（摘要徽标要用），之后只在抽屉展开时才跟着刷新
+    if (!disposed && (diagnosticsOpen || !diagnosticsLoadedOnce)) {
+      diagnosticsLoadedOnce = true;
+      void loadDiagnostics();
+    }
   }
 
   async function syncWindowSize(): Promise<void> {
@@ -1214,7 +1221,7 @@
             ><span class={`mini-dot status-${agent.display_status}`} aria-hidden="true"></span><span class="sensitive">{agent.name}</span></button>
           {/each}
         </nav>
-        <details class="diagnostics-drawer" data-testid="diagnostics-drawer">
+        <details class="diagnostics-drawer" data-testid="diagnostics-drawer" ontoggle={(event) => { diagnosticsOpen = event.currentTarget.open; if (diagnosticsOpen) void loadDiagnostics(); }}>
           <summary>
             <span>诊断信息</span>
             {#if agentDiagnosticIssues.length > 0}<span class="drawer-badge" data-testid="diagnostics-count">{agentDiagnosticIssues.length} 项提示</span>{:else}<span class="drawer-muted">无异常</span>{/if}
@@ -1561,5 +1568,9 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
+
+
+
 
 

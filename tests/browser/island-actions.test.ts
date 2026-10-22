@@ -563,12 +563,12 @@ describe("Agent Island commands", () => {
     expect(target.textContent).not.toContain("pre_stop_diagnostic");
   });
 
-  it("keeps diagnostics polling single-flight when a request does not settle", async () => {
+  it("only refreshes diagnostics while the drawer is open, single-flight", async () => {
     const firstDiagnostics = deferred<DiagnosticsResponse>();
     const trailingDiagnostics = deferred<DiagnosticsResponse>();
     let diagnosticCalls = 0;
     const harness = createBridgeHarness([snapshot(100)]);
-    await renderIsland(harness, {
+    const target = await renderIsland(harness, {
       pollIntervalMs: 20,
       diagnosticsBridge: diagnosticsBridgeFrom(() => {
         diagnosticCalls += 1;
@@ -578,12 +578,20 @@ describe("Agent Island commands", () => {
       }),
     });
 
+    // 首轮取一次（徽标要用）；抽屉收起时不再跟着轮询
     await waitFor(() => diagnosticCalls === 1);
     await new Promise((resolve) => setTimeout(resolve, 90));
     expect(harness.snapshotCalls()).toBeGreaterThan(1);
     expect(diagnosticCalls).toBe(1);
 
     firstDiagnostics.resolve({ generated_at_ms: 100, issues: [], sources: [] });
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    expect(diagnosticCalls).toBe(1);
+
+    // 展开抽屉 → 立刻补一次，并且与进行中的请求单飞合并
+    const drawer = target.querySelector<HTMLDetailsElement>('[data-testid="diagnostics-drawer"]')!;
+    drawer.open = true;
+    drawer.dispatchEvent(new Event("toggle"));
     await waitFor(() => diagnosticCalls === 2);
     await new Promise((resolve) => setTimeout(resolve, 70));
     expect(diagnosticCalls).toBe(2);
