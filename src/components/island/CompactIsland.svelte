@@ -8,6 +8,7 @@
     onToggle,
     iconStyle = "pixel",
     pendingApprovals = false,
+    binding = "inferred",
   }: {
     agent: AgentView | null;
     expanded: boolean;
@@ -16,6 +17,8 @@
     iconStyle?: "dot" | "pixel";
     /** 有审批在等：胶囊也要显性提示，不能只靠展开面板 */
     pendingApprovals?: boolean;
+    /** 会话身份来源：launched（岛内终端）/ hooked（hooks）/ inferred（推断） */
+    binding?: "launched" | "hooked" | "inferred";
   } = $props();
 
   const labels: Record<DisplayStatus, string> = { stopped: "已停止", idle: "空闲", working: "工作中", done: "已完成", error: "错误", waiting: "等待确认" };
@@ -55,6 +58,9 @@
       <span class="badge" data-testid="compact-badge" role="img" aria-label={badge.title} title={badge.title}>{badge.text}</span>
     {/if}
   {/if}
+  {#if binding !== "inferred"}
+    <span class="binding" data-testid="agent-binding" data-binding={binding} title={binding === "hooked" ? "会话身份由 hooks 自报" : "该 Agent 由岛内终端启动，身份可确认"}>{binding === "hooked" ? "hooks" : "岛内启动"}</span>
+  {/if}
   <span class="status" role="status" data-testid="compact-status">{pendingApprovals ? "待确认" : labels[status]}</span>
   <span class="chevron" aria-hidden="true">{expanded ? "⌃" : "⌄"}</span>
 </button>
@@ -67,6 +73,7 @@
   strong, .session { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   strong { font-size: 13px; letter-spacing: .01em; }
   .session { color: var(--island-text-secondary); font-size: 11px; }
+  .binding { flex: 0 0 auto; padding: 1px 6px; border: 1px solid var(--island-accent-primary); border-radius: 999px; color: var(--island-accent-primary); font-size: 9px; font-weight: 700; }
   .status { color: var(--island-status-current); font-size: 12px; font-weight: 700; }
   .chevron { color: var(--island-text-secondary); font-size: 15px; }
 
@@ -85,4 +92,5 @@
 
   @media (max-width: 300px) { .compact { grid-template-columns: auto minmax(0, 1fr) auto; } .status { display: none; } }
 </style>
+
 

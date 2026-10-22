@@ -1322,7 +1322,7 @@
       <div class="idle-notch" data-testid="idle-notch" data-pending={hasPendingApprovals ? "true" : "false"} aria-hidden="true"><span class="idle-notch-dot"></span></div>
     {:else}
     <div class="compact-header">
-      <CompactIsland agent={selectedAgent} {expanded} onToggle={toggleExpanded} {iconStyle} pendingApprovals={hasPendingApprovals} />
+      <CompactIsland agent={selectedAgent} {expanded} onToggle={toggleExpanded} {iconStyle} pendingApprovals={hasPendingApprovals} binding={selectedAgent?.binding ?? "inferred"} />
       {#if bridge.startWindowDrag}<button class="window-handle" aria-label="拖动窗口" title="按住并拖动窗口" onpointerdown={(event) => { if (event.button === 0) { event.preventDefault(); void windowAction(() => bridge.startWindowDrag!()); } }}>⠿</button>{/if}
     </div>
     {/if}
@@ -1726,6 +1726,7 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
 
 
 

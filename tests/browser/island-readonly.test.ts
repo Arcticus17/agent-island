@@ -513,6 +513,23 @@ describe("global session search", () => {
     await waitFor(() => target.querySelector('[data-testid="searched-session-note"]') === null);
   });
 });
+describe("agent binding badge", () => {
+  it("marks island-launched agents in the header and leaves inferred ones unmarked", async () => {
+    localStorage.clear();
+    localStorage.setItem("agent-island-onboarded", "1");
+    const launched = snapshot(100);
+    (launched.agents[0] as { binding?: string }).binding = "launched";
+    const first = await renderIsland([launched]);
+    const badge = await waitForElementValue(first.target, '[data-testid="agent-binding"]');
+    expect(badge.textContent).toBe("岛内启动");
+    expect(badge.getAttribute("data-binding")).toBe("launched");
+
+    const inferred = await renderIsland([snapshot(100)]);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(inferred.target.querySelector('[data-testid="agent-binding"]')).toBeNull();
+    localStorage.clear();
+  });
+});
 describe("session binding badge", () => {
   it("marks launched sessions as confirmed and inferred ones as guesses", async () => {
     localStorage.clear();
@@ -646,6 +663,7 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
 
 
 
