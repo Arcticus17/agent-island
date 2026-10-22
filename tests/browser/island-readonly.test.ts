@@ -474,14 +474,20 @@ describe("signed app update", () => {
   });
 });
 describe("global session search", () => {
-  it("searches across sessions and reveals the matched file", async () => {
+  it("searches across sessions and opens the matched session", async () => {
     localStorage.clear();
     localStorage.setItem("agent-island-onboarded", "1");
     const hits = [
       { agent: "claude", session: "s-1", role: "Assistant", snippet: "…先跑 npm run check 再提交…", at_ms: 1_789_000_000_000, path: "C:\\Users\\me\\.claude\\projects\\p\\s-1.jsonl" },
       { agent: "codex", session: "s-2", role: "User", snippet: "…npm install 失败…", at_ms: 1_789_100_000_000, path: "C:\\Users\\me\\.codex\\sessions\\s-2.jsonl" },
     ];
-    const { target, bridge } = await renderIsland([snapshot(100)], { mockOptions: { searchHits: hits } });
+    const loaded = {
+      id: "s-1", name: "搜索结果会话", cwd: "D:\\work\\alpha", log_path: hits[0].path,
+      records: [{ event_id: "e1", at_ms: 1_789_000_000_000, role: "Assistant" as const, text: "被搜到的那句话：npm run check" }],
+      recent_output: [], current_file: null, log_status: null, alert: null,
+      lifecycle: "Historical" as const, last_active_at_ms: 1_789_000_000_000, display_status: "idle" as const,
+    };
+    const { target, bridge } = await renderIsland([snapshot(100)], { mockOptions: { searchHits: hits, loadedSession: loaded } });
     const drawer = target.querySelector<HTMLDetailsElement>('[data-testid="global-search"]')!;
     drawer.open = true;
     const input = await waitForElementValue(target, '[data-testid="global-search-input"]');
@@ -490,9 +496,21 @@ describe("global session search", () => {
 
     await waitFor(() => target.querySelectorAll('[data-testid="global-search-hit"]').length === 2, 3_000);
     expect(target.querySelector('[data-testid="global-search-status"]')?.textContent).toContain("共 2 条");
+
+    // 点结果 → 打开该会话（只读），并把它的记录显示在日志卡片里
     target.querySelectorAll<HTMLButtonElement>('[data-testid="global-search-hit"]')[0].click();
+    await waitFor(() => target.querySelector('[data-testid="searched-session-note"]') !== null);
+    expect(target.textContent).toContain("被搜到的那句话");
+    expect(target.querySelector('[data-testid="prompt-input"]')?.hasAttribute("disabled")).toBe(true);
+
+    // ⋯ 才是"在资源管理器里定位"
+    target.querySelectorAll<HTMLButtonElement>('[data-testid="global-search-reveal"]')[0].click();
     await waitFor(() => (bridge as unknown as { revealedPaths(): string[] }).revealedPaths().length === 1);
     expect((bridge as unknown as { revealedPaths(): string[] }).revealedPaths()[0]).toBe(hits[0].path);
+
+    // 返回当前会话
+    target.querySelector<HTMLButtonElement>('[data-testid="searched-session-close"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="searched-session-note"]') === null);
   });
 });
 describe("first-run onboarding", () => {
@@ -610,6 +628,8 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
+
 
 
 

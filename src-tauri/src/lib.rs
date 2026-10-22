@@ -1,4 +1,4 @@
-mod adapters;
+﻿mod adapters;
 mod approval_rules;
 mod application;
 mod commands;
@@ -491,6 +491,7 @@ pub fn run() {
             read_recent_logs,
             open_external,
             search_sessions_command,
+            load_session_by_path,
             reveal_session,
             list_approval_rules,
             add_approval_rule,
@@ -630,6 +631,7 @@ pub fn run() {
         }
     });
 }
+
 
 
 

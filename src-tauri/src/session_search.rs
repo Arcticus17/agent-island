@@ -264,3 +264,49 @@ pub(crate) fn reveal_session(path: String) -> Result<(), String> {
     }
     Err("当前平台不支持定位文件".into())
 }
+/// 按文件路径加载一个会话的完整视图（搜索命中后跳转用）。
+#[tauri::command]
+pub(crate) fn load_session_by_path(path: String) -> Result<interface::snapshot::SessionView, String> {
+    let candidate = PathBuf::from(path.trim());
+    if !candidate.is_absolute() || !reveal_allowed(&candidate) {
+        return Err("只能打开 Agent 会话文件".into());
+    }
+    let agent = if candidate.iter().any(|part| part == ".claude") { "claude" } else { "codex" };
+    let scan = session_scan::session_scan_from_file(agent, &candidate)
+        .ok_or_else(|| "无法解析这个会话文件".to_string())?;
+    scan.candidates
+        .into_iter()
+        .next()
+        .map(|candidate| candidate.view)
+        .ok_or_else(|| "这个会话没有可显示的记录".to_string())
+}
+#[cfg(test)]
+mod load_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_paths_outside_the_session_roots() {
+        let err = load_session_by_path("C:\\Windows\\System32\\calc.exe".into()).unwrap_err();
+        assert!(err.contains("只能打开"), "{err}");
+        let relative = load_session_by_path("sessions\\a.jsonl".into()).unwrap_err();
+        assert!(relative.contains("只能打开"), "{relative}");
+    }
+
+    #[test]
+    fn loads_a_real_shape_session_file() {
+        let home = home_dir().unwrap();
+        let dir = home.join(".claude").join("projects").join(format!("search-load-{}", epoch_millis()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session-load.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"assistant\",\"sessionId\":\"s-load\",\"uuid\":\"a1\",\"timestamp\":\"2026-10-22T10:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"loaded from a session file\"}]}}\n",
+        )
+        .unwrap();
+        let view = load_session_by_path(path.to_string_lossy().into_owned()).unwrap();
+        assert!(view.records.iter().any(|record| record.text.contains("loaded from a session file")));
+        assert_eq!(view.lifecycle, domain::SessionLifecycle::Historical);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+

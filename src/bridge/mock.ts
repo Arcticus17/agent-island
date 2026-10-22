@@ -1,9 +1,10 @@
-﻿import {
+import {
   assertSupportedSnapshot,
   type AgentCommand,
   type AgentIslandBridge,
   type CommandResult,
   type HookEvent,
+  type SessionView,
   type TerminalEvent,
 } from "./types";
 
@@ -19,6 +20,8 @@ export interface MockBridgeOptions {
   installFails?: boolean;
   /** 模拟"宿主没有 updater 插件"，用来覆盖退回到 GitHub release 提示的路径 */
   disableUpdater?: boolean;
+  /** loadSessionByPath 返回的假会话（缺省则用路径构造一个空会话） */
+  loadedSession?: SessionView | null;
   /** searchSessions 返回的假数据 */
   searchHits?: Array<{ agent: string; session: string; role: string; snippet: string; at_ms: number; path: string }>;
 }
@@ -113,6 +116,17 @@ export function createMockBridge(
         .slice(0, limit)
         .map((hit) => ({ ...hit }));
     },
+    async loadSessionByPath(path) {
+      if (options.loadedSession !== undefined) {
+        if (!options.loadedSession) throw new Error("无法解析这个会话文件");
+        return structuredClone(options.loadedSession);
+      }
+      return {
+        id: path, name: "搜索结果会话", cwd: null, log_path: path, records: [],
+        recent_output: [], current_file: null, log_status: null, alert: null,
+        lifecycle: "Historical", last_active_at_ms: 0, display_status: "idle",
+      };
+    },
     async revealSession(path) {
       revealedPaths.push(path);
     },
@@ -200,6 +214,9 @@ export function createMockBridge(
   }
   return bridge;
 }
+
+
+
 
 
 

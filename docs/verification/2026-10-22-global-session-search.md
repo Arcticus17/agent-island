@@ -1,4 +1,4 @@
-# 跨会话全文搜索
+﻿# 跨会话全文搜索
 
 日期：2026-10-22
 范围：`src-tauri/src/session_search.rs`（新）、`src/components/search/GlobalSearch.svelte`（新）、`src/app/App.svelte`、`src/bridge/*`、测试
@@ -52,3 +52,23 @@ claude · Assistant · 08-18 19:10
 - 结果点击目前只是"定位文件"，没有做到"直接跳到该会话记录"（需要后端支持按 session id 加载任意历史会话）；
 - 搜索只覆盖 claude / codex；opencode、hermes 的存储格式不同，尚未接入；
 - 没有做高亮（片段已经是命中上下文，够用）。
+## 八、点搜索结果直接打开会话（追加）
+
+原来点结果只能"在资源管理器里定位文件"，看不到内容。现在改成两级操作：
+
+| 操作 | 行为 |
+| --- | --- |
+| 点结果行 | **打开该会话**：加载记录、只读展示（日志卡片 + 状态卡片显示「本地记录」），并禁止向它发指令 |
+| 行尾 `⋯` | 在资源管理器里定位 `.jsonl`（保留原来的能力） |
+| 横幅「返回当前会话」 | 退出搜索结果，回到桌面端当前会话 |
+
+后端新增 `load_session_by_path(path)`：复用 `session_scan_from_file` 解析，只允许**已知识别目录下的 `.jsonl`**，
+返回 `SessionView`（含 records）。界面用一个独立的 `searchedSession` 状态作为会话来源优先级最高的一档，
+不动快照与历史列表——搜索到的会话可能根本不在当前 Agent 的 history 里。
+
+**实机验证**：搜索 `npm` → 点结果 → 横幅显示「正在查看搜索结果（claude · 这是一个灵动岛的想法）」，
+状态卡片变「本地记录」，日志卡片显示命中消息原文；输入框被禁用并提示不能向历史会话发指令。
+截图：`mac-island-analysis/jump-open.png`、`jump-open-records.png`。
+
+**测试**：Rust 2 条（越权路径拒绝、真实形状文件加载出 records）；浏览器用例扩展为
+「点结果 → 打开会话 + 内容出现 + 输入禁用 → `⋯` 定位文件 → 返回当前会话」。

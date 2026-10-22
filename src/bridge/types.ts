@@ -373,6 +373,8 @@ export interface AgentIslandBridge {
   installAppUpdate?(onProgress?: (downloaded: number, total: number | null) => void): Promise<void>;
   /** 跨会话搜索：在本地会话文件里找关键字。 */
   searchSessions?(query: string, limit?: number): Promise<SessionSearchHit[]>;
+  /** 按会话文件路径加载完整会话（搜索结果跳转用）。 */
+  loadSessionByPath?(path: string): Promise<SessionView>;
   /** 在资源管理器里定位会话文件。 */
   revealSession?(path: string): Promise<void>;
   /** 用系统默认浏览器打开 https 链接（下载页）。 */
@@ -433,6 +435,7 @@ export interface TerminalOpenRequest {
 export type TerminalEvent =
   | { kind: "data"; id: string; data: string }
   | { kind: "exit"; id: string };
+
 
 
 

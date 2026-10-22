@@ -1,7 +1,14 @@
-<script lang="ts">
+﻿<script lang="ts">
   import type { AgentIslandBridge, SessionSearchHit } from "../../bridge/types";
 
-  let { bridge }: { bridge: AgentIslandBridge } = $props();
+  let {
+    bridge,
+    onOpen,
+  }: {
+    bridge: AgentIslandBridge;
+    /** 打开命中的会话（由 App 负责加载并展示） */
+    onOpen?: (hit: SessionSearchHit) => void;
+  } = $props();
 
   let query = $state("");
   let hits = $state<SessionSearchHit[]>([]);
@@ -43,6 +50,10 @@
       status = "failed";
       error = cause instanceof Error ? cause.message : String(cause);
     }
+  }
+
+  function open(hit: SessionSearchHit): void {
+    if (onOpen) onOpen(hit);
   }
 
   async function reveal(hit: SessionSearchHit): Promise<void> {
@@ -99,10 +110,15 @@
         <ul data-testid="global-search-results">
           {#each hits as hit, index (hit.path + hit.role + index)}
             <li>
-              <button type="button" data-testid="global-search-hit" data-hit-path={hit.path} onclick={() => void reveal(hit)}>
-                <span class="meta">{hit.agent} · {hit.role} · {timeLabel(hit.at_ms)}</span>
-                <span class="snippet">{hit.snippet}</span>
-              </button>
+              <div class="hit-row">
+                <button type="button" class="hit" data-testid="global-search-hit" data-hit-path={hit.path} onclick={() => open(hit)}>
+                  <span class="meta">{hit.agent} · {hit.role} · {timeLabel(hit.at_ms)}</span>
+                  <span class="snippet">{hit.snippet}</span>
+                </button>
+                {#if bridge.revealSession}
+                  <button type="button" class="locate" data-testid="global-search-reveal" aria-label="在资源管理器里定位文件" title="在资源管理器里定位文件" onclick={() => void reveal(hit)}>⋯</button>
+                {/if}
+              </div>
             </li>
           {/each}
         </ul>
@@ -123,10 +139,14 @@
   input { min-height: 28px; padding: 4px 8px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); background: var(--island-control-surface); color: var(--island-text-primary); font-size: 11px; }
   input:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 1px; }
   ul { margin: 0; padding: 0; display: grid; gap: 4px; max-height: 220px; overflow-y: auto; list-style: none; }
-  li button { width: 100%; display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--island-border-subtle); border-radius: 8px; background: var(--island-control-surface); color: var(--island-text-secondary); text-align: left; cursor: pointer; }
+  li .hit-row { display: flex; align-items: stretch; gap: 4px; }
+  li .hit { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--island-border-subtle); border-radius: 8px; background: var(--island-control-surface); color: var(--island-text-secondary); text-align: left; cursor: pointer; }
+  li .locate { flex: 0 0 auto; width: 28px; border: 1px solid var(--island-border-subtle); border-radius: 8px; background: var(--island-control-surface); color: var(--island-text-tertiary); cursor: pointer; }
+  li .locate:hover { border-color: var(--island-accent-primary); color: var(--island-text-primary); }
   li button:hover { border-color: var(--island-accent-primary); }
   li button:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 1px; }
   .meta { color: var(--island-text-tertiary); font-size: 10px; }
   .snippet { color: var(--island-text-primary); font-size: 11px; overflow-wrap: anywhere; }
   .error { color: var(--island-refresh-error-text); font-size: 10px; }
 </style>
+

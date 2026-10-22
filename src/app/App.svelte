@@ -28,7 +28,7 @@
   import type { ApprovalItem, CommandFailure, CommandUiState, NotificationItem } from "../components/events/types";
   import { tauriBridge } from "../bridge/tauri";
   import { tauriDiagnosticsBridge, type DiagnosticsBridge } from "../bridge/diagnostics";
-  import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent, SourceHealth } from "../bridge/types";
+  import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent, SessionView, SourceHealth } from "../bridge/types";
   import { loadLayout, saveLayout } from "../layout/persistence";
   import type { CardId, CardPlacement, LayoutConfigV1 } from "../layout/schema";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
@@ -243,9 +243,16 @@
     selectedAgentId: selectedAgent?.id ?? null,
   }));
   let inspectingHistory = $derived(inspectedSession?.agentId === selectedAgent?.id && inspectedSession !== null);
-  let selectedSession = $derived(inspectingHistory
-    ? selectedAgent?.history_sessions.find((session) => session.id === inspectedSession?.sessionId) ?? null
-    : selectedAgent?.active_session ?? null);
+  /** 搜索结果里点开的历史会话（不在当前快照的 history 列表里） */
+  let searchedSession = $state<SessionView | null>(null);
+  let searchedMeta = $state<{ agent: string; at_ms: number } | null>(null);
+  let viewingArchive = $derived(inspectingHistory || searchedSession !== null);
+  let selectedSession = $derived(
+    searchedSession
+      ?? (inspectingHistory
+        ? selectedAgent?.history_sessions.find((session) => session.id === inspectedSession?.sessionId) ?? null
+        : selectedAgent?.active_session ?? null),
+  );
 
   // 显示模式过滤掉当前选中的 Agent 时，自动落到第一个可见的（都不可见则保持空态）
   $effect(() => {
@@ -763,6 +770,30 @@
     } catch (cause) {
       appUpdate = { ...appUpdate, message: `打开链接失败：${cause instanceof Error ? cause.message : String(cause)}` };
     }
+  }
+  /** 搜索结果 → 打开对应会话（只读展示，不影响当前任务的会话） */
+  async function openSearchedSession(hit: { agent: string; at_ms: number; path: string }): Promise<void> {
+    if (!bridge.loadSessionByPath) return;
+    try {
+      const session = await bridge.loadSessionByPath(hit.path);
+      inspectedSession = null;
+      searchedSession = session;
+      searchedMeta = { agent: hit.agent, at_ms: hit.at_ms };
+      if (!expanded) expandIsland();
+      void syncWindowSize();
+    } catch (cause) {
+      pushLocalNotice(
+        selectedAgent?.name ?? "Agent",
+        selectedAgent?.active_session?.id ?? "",
+        `打开会话失败：${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+  }
+
+  function closeSearchedSession(): void {
+    searchedSession = null;
+    searchedMeta = null;
+    void syncWindowSize();
   }
   /** Agent 条的方向键导航：左右循环、Home/End 跳到两端 */
   function navigateAgentStrip(event: KeyboardEvent): void {
@@ -1308,7 +1339,7 @@
               class:active={agent.id === selectedAgent?.id}
               data-agent-id={agent.id}
               aria-pressed={agent.id === selectedAgent?.id}
-              onclick={() => { inspectedSession = null; store.selectAgent(agent.id); }}
+              onclick={() => { inspectedSession = null; searchedSession = null; searchedMeta = null; store.selectAgent(agent.id); }}
               onkeydown={(event) => navigateAgentStrip(event)}
             ><span class={`mini-dot status-${agent.display_status}`} aria-hidden="true"></span><span class="sensitive">{agent.name}</span></button>
           {/each}
@@ -1349,7 +1380,7 @@
             <span class="about-message" data-testid="app-update-message" role="status">{appUpdate.message}</span>
           {/if}
         </section>        {#if bridge.searchSessions}
-          <GlobalSearch {bridge} />
+          <GlobalSearch {bridge} onOpen={(hit) => void openSearchedSession(hit)} />
         {/if}
         {#if bridge.listApprovalRules}
           <ApprovalRules {bridge} />
@@ -1361,7 +1392,7 @@
               session={selectedSession}
               runCommand={runActionCommand}
               onLayoutChange={() => void syncWindowSize()}
-              disabledReason={inspectingHistory ? "正在查看本地历史记录，不能向历史会话发送指令" : null}
+              disabledReason={viewingArchive ? "正在查看本地历史记录，不能向历史会话发送指令" : null}
             />
           </div>
         {/if}
@@ -1378,7 +1409,12 @@
               {/each}
             </select>
           </label>
-          {#if inspectingHistory}<p class="refresh-note" role="status" data-testid="history-inspection-note">正在查看手动选择的本地会话记录，不代表桌面端当前任务。{selectedSession ? "目录和终端操作使用此会话；停止、重启和跳回已禁用。" : "该记录已不在当前快照中，请重新选择。"}</p>{/if}
+        {#if searchedSession}
+          <p class="refresh-note" role="status" data-testid="searched-session-note">
+            正在查看搜索结果（{searchedMeta?.agent ?? "会话"} · {searchedSession.name}），不代表桌面端当前任务。
+            <button type="button" class="link-button" data-testid="searched-session-close" onclick={closeSearchedSession}>返回当前会话</button>
+          </p>
+        {/if}          {#if inspectingHistory}<p class="refresh-note" role="status" data-testid="history-inspection-note">正在查看手动选择的本地会话记录，不代表桌面端当前任务。{selectedSession ? "目录和终端操作使用此会话；停止、重启和跳回已禁用。" : "该记录已不在当前快照中，请重新选择。"}</p>{/if}
         {/if}
         {#if viewState.refreshError}<p class="refresh-note" role="status">数据刷新暂时失败，已保留最近状态。</p>{/if}
         {#if selectedAgent}
@@ -1442,7 +1478,7 @@
             {#snippet content(placement: CardPlacement)}
               {#if placement.id === "status"}
                 <CardBoundary cardName="状态卡片" errorCode="status_card_render_failed">
-                  <StatusCard agent={selectedAgent} session={selectedSession} {inspectingHistory} />
+                  <StatusCard agent={selectedAgent} session={selectedSession} inspectingHistory={viewingArchive} />
                 </CardBoundary>
               {:else if placement.id === "usage"}
                 <CardBoundary cardName="用量卡片" errorCode="usage_card_render_failed">
@@ -1690,6 +1726,12 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
+
+
+
+
+
 
 
 
