@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import "../themes/tokens.css";
   import "../themes/graphite.css";
@@ -11,7 +11,7 @@
   import CommandPalette from "../components/palette/CommandPalette.svelte";
   import WelcomeCard from "../components/onboarding/WelcomeCard.svelte";
   import { markOnboarded, shouldShowOnboarding } from "../onboarding/state";
-  import { buildPaletteCommands, type PaletteCommand } from "../palette/commands";
+  import { buildPaletteCommands, type PaletteActionId, type PaletteCommand } from "../palette/commands";
   import LogCard from "../components/cards/LogCard.svelte";
   import SessionCard from "../components/cards/SessionCard.svelte";
   import StatusCard from "../components/cards/StatusCard.svelte";
@@ -708,6 +708,25 @@
     void syncWindowSize();
   }
 
+  /** Agent 条的方向键导航：左右循环、Home/End 跳到两端 */
+  function navigateAgentStrip(event: KeyboardEvent): void {
+    if (visibleAgents.length === 0) return;
+    const current = visibleAgents.findIndex((agent) => agent.id === selectedAgent?.id);
+    const last = visibleAgents.length - 1;
+    let next: number | null = null;
+    if (event.key === "ArrowRight") next = current >= last || current < 0 ? 0 : current + 1;
+    else if (event.key === "ArrowLeft") next = current <= 0 ? last : current - 1;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = last;
+    if (next === null) return;
+    event.preventDefault();
+    const target = visibleAgents[next];
+    inspectedSession = null;
+    store.selectAgent(target.id);
+    const strip = (event.currentTarget as HTMLElement).parentElement;
+    strip?.querySelector<HTMLButtonElement>(`[data-agent-id="${target.id}"]`)?.focus();
+  }
+
   function dismissWelcome(): void {
     showWelcome = false;
     markOnboarded((key, value) => localStorage.setItem(key, value));
@@ -925,6 +944,19 @@
   }
 
   /** 执行命令面板里选中的一条：Agent / 会话 / 固定动作 */
+  /** 固定动作的处理表：用 Record<PaletteActionId, …> 让"漏掉一条命令"变成编译错误。 */
+  const paletteHandlers: Record<PaletteActionId, () => void> = {
+    "action:terminal": () => void toggleTerminal(),
+    "action:refresh": () => void refreshAll(),
+    "action:privacy": () => setPrivacy(!privacy),
+    "action:focus": () => setFocusMode(focusMode === "off" ? "errors" : focusMode === "errors" ? "quiet" : "off"),
+    "action:pin": () => setPinnedAgent(pinnedAgentId ? null : selectedAgent?.id ?? null),
+    "action:onboarding": () => {
+      showWelcome = true;
+    },
+    "action:hide": () => hideIsland(),
+  };
+
   function runPaletteCommand(command: PaletteCommand): void {
     paletteOpen = false;
     if (command.kind === "agent") {
@@ -941,29 +973,7 @@
         : { agentId: selectedAgent.id, sessionId };
       return;
     }
-    switch (command.id) {
-      case "action:terminal":
-        void toggleTerminal();
-        break;
-      case "action:refresh":
-        void refreshAll();
-        break;
-      case "action:privacy":
-        setPrivacy(!privacy);
-        break;
-      case "action:focus":
-        setFocusMode(focusMode === "off" ? "errors" : focusMode === "errors" ? "quiet" : "off");
-        break;
-      case "action:onboarding":
-        showWelcome = true;
-        break;
-      case "action:pin":
-        setPinnedAgent(pinnedAgentId ? null : selectedAgent?.id ?? null);
-        break;
-      case "action:hide":
-        hideIsland();
-        break;
-    }
+    paletteHandlers[command.id as PaletteActionId]?.();
   }
 
   function setFocusMode(value: "off" | "errors" | "quiet"): void {
@@ -1228,7 +1238,7 @@
         {#if showWelcome}
           <WelcomeCard onDismiss={dismissWelcome} />
         {/if}
-        <nav class="agent-strip" aria-label="切换 Agent">
+        <nav class="agent-strip" data-testid="agent-strip" aria-label="切换 Agent">
           {#each visibleAgents as agent (agent.id)}
             <button
               type="button"
@@ -1236,6 +1246,7 @@
               data-agent-id={agent.id}
               aria-pressed={agent.id === selectedAgent?.id}
               onclick={() => { inspectedSession = null; store.selectAgent(agent.id); }}
+              onkeydown={(event) => navigateAgentStrip(event)}
             ><span class={`mini-dot status-${agent.display_status}`} aria-hidden="true"></span><span class="sensitive">{agent.name}</span></button>
           {/each}
         </nav>
@@ -1586,6 +1597,9 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
+
+
 
 
 

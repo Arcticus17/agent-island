@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 命令面板（Ctrl+K）：把"点来点去"的操作变成一个键盘可达的搜索框。
  *
  * 数据都是现成的（Agents、会话、几个固定动作），所以这里只负责两件事：
@@ -26,8 +26,18 @@ export interface PaletteSource {
   selectedAgentId: string | null;
 }
 
+/** 固定动作的 id 联合类型：App 用 `Record<PaletteActionId, () => void>` 映射，缺一个就编译不过。 */
+export type PaletteActionId =
+  | "action:terminal"
+  | "action:refresh"
+  | "action:privacy"
+  | "action:focus"
+  | "action:pin"
+  | "action:onboarding"
+  | "action:hide";
+
 /** 可执行的固定动作（App 负责把它们映射到真实处理函数）。 */
-export const PALETTE_ACTIONS: ReadonlyArray<{ id: string; title: string; hint: string }> = [
+export const PALETTE_ACTIONS: ReadonlyArray<{ id: PaletteActionId; title: string; hint: string }> = [
   { id: "action:terminal", title: "打开内置终端", hint: "终端" },
   { id: "action:refresh", title: "刷新快照", hint: "刷新" },
   { id: "action:privacy", title: "切换隐私遮罩", hint: "隐私" },

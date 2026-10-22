@@ -1,5 +1,5 @@
 ﻿import { mount, unmount } from "svelte";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 
 import App from "../../src/app/App.svelte";
@@ -382,6 +382,36 @@ describe("pinned agent", () => {
     localStorage.clear();
   });
 });
+describe("agent strip keyboard navigation", () => {
+  it("moves between agents with the arrow keys, Home and End", async () => {
+    localStorage.clear();
+    localStorage.setItem("agent-island-onboarded", "1");
+    const { target } = await renderIsland([snapshot(100)]);
+    const strip = await waitForElementValue(target, '[data-testid="agent-strip"]');
+    const buttons = () => Array.from(target.querySelectorAll<HTMLButtonElement>('[data-testid="agent-strip"] [data-agent-id]'));
+    expect(buttons().length).toBeGreaterThan(1);
+    const selectedId = () => target.querySelector('[data-testid="active-session-id"]')?.textContent;
+
+    const first = buttons()[0];
+    first.focus();
+    await waitFor(() => document.activeElement === first);
+
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    await waitFor(() => document.activeElement === buttons()[1]);
+    expect(buttons()[1].getAttribute("aria-pressed")).toBe("true");
+    expect(selectedId()).toBe("beta-live");
+
+    buttons()[1].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    await waitFor(() => document.activeElement === buttons()[0]);
+    expect(selectedId()).toBe("alpha-live");
+
+    buttons()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    await waitFor(() => document.activeElement === buttons()[buttons().length - 1]);
+
+    buttons()[buttons().length - 1].dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    await waitFor(() => document.activeElement === buttons()[0]);
+  });
+});
 describe("first-run onboarding", () => {
   it("shows once, remembers dismissal, and can be reopened from the palette", async () => {
     localStorage.clear();
@@ -497,6 +527,13 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
+
+
+
+
+
+
 
 
 
