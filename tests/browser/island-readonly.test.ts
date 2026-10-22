@@ -382,6 +382,36 @@ describe("pinned agent", () => {
     localStorage.clear();
   });
 });
+describe("first-run onboarding", () => {
+  it("shows once, remembers dismissal, and can be reopened from the palette", async () => {
+    localStorage.clear();
+    const first = await renderIsland([snapshot(100)]);
+    const card = () => first.target.querySelector('[data-testid="welcome-card"]');
+    await waitFor(() => card() !== null);
+    expect(card()?.textContent).toContain("Ctrl+Shift+A");
+    expect(card()?.textContent).toContain("Ctrl+K");
+
+    first.target.querySelector<HTMLButtonElement>('[data-testid="welcome-dismiss"]')!.click();
+    await waitFor(() => card() === null);
+    expect(localStorage.getItem("agent-island-onboarded")).toBe("1");
+
+    // 再开一次：不再出现
+    const second = await renderIsland([snapshot(100)]);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(second.target.querySelector('[data-testid="welcome-card"]')).toBeNull();
+
+    // 命令面板里可以重看
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }));
+    await waitFor(() => second.target.querySelector('[data-testid="palette"]') !== null);
+    const input = second.target.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+    input.value = "上手";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitFor(() => second.target.querySelectorAll('[data-testid="palette-option"]').length === 1);
+    second.target.querySelector<HTMLElement>('[data-testid="palette-option"]')!.click();
+    await waitFor(() => second.target.querySelector('[data-testid="welcome-card"]') !== null);
+    localStorage.clear();
+  });
+});
 describe("command palette", () => {
   it("opens with Ctrl+K, filters and runs a command", async () => {
     const { target } = await renderIsland([snapshot(100)]);
@@ -467,6 +497,7 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
 
 
 

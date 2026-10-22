@@ -9,6 +9,8 @@
   import ApprovalStack from "../components/approvals/ApprovalStack.svelte";
   import ApprovalRules from "../components/approvals/ApprovalRules.svelte";
   import CommandPalette from "../components/palette/CommandPalette.svelte";
+  import WelcomeCard from "../components/onboarding/WelcomeCard.svelte";
+  import { markOnboarded, shouldShowOnboarding } from "../onboarding/state";
   import { buildPaletteCommands, type PaletteCommand } from "../palette/commands";
   import LogCard from "../components/cards/LogCard.svelte";
   import SessionCard from "../components/cards/SessionCard.svelte";
@@ -126,6 +128,8 @@
   /** 诊断抽屉是否展开：只有展开时才每次轮询都去取诊断 */
   let diagnosticsOpen = $state(false);
   let diagnosticsLoadedOnce = false;
+  /** 首次引导：看过一次就不再出现，命令面板里可以重看 */
+  let showWelcome = $state(shouldShowOnboarding((key) => localStorage.getItem(key)));
   /** 固定盯住的 Agent（重启后仍然生效） */
   let pinnedAgentId = $state<string | null>(storedPinnedAgent((key) => localStorage.getItem(key)));
   let diagnosticRequest = 0;
@@ -704,6 +708,11 @@
     void syncWindowSize();
   }
 
+  function dismissWelcome(): void {
+    showWelcome = false;
+    markOnboarded((key, value) => localStorage.setItem(key, value));
+  }
+
   function setPinnedAgent(id: string | null): void {
     pinnedAgentId = id;
     try {
@@ -944,6 +953,12 @@
         break;
       case "action:focus":
         setFocusMode(focusMode === "off" ? "errors" : focusMode === "errors" ? "quiet" : "off");
+        break;
+      case "action:onboarding":
+        showWelcome = true;
+        break;
+      case "action:pin":
+        setPinnedAgent(pinnedAgentId ? null : selectedAgent?.id ?? null);
         break;
       case "action:hide":
         hideIsland();
@@ -1210,6 +1225,9 @@
     {#if expanded}
       {#if windowError}<p class="refresh-note" role="alert">{windowError}</p>{/if}
       <section id="expanded-island" class="adaptive-details" class:terminal-max={terminalOpen && terminalMax} aria-label="Agent 详情">
+        {#if showWelcome}
+          <WelcomeCard onDismiss={dismissWelcome} />
+        {/if}
         <nav class="agent-strip" aria-label="切换 Agent">
           {#each visibleAgents as agent (agent.id)}
             <button
@@ -1568,6 +1586,8 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
+
 
 
 

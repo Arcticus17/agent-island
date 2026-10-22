@@ -52,11 +52,13 @@ beforeEach(() => {
 });
 
 for (const theme of ["graphite", "pure-black", "terminal"] as const) {
-  for (const scenario of ["compact-idle", "compact-working", "compact-error", "monitoring", "approval", "long-log", "single-column"] as const) {
+  for (const scenario of ["compact-idle", "compact-working", "compact-error", "monitoring", "approval", "long-log", "single-column", "welcome"] as const) {
     it(`${theme} ${scenario}`, async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(NOW);
       await page.viewport(scenario === "single-column" ? 360 : 520, 900);
+      // 视觉基线固定"已看过引导"，单独用 welcome 场景覆盖引导卡片
+      localStorage.setItem("agent-island-onboarded", scenario === "welcome" ? "0" : "1");
       localStorage.setItem("agent-island-theme-style-v2", theme);
       localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(DEFAULT_LAYOUTS.monitoring));
       const style = document.createElement("style");
@@ -65,6 +67,7 @@ for (const theme of ["graphite", "pure-black", "terminal"] as const) {
       const target = document.createElement("div");
       document.body.append(target);
       const status = scenario === "compact-idle" ? "idle" : scenario === "compact-error" ? "error" : "working";
+      if (scenario === "welcome") localStorage.removeItem("agent-island-onboarded");
       const bridge = createMockBridge([snapshot(status, scenario === "long-log" || scenario === "single-column")]);
       app = mount(App, { target, props: {
         bridge, pollIntervalMs: 0, initiallyExpanded: !scenario.startsWith("compact"), initiallyPeeked: scenario.startsWith("compact"),
@@ -86,5 +89,6 @@ for (const theme of ["graphite", "pure-black", "terminal"] as const) {
     });
   }
 }
+
 
 

@@ -33,6 +33,7 @@ export const PALETTE_ACTIONS: ReadonlyArray<{ id: string; title: string; hint: s
   { id: "action:privacy", title: "切换隐私遮罩", hint: "隐私" },
   { id: "action:focus", title: "切换专注模式", hint: "专注" },
   { id: "action:pin", title: "固定 / 取消固定当前 Agent", hint: "固定" },
+  { id: "action:onboarding", title: "查看上手引导", hint: "帮助" },
   { id: "action:hide", title: "收起灵动岛", hint: "Esc" },
 ];
 
@@ -114,4 +115,5 @@ export function moveSelection(index: number, delta: number, length: number): num
   if (next >= length) return 0;
   return next;
 }
+
 
