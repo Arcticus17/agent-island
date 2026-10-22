@@ -1,4 +1,4 @@
-//! Process matching, runtime facts, and status projection onto snapshots.
+﻿//! Process matching, runtime facts, and status projection onto snapshots.
 
 use crate::*;
 
@@ -294,6 +294,7 @@ pub(crate) fn legacy_process_status(
 pub(crate) fn scan_agents(
     sys: &mut System,
     session: &mut SessionState,
+    pty_roots: &std::collections::HashSet<u32>,
 ) -> (
     Vec<AgentInfo>,
     interface::snapshot::AgentViewSnapshot,
@@ -302,6 +303,12 @@ pub(crate) fn scan_agents(
 ) {
     let _scan_started = Instant::now();
     refresh_agent_processes(sys);
+    // pid → 父 pid：判断 Agent 是不是岛内终端（PTY）的后代
+    let parents = launcher::parent_map(
+        sys.processes()
+            .iter()
+            .map(|(pid, process)| (pid.as_u32(), process.parent().map(|parent| parent.as_u32()))),
+    );
     let _after_processes = Instant::now();
     let now = Instant::now();
     let delta = now.duration_since(session.last_poll).as_secs();
@@ -547,6 +554,15 @@ pub(crate) fn scan_agents(
         &acquisition_issues,
     );
     attach_runtime_metadata_to_snapshot(&mut snapshot, &agents);
+    // 权威绑定：Agent 进程若是岛内 PTY 的后代，标记为 launched（不再依赖日志推断）
+    for agent in &mut snapshot.agents {
+        let pids: Vec<u32> = process_facts
+            .iter()
+            .find(|fact| fact.identity.agent_id == agent.id)
+            .map(|fact| fact.identity.process_ids.clone())
+            .unwrap_or_default();
+        agent.binding = launcher::binding_for_pids(&pids, &parents, pty_roots);
+    }
     for agent in &snapshot.agents {
         if let Some(view) = &agent.diagnostic {
             diagnostic_records.push(interface::diagnostics::DiagnosticRecord {
@@ -712,5 +728,7 @@ pub(crate) fn update_terminal_statistics_from_snapshot(
     }
     changed
 }
+
+
 
 

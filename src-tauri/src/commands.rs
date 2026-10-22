@@ -164,9 +164,11 @@ pub(crate) fn collect_agent_data(
     let mut sys = state.sys.lock_recover();
     let mut session = state.session.lock_recover();
     let mut cache = session.cache.take();
+    // 岛内终端的 shell pid：Agent 作为它们的后代即可被权威识别
+    let pty_roots: std::collections::HashSet<u32> = state.terminals.lock_recover().values().filter_map(|terminal| terminal.pid).collect();
     let (agents, snapshot, _diagnostics, scan_result) =
         collect_cached_with(&mut cache, Instant::now, || {
-            scan_agents(&mut sys, &mut session)
+            scan_agents(&mut sys, &mut session, &pty_roots)
         });
     session.cache = cache;
     if let Some((changed, completed_at)) = scan_result {
@@ -1143,3 +1145,4 @@ pub(crate) fn start_global_hotkeys(app: tauri::AppHandle) {
         }
     });
 }
+

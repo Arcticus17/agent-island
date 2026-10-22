@@ -513,6 +513,24 @@ describe("global session search", () => {
     await waitFor(() => target.querySelector('[data-testid="searched-session-note"]') === null);
   });
 });
+describe("session binding badge", () => {
+  it("marks launched sessions as confirmed and inferred ones as guesses", async () => {
+    localStorage.clear();
+    localStorage.setItem("agent-island-onboarded", "1");
+    const launched = snapshot(100);
+    (launched.agents[0] as { binding?: string }).binding = "launched";
+    const first = await renderIsland([launched]);
+    await waitFor(() => first.target.querySelector('[data-testid="session-binding"]') !== null);
+    expect(first.target.querySelector('[data-testid="session-binding"]')?.textContent).toBe("已确认");
+    expect(first.target.querySelector('[data-testid="session-binding"]')?.getAttribute("data-binding")).toBe("launched");
+
+    const inferred = snapshot(100);
+    const second = await renderIsland([inferred]);
+    await waitFor(() => second.target.querySelector('[data-testid="session-binding"]') !== null);
+    expect(second.target.querySelector('[data-testid="session-binding"]')?.textContent).toBe("推测");
+    localStorage.clear();
+  });
+});
 describe("first-run onboarding", () => {
   it("shows once, remembers dismissal, and can be reopened from the palette", async () => {
     localStorage.clear();
@@ -628,6 +646,7 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
 
 
 

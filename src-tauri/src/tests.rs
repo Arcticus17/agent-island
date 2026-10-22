@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 
 #[test]
 fn interactive_resume_works_without_a_recorded_process_command() {
@@ -99,6 +99,7 @@ fn terminal_snapshot(
                 stale,
             },
             usage: None,
+            binding: Default::default(),
         }],
     }
 }
@@ -1386,6 +1387,7 @@ fn legacy_projection_keeps_only_active_in_session_list() {
                 stale: false,
             },
             usage: None,
+            binding: Default::default(),
         }],
     };
 

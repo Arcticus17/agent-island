@@ -60,6 +60,9 @@ pub struct AgentView {
     pub diagnostic: Option<DiagnosticView>,
     pub freshness: Freshness,
     pub usage: Option<UsageInfo>,
+    /// 会话身份的可信来源：launched（岛内终端后代）/ hooked（Agent 自报）/ inferred（推断）
+    #[serde(default)]
+    pub binding: crate::launcher::SessionBinding,
 }
 
 /// Structured turn identity for downstream transition consumers; never inferred from text.
@@ -259,6 +262,7 @@ fn build_agent_view(
         diagnostic,
         freshness,
         usage: None,
+        binding: crate::launcher::SessionBinding::Inferred,
     }
 }
 
@@ -912,3 +916,5 @@ mod tests {
         assert_eq!(snapshot.agents[0].display_status, DisplayStatus::Working);
     }
 }
+
+

@@ -1,4 +1,4 @@
-//! 内置终端：用 ConPTY/PTY 把 Agent CLI 真正跑在岛里。
+﻿//! 内置终端：用 ConPTY/PTY 把 Agent CLI 真正跑在岛里。
 //!
 //! 和 `send_to_session` 的区别：那条是"一次性 `-p` 调用"，这里是**交互式 TUI**，
 //! 用户可以在岛上直接敲 `claude` / `codex` / `opencode`，看到 Agent 的完整界面。
@@ -12,6 +12,8 @@ pub(crate) struct TerminalSession {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
+    /// PTY 里 shell 的 pid：Agent 作为它的后代，可据此判定"岛内启动"
+    pub(crate) pid: Option<u32>,
 }
 
 pub(crate) type TerminalMap = Mutex<HashMap<String, TerminalSession>>;
@@ -97,6 +99,7 @@ pub(crate) fn terminal_open(
         .map_err(|error| format!("启动终端进程失败: {error}"))?;
     drop(pair.slave);
 
+    let shell_pid = child.process_id();
     let mut reader = pair
         .master
         .try_clone_reader()
@@ -137,7 +140,7 @@ pub(crate) fn terminal_open(
     state
         .terminals
         .lock_recover()
-        .insert(id.clone(), TerminalSession { master: pair.master, writer, child });
+        .insert(id.clone(), TerminalSession { master: pair.master, writer, child, pid: shell_pid });
     Ok(id)
 }
 
@@ -218,3 +221,5 @@ mod tests {
         assert_eq!(direct, vec!["cmd.exe".to_string()]);
     }
 }
+
+

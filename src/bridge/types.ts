@@ -90,6 +90,8 @@ export interface AgentView {
   diagnostic: DiagnosticView | null;
   freshness: Freshness;
   usage: UsageInfo | null;
+  /** 会话身份的可信来源：launched（岛内终端后代）/ hooked（Agent 自报）/ inferred（推断） */
+  binding?: "launched" | "hooked" | "inferred";
 }
 
 /** Rust's serialized `AgentViewSnapshot`. The bridge narrows the version to 1. */
@@ -435,6 +437,7 @@ export interface TerminalOpenRequest {
 export type TerminalEvent =
   | { kind: "data"; id: string; data: string }
   | { kind: "exit"; id: string };
+
 
 
 

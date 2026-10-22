@@ -1,4 +1,4 @@
-﻿mod adapters;
+mod adapters;
 mod approval_rules;
 mod application;
 mod commands;
@@ -6,6 +6,7 @@ mod domain;
 mod external;
 mod hooks;
 mod hotkey;
+mod launcher;
 mod logging;
 pub mod interface;
 mod process_scan;
@@ -631,6 +632,8 @@ pub fn run() {
         }
     });
 }
+
+
 
 
 
