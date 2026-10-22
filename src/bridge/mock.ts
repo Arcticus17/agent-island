@@ -13,6 +13,8 @@ export interface MockBridgeOptions {
   cliVersion?: string;
   /** 应用自身版本（getAppVersion） */
   appVersion?: string;
+  /** searchSessions 返回的假数据 */
+  searchHits?: Array<{ agent: string; session: string; role: string; snippet: string; at_ms: number; path: string }>;
 }
 
 export interface MockAgentIslandBridge extends AgentIslandBridge {
@@ -22,6 +24,7 @@ export interface MockAgentIslandBridge extends AgentIslandBridge {
   windowSizes(): readonly { width: number; height: number }[];
   savedSettings(): readonly string[];
   openedUrls(): readonly string[];
+  revealedPaths(): readonly string[];
   emitIslandHotkey(): void;
   terminalCalls(): readonly { kind: string; [key: string]: unknown }[];
   emitTerminal(event: TerminalEvent): void;
@@ -47,6 +50,8 @@ export function createMockBridge(
   const savedSettings: string[] = [];
   const hotkeyHandlers = new Set<() => void>();
   const openedUrls: string[] = [];
+  const revealedPaths: string[] = [];
+  const searchHits: Array<{ agent: string; session: string; role: string; snippet: string; at_ms: number; path: string }> = options.searchHits ?? [];
   const approvalRules: Array<{ id: string; tool: string; pattern: string }> = [];
   const approvalAudit: Array<{ at_ms: number; id: string; tool: string; command: string; rule: string; decision: string }> = [];
 
@@ -86,6 +91,16 @@ export function createMockBridge(
     },
     async getAppVersion() {
       return options.appVersion ?? "1.9.0";
+    },
+    async searchSessions(query, limit = 20) {
+      const needle = query.trim().toLowerCase();
+      return searchHits
+        .filter((hit) => needle.length >= 2 && hit.snippet.toLowerCase().includes(needle))
+        .slice(0, limit)
+        .map((hit) => ({ ...hit }));
+    },
+    async revealSession(path) {
+      revealedPaths.push(path);
     },
     async openExternal(url) {
       openedUrls.push(url);
@@ -151,6 +166,9 @@ export function createMockBridge(
     emitIslandHotkey() {
       for (const handler of hotkeyHandlers) handler();
     },
+    revealedPaths() {
+      return [...revealedPaths];
+    },
     openedUrls() {
       return openedUrls.map((url) => url);
     },
@@ -162,6 +180,7 @@ export function createMockBridge(
     },
   };
 }
+
 
 
 

@@ -10,6 +10,7 @@ mod logging;
 pub mod interface;
 mod process_scan;
 mod session_scan;
+mod session_search;
 mod settings_store;
 #[cfg(target_os = "windows")]
 mod single_instance;
@@ -29,6 +30,7 @@ use process_scan::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use session_scan::*;
+use session_search::*;
 use settings_store::*;
 use stats_store::*;
 use terminal::*;
@@ -487,6 +489,8 @@ pub fn run() {
             load_app_settings,
             read_recent_logs,
             open_external,
+            search_sessions_command,
+            reveal_session,
             list_approval_rules,
             add_approval_rule,
             remove_approval_rule,
@@ -625,6 +629,8 @@ pub fn run() {
         }
     });
 }
+
+
 
 
 

@@ -22,6 +22,7 @@ import {
   type AgentViewSnapshot,
   type ApprovalAuditEntry,
   type ApprovalRule,
+  type SessionSearchHit,
   type CliVersionProbe,
   type CommandValue,
   type CommandResult,
@@ -251,6 +252,12 @@ export function createTauriBridge(): AgentIslandBridge {
       const { getVersion } = await import("@tauri-apps/api/app");
       return await getVersion();
     },
+    async searchSessions(query, limit) {
+      return await invoke<SessionSearchHit[]>("search_sessions_command", { query, limit: limit ?? null });
+    },
+    async revealSession(path) {
+      await invoke("reveal_session", { path });
+    },
     async openExternal(url) {
       await invoke("open_external", { url });
     },
@@ -315,5 +322,6 @@ export function createTauriBridge(): AgentIslandBridge {
 }
 
 export const tauriBridge = createTauriBridge();
+
 
 

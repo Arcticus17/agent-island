@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 
 import App from "../../src/app/App.svelte";
-import { createMockBridge } from "../../src/bridge/mock";
+import { createMockBridge, type MockBridgeOptions } from "../../src/bridge/mock";
 import type { AgentViewSnapshot, DisplayStatus } from "../../src/bridge/types";
 
 const mounted: Array<ReturnType<typeof mount>> = [];
@@ -123,11 +123,11 @@ async function waitFor(check: () => boolean, timeoutMs = 1_000) {
 
 async function renderIsland(
   snapshots: unknown[],
-  options: { expanded?: boolean; peeked?: boolean; pollIntervalMs?: number } = {},
+  options: { expanded?: boolean; peeked?: boolean; pollIntervalMs?: number; mockOptions?: MockBridgeOptions } = {},
 ) {
   const target = document.createElement("div");
   document.body.append(target);
-  const bridge = createMockBridge(snapshots);
+  const bridge = createMockBridge(snapshots, options.mockOptions);
   const component = mount(App, {
     target,
     props: {
@@ -440,6 +440,28 @@ describe("agent strip keyboard navigation", () => {
     await waitFor(() => document.activeElement === buttons()[0]);
   });
 });
+describe("global session search", () => {
+  it("searches across sessions and reveals the matched file", async () => {
+    localStorage.clear();
+    localStorage.setItem("agent-island-onboarded", "1");
+    const hits = [
+      { agent: "claude", session: "s-1", role: "Assistant", snippet: "…先跑 npm run check 再提交…", at_ms: 1_789_000_000_000, path: "C:\\Users\\me\\.claude\\projects\\p\\s-1.jsonl" },
+      { agent: "codex", session: "s-2", role: "User", snippet: "…npm install 失败…", at_ms: 1_789_100_000_000, path: "C:\\Users\\me\\.codex\\sessions\\s-2.jsonl" },
+    ];
+    const { target, bridge } = await renderIsland([snapshot(100)], { mockOptions: { searchHits: hits } });
+    const drawer = target.querySelector<HTMLDetailsElement>('[data-testid="global-search"]')!;
+    drawer.open = true;
+    const input = await waitForElementValue(target, '[data-testid="global-search-input"]');
+    input.value = "npm";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    await waitFor(() => target.querySelectorAll('[data-testid="global-search-hit"]').length === 2, 3_000);
+    expect(target.querySelector('[data-testid="global-search-status"]')?.textContent).toContain("共 2 条");
+    target.querySelectorAll<HTMLButtonElement>('[data-testid="global-search-hit"]')[0].click();
+    await waitFor(() => (bridge as unknown as { revealedPaths(): string[] }).revealedPaths().length === 1);
+    expect((bridge as unknown as { revealedPaths(): string[] }).revealedPaths()[0]).toBe(hits[0].path);
+  });
+});
 describe("first-run onboarding", () => {
   it("shows once, remembers dismissal, and can be reopened from the palette", async () => {
     localStorage.clear();
@@ -555,6 +577,8 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
+
 
 
 

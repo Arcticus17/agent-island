@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import "../themes/tokens.css";
   import "../themes/graphite.css";
@@ -10,6 +10,7 @@
   import ApprovalRules from "../components/approvals/ApprovalRules.svelte";
   import CommandPalette from "../components/palette/CommandPalette.svelte";
   import WelcomeCard from "../components/onboarding/WelcomeCard.svelte";
+  import GlobalSearch from "../components/search/GlobalSearch.svelte";
   import { markOnboarded, shouldShowOnboarding } from "../onboarding/state";
   import { checkAppUpdate, initialAppUpdateState, type AppUpdateState } from "./release";
   import { buildPaletteCommands, type PaletteActionId, type PaletteCommand } from "../palette/commands";
@@ -1301,7 +1302,10 @@
           {#if appUpdate.message}
             <span class="about-message" data-testid="app-update-message" role="status">{appUpdate.message}</span>
           {/if}
-        </section>        {#if bridge.listApprovalRules}
+        </section>        {#if bridge.searchSessions}
+          <GlobalSearch {bridge} />
+        {/if}
+        {#if bridge.listApprovalRules}
           <ApprovalRules {bridge} />
         {/if}
         {#if selectedAgent}
@@ -1640,6 +1644,7 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
 
 
 

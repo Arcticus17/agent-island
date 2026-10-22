@@ -367,6 +367,10 @@ export interface AgentIslandBridge {
   saveAppSettings?(settings: string): Promise<void>;
   /** 应用自身版本（用于"关于/更新"提示）。 */
   getAppVersion?(): Promise<string>;
+  /** 跨会话搜索：在本地会话文件里找关键字。 */
+  searchSessions?(query: string, limit?: number): Promise<SessionSearchHit[]>;
+  /** 在资源管理器里定位会话文件。 */
+  revealSession?(path: string): Promise<void>;
   /** 用系统默认浏览器打开 https 链接（下载页）。 */
   openExternal?(url: string): Promise<void>;
   /** 全局快捷键（Ctrl+Shift+A）唤出/收起。 */
@@ -376,6 +380,15 @@ export interface AgentIslandBridge {
   addApprovalRule?(tool: string, pattern: string): Promise<ApprovalRule[]>;
   removeApprovalRule?(id: string): Promise<ApprovalRule[]>;
   listApprovalAudit?(limit?: number): Promise<ApprovalAuditEntry[]>;
+}
+
+export interface SessionSearchHit {
+  agent: string;
+  session: string;
+  role: string;
+  snippet: string;
+  at_ms: number;
+  path: string;
 }
 
 export interface ApprovalRule {
@@ -411,4 +424,5 @@ export interface TerminalOpenRequest {
 export type TerminalEvent =
   | { kind: "data"; id: string; data: string }
   | { kind: "exit"; id: string };
+
 
