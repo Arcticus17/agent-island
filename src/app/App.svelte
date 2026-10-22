@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import "../themes/tokens.css";
   import "../themes/graphite.css";
@@ -11,6 +11,7 @@
   import CommandPalette from "../components/palette/CommandPalette.svelte";
   import WelcomeCard from "../components/onboarding/WelcomeCard.svelte";
   import { markOnboarded, shouldShowOnboarding } from "../onboarding/state";
+  import { checkAppUpdate, initialAppUpdateState, type AppUpdateState } from "./release";
   import { buildPaletteCommands, type PaletteActionId, type PaletteCommand } from "../palette/commands";
   import LogCard from "../components/cards/LogCard.svelte";
   import SessionCard from "../components/cards/SessionCard.svelte";
@@ -130,6 +131,9 @@
   let diagnosticsLoadedOnce = false;
   /** 首次引导：看过一次就不再出现，命令面板里可以重看 */
   let showWelcome = $state(shouldShowOnboarding((key) => localStorage.getItem(key)));
+  /** 关于/更新：只提示新版本，自动安装留给发布链路 */
+  let appVersion = $state("");
+  let appUpdate = $state<AppUpdateState>(initialAppUpdateState(""));
   /** 固定盯住的 Agent（重启后仍然生效） */
   let pinnedAgentId = $state<string | null>(storedPinnedAgent((key) => localStorage.getItem(key)));
   let diagnosticRequest = 0;
@@ -708,6 +712,22 @@
     void syncWindowSize();
   }
 
+  async function checkAppRelease(): Promise<void> {
+    if (appUpdate.status === "checking") return;
+    appUpdate = { ...appUpdate, status: "checking", message: "正在检查…" };
+    const result = await checkAppUpdate(appVersion);
+    appUpdate = result;
+  }
+
+  async function openReleasePage(): Promise<void> {
+    const url = appUpdate.latest?.url;
+    if (!url || !bridge.openExternal) return;
+    try {
+      await bridge.openExternal(url);
+    } catch (cause) {
+      appUpdate = { ...appUpdate, message: `打开链接失败：${cause instanceof Error ? cause.message : String(cause)}` };
+    }
+  }
   /** Agent 条的方向键导航：左右循环、Home/End 跳到两端 */
   function navigateAgentStrip(event: KeyboardEvent): void {
     if (visibleAgents.length === 0) return;
@@ -1069,6 +1089,13 @@
   }
 
   onMount(() => {
+    // 版本号来自 Tauri；拿不到就保持"未知"，不阻塞任何功能
+    if (bridge.getAppVersion) {
+      void bridge.getAppVersion().then((version) => {
+        appVersion = version;
+        appUpdate = initialAppUpdateState(version);
+      }).catch(() => undefined);
+    }
     let stopListening: (() => void) | undefined;
     let stopPlacement: (() => void) | undefined;
     if (bridge.initializeWindowPlacement) {
@@ -1263,7 +1290,18 @@
             onLayoutChange={() => void syncWindowSize()}
           />
         </details>
-        {#if bridge.listApprovalRules}
+        <section class="about-row" data-testid="about-row" aria-label="版本与更新">
+          <span>版本 <strong data-testid="app-version">{appVersion ? `v${appVersion}` : "未知"}</strong></span>
+          <button type="button" data-testid="app-update-check" disabled={appUpdate.status === "checking" || !appVersion} onclick={() => void checkAppRelease()}>
+            {appUpdate.status === "checking" ? "检查中…" : "检查更新"}
+          </button>
+          {#if appUpdate.status === "available" && appUpdate.latest && bridge.openExternal}
+            <button type="button" class="primary" data-testid="app-update-open" onclick={() => void openReleasePage()}>打开下载页</button>
+          {/if}
+          {#if appUpdate.message}
+            <span class="about-message" data-testid="app-update-message" role="status">{appUpdate.message}</span>
+          {/if}
+        </section>        {#if bridge.listApprovalRules}
           <ApprovalRules {bridge} />
         {/if}
         {#if selectedAgent}
@@ -1465,7 +1503,12 @@
   .window-handle { margin-right: 10px; }
   .window-handle:focus-visible { outline: 2px solid var(--island-accent-primary); }
   /* 诊断默认收成一行，用时点开（"隐藏，用时弹出"） */
-  .diagnostics-drawer { border-top: 1px solid var(--island-border-subtle); }
+  .about-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--island-border-subtle); color: var(--island-text-secondary); font-size: 11px; }
+  .about-row strong { color: var(--island-text-primary); font-variant-numeric: tabular-nums; }
+  .about-row button { min-height: 24px; padding: 2px 10px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 10px; cursor: pointer; }
+  .about-row button.primary { border-color: var(--island-accent-primary); color: var(--island-accent-primary); }
+  .about-row button:disabled { opacity: .55; cursor: progress; }
+  .about-message { color: var(--island-text-tertiary); font-size: 10px; }  .diagnostics-drawer { border-top: 1px solid var(--island-border-subtle); }
   .diagnostics-drawer > summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; list-style: none; cursor: pointer; color: var(--island-text-secondary); font-size: 11px; }
   .diagnostics-drawer > summary::-webkit-details-marker { display: none; }
   .diagnostics-drawer > summary:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: -2px; }
@@ -1597,6 +1640,11 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
+
+
+
+
 
 
 

@@ -1,4 +1,4 @@
-export type ProcessState = "stopped" | "running";
+﻿export type ProcessState = "stopped" | "running";
 export type TurnState = "idle" | "executing" | "succeeded" | "failed";
 export type AttentionState = "none" | "input_required" | "approval_required";
 export type DisplayStatus = "stopped" | "idle" | "working" | "done" | "error" | "waiting";
@@ -365,6 +365,10 @@ export interface AgentIslandBridge {
   loadAppSettings?(): Promise<string | null>;
   /** 设置的磁盘镜像：原子写入 JSON。 */
   saveAppSettings?(settings: string): Promise<void>;
+  /** 应用自身版本（用于"关于/更新"提示）。 */
+  getAppVersion?(): Promise<string>;
+  /** 用系统默认浏览器打开 https 链接（下载页）。 */
+  openExternal?(url: string): Promise<void>;
   /** 全局快捷键（Ctrl+Shift+A）唤出/收起。 */
   listenIslandHotkey?(handler: () => void): Promise<() => void>;
   /** 审批允许清单：命中规则的 PreToolUse 直接放行，并写入审计。 */
@@ -407,3 +411,4 @@ export interface TerminalOpenRequest {
 export type TerminalEvent =
   | { kind: "data"; id: string; data: string }
   | { kind: "exit"; id: string };
+

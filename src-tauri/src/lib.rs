@@ -3,6 +3,7 @@ mod approval_rules;
 mod application;
 mod commands;
 mod domain;
+mod external;
 mod hooks;
 mod hotkey;
 mod logging;
@@ -20,6 +21,7 @@ mod usage;
 use adapters::AgentAdapter;
 use approval_rules::*;
 use commands::*;
+use external::*;
 use hooks::*;
 use hotkey::*;
 use logging::*;
@@ -484,6 +486,7 @@ pub fn run() {
             probe_cli_version,
             load_app_settings,
             read_recent_logs,
+            open_external,
             list_approval_rules,
             add_approval_rule,
             remove_approval_rule,
@@ -622,6 +625,7 @@ pub fn run() {
         }
     });
 }
+
 
 
 

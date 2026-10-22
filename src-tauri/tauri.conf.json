@@ -48,7 +48,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://registry.npmjs.org ws://localhost:1420 http://localhost:1420"
+      "csp": "default-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://registry.npmjs.org https://api.github.com ws://localhost:1420 http://localhost:1420"
     }
   }
 }

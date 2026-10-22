@@ -1871,6 +1871,10 @@ fn tauri_config_keeps_a_strict_csp() {
         "更新检查需要访问 npm registry: {csp}"
     );
     assert!(
+        csp.contains("https://api.github.com"),
+        "应用自更新检查需要访问 GitHub API: {csp}"
+    );
+    assert!(
         csp.contains("ipc: http://ipc.localhost"),
         "invoke 需要 ipc 通道: {csp}"
     );
@@ -1948,4 +1952,5 @@ fn session_scan_meets_the_performance_budget() {
 
     fs::remove_dir_all(root).unwrap();
 }
+
 

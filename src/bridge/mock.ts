@@ -11,6 +11,8 @@ export interface MockBridgeOptions {
   commandResults?: CommandResult[];
   /** probe_cli_version 返回的本地版本 */
   cliVersion?: string;
+  /** 应用自身版本（getAppVersion） */
+  appVersion?: string;
 }
 
 export interface MockAgentIslandBridge extends AgentIslandBridge {
@@ -19,6 +21,7 @@ export interface MockAgentIslandBridge extends AgentIslandBridge {
   listenerCount(): number;
   windowSizes(): readonly { width: number; height: number }[];
   savedSettings(): readonly string[];
+  openedUrls(): readonly string[];
   emitIslandHotkey(): void;
   terminalCalls(): readonly { kind: string; [key: string]: unknown }[];
   emitTerminal(event: TerminalEvent): void;
@@ -43,6 +46,7 @@ export function createMockBridge(
   let settingsBlob: string | null = null;
   const savedSettings: string[] = [];
   const hotkeyHandlers = new Set<() => void>();
+  const openedUrls: string[] = [];
   const approvalRules: Array<{ id: string; tool: string; pattern: string }> = [];
   const approvalAudit: Array<{ at_ms: number; id: string; tool: string; command: string; rule: string; decision: string }> = [];
 
@@ -79,6 +83,12 @@ export function createMockBridge(
     async saveAppSettings(settings) {
       settingsBlob = settings;
       savedSettings.push(settings);
+    },
+    async getAppVersion() {
+      return options.appVersion ?? "1.9.0";
+    },
+    async openExternal(url) {
+      openedUrls.push(url);
     },
     async listenIslandHotkey(handler) {
       hotkeyHandlers.add(handler);
@@ -141,6 +151,9 @@ export function createMockBridge(
     emitIslandHotkey() {
       for (const handler of hotkeyHandlers) handler();
     },
+    openedUrls() {
+      return openedUrls.map((url) => url);
+    },
     savedSettings() {
       return savedSettings.map((entry) => entry);
     },
@@ -149,6 +162,8 @@ export function createMockBridge(
     },
   };
 }
+
+
 
 
 

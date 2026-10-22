@@ -382,6 +382,34 @@ describe("pinned agent", () => {
     localStorage.clear();
   });
 });
+describe("app version and update check", () => {
+  it("shows the version, reports a newer release and opens the download page", async () => {
+    localStorage.clear();
+    localStorage.setItem("agent-island-onboarded", "1");
+    const { target, bridge } = await renderIsland([snapshot(100)]);
+    await waitFor(() => target.querySelector('[data-testid="app-version"]')?.textContent === "v1.9.0");
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      tag_name: "v1.10.0",
+      html_url: "https://github.com/owner/repo/releases/tag/v1.10.0",
+      body: "notes",
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+
+    target.querySelector<HTMLButtonElement>('[data-testid="app-update-check"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="app-update-message"]')?.textContent === "有新版本 v1.10.0");
+    const open = target.querySelector<HTMLButtonElement>('[data-testid="app-update-open"]');
+    expect(open).not.toBeNull();
+    open!.click();
+    await waitFor(() => bridge.openedUrls().length === 1);
+    expect(bridge.openedUrls()[0]).toBe("https://github.com/owner/repo/releases/tag/v1.10.0");
+
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
+    target.querySelector<HTMLButtonElement>('[data-testid="app-update-check"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="app-update-message"]')?.textContent?.startsWith("检查失败") === true);
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+});
 describe("agent strip keyboard navigation", () => {
   it("moves between agents with the arrow keys, Home and End", async () => {
     localStorage.clear();
@@ -527,6 +555,7 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
 
 
 

@@ -247,6 +247,13 @@ export function createTauriBridge(): AgentIslandBridge {
     async saveAppSettings(settings) {
       await invoke("save_app_settings", { settings });
     },
+    async getAppVersion() {
+      const { getVersion } = await import("@tauri-apps/api/app");
+      return await getVersion();
+    },
+    async openExternal(url) {
+      await invoke("open_external", { url });
+    },
     async listenIslandHotkey(handler) {
       return await listen("island-hotkey", () => handler());
     },
@@ -308,4 +315,5 @@ export function createTauriBridge(): AgentIslandBridge {
 }
 
 export const tauriBridge = createTauriBridge();
+
 
