@@ -513,6 +513,51 @@ describe("global session search", () => {
     await waitFor(() => target.querySelector('[data-testid="searched-session-note"]') === null);
   });
 });
+describe("manual session binding", () => {
+  it("binds the inspected session and shows the bound state", async () => {
+    localStorage.clear();
+    localStorage.setItem("agent-island-onboarded", "1");
+    const withHistory = snapshot(100);
+    withHistory.agents[0].history_sessions = [
+      {
+        id: "alpha-old",
+        name: "Alpha yesterday",
+        cwd: "D:\\work\\alpha",
+        log_path: "D:\\work\\alpha\\old.jsonl",
+        records: [],
+        recent_output: [],
+        current_file: null,
+        log_status: null,
+        alert: null,
+        lifecycle: "Historical" as const,
+        last_active_at_ms: 90,
+        display_status: "done" as const,
+      },
+    ];
+    const { target, bridge } = await renderIsland([withHistory]);
+    const picker = await waitForElementValue(target, '[data-testid="session-picker"]');
+    picker.value = "alpha-old";
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await waitFor(() => target.querySelector('[data-testid="bind-session"]') !== null);
+    target.querySelector<HTMLButtonElement>('[data-testid="bind-session"]')!.click();
+    await waitFor(() => bridge.listSessionBindings !== undefined);
+    const bindings = await bridge.listSessionBindings!();
+    expect(bindings).toEqual([["alpha", "alpha-old"]]);
+    localStorage.clear();
+  });
+
+  it("shows the bound badge and offers to unbind", async () => {
+    localStorage.clear();
+    localStorage.setItem("agent-island-onboarded", "1");
+    const bound = snapshot(100);
+    (bound.agents[0] as { binding?: string }).binding = "manual";
+    const { target } = await renderIsland([bound]);
+    await waitFor(() => target.querySelector('[data-testid="agent-binding"]')?.textContent === "已绑定");
+    expect(target.querySelector('[data-testid="unbind-session"]')).not.toBeNull();
+    localStorage.clear();
+  });
+});
 describe("agent binding badge", () => {
   it("marks island-launched agents in the header and leaves inferred ones unmarked", async () => {
     localStorage.clear();
@@ -663,6 +708,8 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
   });
 });
+
+
 
 
 

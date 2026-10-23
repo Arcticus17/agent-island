@@ -91,7 +91,7 @@ export interface AgentView {
   freshness: Freshness;
   usage: UsageInfo | null;
   /** 会话身份的可信来源：launched（岛内终端后代）/ hooked（Agent 自报）/ inferred（推断） */
-  binding?: "launched" | "hooked" | "inferred";
+  binding?: "launched" | "hooked" | "inferred" | "manual";
 }
 
 /** Rust's serialized `AgentViewSnapshot`. The bridge narrows the version to 1. */
@@ -373,6 +373,10 @@ export interface AgentIslandBridge {
   checkAppUpdate?(): Promise<AppUpdateInfo | null>;
   /** 下载并安装更新；安装完成后应用会退出。 */
   installAppUpdate?(onProgress?: (downloaded: number, total: number | null) => void): Promise<void>;
+  /** 手动把某个 Agent 绑定到指定会话（跨重启保留）。 */
+  bindSession?(agentId: string, sessionId: string): Promise<Array<[string, string]>>;
+  unbindSession?(agentId: string): Promise<Array<[string, string]>>;
+  listSessionBindings?(): Promise<Array<[string, string]>>;
   /** 跨会话搜索：在本地会话文件里找关键字。 */
   searchSessions?(query: string, limit?: number): Promise<SessionSearchHit[]>;
   /** 按会话文件路径加载完整会话（搜索结果跳转用）。 */
@@ -437,6 +441,7 @@ export interface TerminalOpenRequest {
 export type TerminalEvent =
   | { kind: "data"; id: string; data: string }
   | { kind: "exit"; id: string };
+
 
 
 

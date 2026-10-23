@@ -1,5 +1,6 @@
 mod adapters;
 mod approval_rules;
+mod bindings;
 mod application;
 mod commands;
 mod domain;
@@ -22,6 +23,7 @@ mod usage;
 
 use adapters::AgentAdapter;
 use approval_rules::*;
+use bindings::*;
 use commands::*;
 use external::*;
 use hooks::*;
@@ -362,6 +364,8 @@ struct AppState {
     hook_enabled: AtomicBool,
     hook_token: Mutex<String>,
     approvals: Mutex<HashMap<String, HookApproval>>,
+    /// 手动会话绑定（agent_id → session），持久化在 ~/.agent-island/session-bindings.json
+    bindings: Mutex<HashMap<String, BoundSession>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -464,6 +468,7 @@ pub fn run() {
             hook_enabled: AtomicBool::new(hook_enabled),
             hook_token: Mutex::new(hook_token),
             approvals: Mutex::new(HashMap::new()),
+            bindings: Mutex::new(load_bindings(&bindings_path())),
         })
         .invoke_handler(tauri::generate_handler![
             get_agents,
@@ -493,6 +498,9 @@ pub fn run() {
             open_external,
             search_sessions_command,
             load_session_by_path,
+            bind_session,
+            unbind_session,
+            list_session_bindings,
             reveal_session,
             list_approval_rules,
             add_approval_rule,
@@ -632,6 +640,7 @@ pub fn run() {
         }
     });
 }
+
 
 
 

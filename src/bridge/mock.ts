@@ -1,4 +1,4 @@
-import {
+﻿import {
   assertSupportedSnapshot,
   type AgentCommand,
   type AgentIslandBridge,
@@ -60,6 +60,7 @@ export function createMockBridge(
   const hotkeyHandlers = new Set<() => void>();
   const openedUrls: string[] = [];
   const revealedPaths: string[] = [];
+  const sessionBindings = new Map<string, string>();
   const searchHits: Array<{ agent: string; session: string; role: string; snippet: string; at_ms: number; path: string }> = options.searchHits ?? [];
   const approvalRules: Array<{ id: string; tool: string; pattern: string }> = [];
   const approvalAudit: Array<{ at_ms: number; id: string; tool: string; command: string; rule: string; decision: string }> = [];
@@ -108,6 +109,17 @@ export function createMockBridge(
       if (options.installFails) throw new Error("download failed");
       onProgress?.(50, 100);
       onProgress?.(100, 100);
+    },
+    async bindSession(agentId, sessionId) {
+      sessionBindings.set(agentId, sessionId);
+      return [...sessionBindings.entries()];
+    },
+    async unbindSession(agentId) {
+      sessionBindings.delete(agentId);
+      return [...sessionBindings.entries()];
+    },
+    async listSessionBindings() {
+      return [...sessionBindings.entries()];
     },
     async searchSessions(query, limit = 20) {
       const needle = query.trim().toLowerCase();
@@ -214,6 +226,7 @@ export function createMockBridge(
   }
   return bridge;
 }
+
 
 
 

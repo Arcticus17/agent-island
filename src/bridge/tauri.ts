@@ -278,6 +278,15 @@ export function createTauriBridge(): AgentIslandBridge {
         }
       });
     },
+    async bindSession(agentId, sessionId) {
+      return await invoke<Array<[string, string]>>("bind_session", { agentId, sessionId });
+    },
+    async unbindSession(agentId) {
+      return await invoke<Array<[string, string]>>("unbind_session", { agentId });
+    },
+    async listSessionBindings() {
+      return await invoke<Array<[string, string]>>("list_session_bindings");
+    },
     async searchSessions(query, limit) {
       return await invoke<SessionSearchHit[]>("search_sessions_command", { query, limit: limit ?? null });
     },
@@ -351,6 +360,7 @@ export function createTauriBridge(): AgentIslandBridge {
 }
 
 export const tauriBridge = createTauriBridge();
+
 
 
 

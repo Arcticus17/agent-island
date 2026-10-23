@@ -178,9 +178,10 @@ pub(crate) fn collect_agent_data(
             *entry = (*entry).max(terminal.started_at_ms);
         }
     }
+    let bindings = state.bindings.lock_recover();
     let (agents, snapshot, _diagnostics, scan_result) =
         collect_cached_with(&mut cache, Instant::now, || {
-            scan_agents(&mut sys, &mut session, &pty_roots, &launch_facts)
+            scan_agents(&mut sys, &mut session, &pty_roots, &launch_facts, &bindings)
         });
     session.cache = cache;
     if let Some((changed, completed_at)) = scan_result {

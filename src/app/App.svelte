@@ -772,6 +772,35 @@
     }
   }
   /** 搜索结果 → 打开对应会话（只读展示，不影响当前任务的会话） */
+  /** 把当前看到的会话绑定给这个 Agent：岛外启动的 Agent 也能获得确定身份 */
+  async function bindSelectedSession(): Promise<void> {
+    if (!bridge.bindSession || !selectedAgent || !selectedSession) return;
+    try {
+      await bridge.bindSession(selectedAgent.id, selectedSession.id);
+      await refreshAll();
+    } catch (cause) {
+      pushLocalNotice(
+        selectedAgent.name,
+        selectedSession.id,
+        `绑定失败：${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+  }
+
+  async function unbindSelectedSession(): Promise<void> {
+    if (!bridge.unbindSession || !selectedAgent) return;
+    try {
+      await bridge.unbindSession(selectedAgent.id);
+      await refreshAll();
+    } catch (cause) {
+      pushLocalNotice(
+        selectedAgent.name,
+        selectedAgent.active_session?.id ?? "",
+        `解除绑定失败：${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+  }
+
   async function openSearchedSession(hit: { agent: string; at_ms: number; path: string }): Promise<void> {
     if (!bridge.loadSessionByPath) return;
     try {
@@ -1409,6 +1438,13 @@
               {/each}
             </select>
           </label>
+        {#if bridge.bindSession && selectedAgent}
+          {#if selectedAgent.binding === "manual"}
+            <button type="button" class="link-button" data-testid="unbind-session" onclick={() => void unbindSelectedSession()}>解除绑定{selectedSession ? `（${selectedSession.id.slice(0, 8)}）` : ""}</button>
+          {:else if selectedSession}
+            <button type="button" class="link-button" data-testid="bind-session" onclick={() => void bindSelectedSession()}>绑定此会话</button>
+          {/if}
+        {/if}
         {#if searchedSession}
           <p class="refresh-note" role="status" data-testid="searched-session-note">
             正在查看搜索结果（{searchedMeta?.agent ?? "会话"} · {searchedSession.name}），不代表桌面端当前任务。
@@ -1578,7 +1614,13 @@
     <CommandPalette commands={paletteCommands} onRun={runPaletteCommand} onClose={() => (paletteOpen = false)} />
   {/if}
 {:else}
-  <div class="island-loading" data-theme-style={themeStyle} aria-live="polite" bind:this={islandElement}>正在连接 Agent Island…</div>
+  <div class="island-loading" data-theme-style={themeStyle} aria-live="polite" bind:this={islandElement}>
+    {#if viewState.refreshError}
+      <span data-testid="connect-error">连接失败：{viewState.refreshError.message}</span>
+    {:else}
+      正在连接 Agent Island…
+    {/if}
+  </div>
 {/if}
 
 <style>

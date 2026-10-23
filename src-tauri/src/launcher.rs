@@ -1,4 +1,4 @@
-﻿//! 启动者绑定（Launcher binding）的判定核心。
+//! 启动者绑定（Launcher binding）的判定核心。
 //!
 //! 岛内置终端用 `portable-pty` 启动 shell，shell 再启动 Agent。于是：
 //! 从 Agent 进程沿父进程链向上走，若命中某个 PTY 根 pid，就能**确定**这个 Agent 是
@@ -18,6 +18,8 @@ pub enum SessionBinding {
     #[allow(dead_code)]
     Hooked,
     /// 只能靠日志/进程推断
+    /// 用户手动绑定到某个会话（跨重启保留）
+    Manual,
     Inferred,
 }
 
@@ -34,6 +36,7 @@ impl SessionBinding {
             Self::Launched => "已确认",
             Self::Hooked => "已确认（hooks）",
             Self::Inferred => "推测",
+            Self::Manual => "已绑定",
         }
     }
 }
@@ -144,6 +147,7 @@ mod tests {
     fn labels_are_human_readable() {
         assert_eq!(SessionBinding::Launched.label(), "已确认");
         assert_eq!(SessionBinding::Inferred.label(), "推测");
+        assert_eq!(SessionBinding::Manual.label(), "已绑定");
         assert_eq!(SessionBinding::default(), SessionBinding::Inferred);
     }
 }

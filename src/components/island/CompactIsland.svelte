@@ -18,7 +18,7 @@
     /** 有审批在等：胶囊也要显性提示，不能只靠展开面板 */
     pendingApprovals?: boolean;
     /** 会话身份来源：launched（岛内终端）/ hooked（hooks）/ inferred（推断） */
-    binding?: "launched" | "hooked" | "inferred";
+    binding?: "launched" | "hooked" | "inferred" | "manual";
   } = $props();
 
   const labels: Record<DisplayStatus, string> = { stopped: "已停止", idle: "空闲", working: "工作中", done: "已完成", error: "错误", waiting: "等待确认" };
@@ -59,7 +59,7 @@
     {/if}
   {/if}
   {#if binding !== "inferred"}
-    <span class="binding" data-testid="agent-binding" data-binding={binding} title={binding === "hooked" ? "会话身份由 hooks 自报" : "该 Agent 由岛内终端启动，身份可确认"}>{binding === "hooked" ? "hooks" : "岛内启动"}</span>
+    <span class="binding" data-testid="agent-binding" data-binding={binding} title={binding === "hooked" ? "会话身份由 hooks 自报" : "该 Agent 由岛内终端启动，身份可确认"}>{binding === "hooked" ? "hooks" : binding === "manual" ? "已绑定" : "岛内启动"}</span>
   {/if}
   <span class="status" role="status" data-testid="compact-status">{pendingApprovals ? "待确认" : labels[status]}</span>
   <span class="chevron" aria-hidden="true">{expanded ? "⌃" : "⌄"}</span>
@@ -92,5 +92,7 @@
 
   @media (max-width: 300px) { .compact { grid-template-columns: auto minmax(0, 1fr) auto; } .status { display: none; } }
 </style>
+
+
 
 

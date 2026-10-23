@@ -296,6 +296,7 @@ pub(crate) fn scan_agents(
     session: &mut SessionState,
     pty_roots: &std::collections::HashSet<u32>,
     launch_facts: &std::collections::HashMap<String, u64>,
+    bindings: &std::collections::HashMap<String, crate::bindings::BoundSession>,
 ) -> (
     Vec<AgentInfo>,
     interface::snapshot::AgentViewSnapshot,
@@ -574,6 +575,16 @@ pub(crate) fn scan_agents(
             .map(|fact| fact.identity.process_ids.clone())
             .unwrap_or_default();
         agent.binding = launcher::binding_for_pids(&pids, &parents, pty_roots);
+        // 用户手动绑定优先：把活动会话固定到指定 session（岛外启动也能确认身份）
+        if let Some(bound) = bindings.get(&agent.id) {
+            if let Some(candidate) = session_candidates.iter().find(|candidate| {
+                candidate.identity.agent_id == agent.id
+                    && candidate.identity.session_id == bound.session_id
+            }) {
+                agent.active_session = Some(candidate.view.clone());
+                agent.binding = launcher::SessionBinding::Manual;
+            }
+        }
     }
     for agent in &snapshot.agents {
         if let Some(view) = &agent.diagnostic {

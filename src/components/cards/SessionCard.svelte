@@ -1,11 +1,12 @@
-﻿<script lang="ts">
+<script lang="ts">
   import type { SessionView } from "../../bridge/types";
-  let { session, privacy, binding = "inferred" }: { session: SessionView; privacy: boolean; binding?: "launched" | "hooked" | "inferred" } = $props();
+  let { session, privacy, binding = "inferred" }: { session: SessionView; privacy: boolean; binding?: "launched" | "hooked" | "inferred" | "manual" } = $props();
 
-  const bindingLabel: Record<"launched" | "hooked" | "inferred", string> = {
+  const bindingLabel: Record<"launched" | "hooked" | "inferred" | "manual", string> = {
     launched: "已确认",
     hooked: "已确认（hooks）",
     inferred: "推测",
+    manual: "已绑定",
   };
 </script>
 
@@ -26,4 +27,6 @@
   strong, .path, .file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } strong { font-size: 13px; }
   .path { color: var(--island-text-primary); font-size: 12px; } .file { color: var(--island-text-secondary); font-size: 11px; }
 </style>
+
+
 

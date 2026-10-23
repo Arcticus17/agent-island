@@ -32,7 +32,7 @@
     error?: string | null;
     maximized?: boolean;
     /** 选中 Agent 的会话身份来源：launched/hooked 时显示"已绑定" */
-    binding?: "launched" | "hooked" | "inferred";
+    binding?: "launched" | "hooked" | "inferred" | "manual";
     onToggleMax?: () => void;
     onStart?: (program: string) => void;
     onStop?: () => void;
@@ -241,4 +241,5 @@
   .terminal-panel:has(.screen.maximized) { gap: 8px; }
   .error { margin: 0; color: var(--island-refresh-error-text); font-size: 11px; overflow-wrap: anywhere; }
 </style>
+
 

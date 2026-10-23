@@ -124,3 +124,38 @@ claude 停在模型选择界面、**还没有产生会话文件**——没有会
 需要一次真实交互才能确认——留给下一次实际使用。
 
 **测试**：Rust 185（+3：启动后过滤、回退、程序映射）；浏览器 118（+1：终端绑定徽标出现/不出现）。
+## 九、S3 落地记录（2026-10-23）：手动绑定
+
+岛外启动的 Agent 只能推断。S3 让用户点一次就把它变成事实，并且**跨重启保留**。
+
+**实现**
+
+| 位置 | 内容 |
+| --- | --- |
+| `bindings.rs`（新） | `BoundSession` + `load_bindings`/`save_bindings`（原子写、容忍 BOM、坏文件当空表） |
+| 命令 | `bind_session(agent_id, session_id)` / `unbind_session(agent_id)` / `list_session_bindings()` |
+| `AppState` | `bindings: Mutex<HashMap<String, BoundSession>>`，启动时从 `~/.agent-island/session-bindings.json` 载入 |
+| `process_scan` | 快照构建后，若有绑定且候选中存在该 session → `active_session` 固定为该会话，`binding = manual` |
+| 界面 | 会话下拉旁「绑定此会话」/「解除绑定（id）」；头部徽标「已绑定」 |
+
+**真机验证（2026-10-23 15:2x，通过 WebView2 CDP 读取真实 DOM，而不是靠截图猜）**
+
+| 步骤 | 观察 |
+| --- | --- |
+| 选 Claude Code + 选一条本地记录 + 点「绑定此会话」 | 头部 `已绑定`，会话 `3279564d-…`；`session-bindings.json` 写入 `{"claude":{"session_id":"3279564d-…"}}` |
+| 重启应用 | 仍是 `已绑定` + 同一会话（持久化生效） |
+| 点「解除绑定」 | 1s 内徽标消失，文件变成 `{}` |
+
+**测试**：Rust 187（+2：绑定表往返含 BOM、坏文件降级）；浏览器 120（+2：绑定时调用桥接并落表、已绑定状态显示解除按钮）。
+
+## 十、一次踩坑记录：状态卡在「正在连接 Agent Island…」
+
+排查 S3 时遇到岛一直显示「正在连接 Agent Island…」，一度以为是 S3 引入的回归。实际原因是**环境**：
+多次强杀应用后残留了多个 `cargo`（占着 target 构建锁）和旧的 `vite`（占着 1420 端口），
+新启动的 `tauri dev` 复用了旧前端服务，webview 拿到的是不一致的模块图。
+
+处理：一次性清掉 `cargo`/`rustc`/`dynamic-island`/`node` 与 1420 端口占用者，再重启；
+并用 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333` + Playwright CDP
+直接读真实 DOM 做验证——比截图可靠得多（截图会被遮挡、缩放、窗口位置误导）。
+
+顺带改进：加载态现在会显示真实错误（`data-testid="connect-error"`），而不是永远「正在连接…」。
