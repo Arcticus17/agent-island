@@ -59,7 +59,7 @@ listenTerminalEvents?(handler): Promise<() => void>;   // {kind:"data"} | {kind:
 | --- | --- |
 | 展开 → 点「内置终端」 | 面板出现，`codex` 自动启动，标题显示「终端 codex」，状态「运行中」 |
 | Codex CLI 自己的界面 | 岛内渲染出 Codex 的更新提示（`✨ Update available! 0.153.4 → 0.163.0 … Press enter to continue`）和早期的 workspace 信任提示——说明是真 TUI 在 PTY 里跑 |
-| 点「Shell」 | 立即出现 `Microsoft Windows [版本 10.0.26200.8457]` + `C:\Users\LENOVO>` 提示符 |
+| 点「Shell」 | 立即出现 `Microsoft Windows [版本 10.0.26200.8457]` + `C:\Users\<you>>` 提示符 |
 | 键盘输入 `echo island-terminal-ok` + Enter | 终端回显命令并打印 `island-terminal-ok`——输入、输出双向都通 |
 | 点「关闭」/ 收起面板 | `terminal_close` 结束子进程，面板回到「未启动」 |
 

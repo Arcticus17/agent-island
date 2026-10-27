@@ -30,7 +30,7 @@
 ## 验证
 
 **实机**：`Ctrl+Shift+A` 展开 → `Ctrl+K` 打开面板，可见
-`Claude Code / Codex CLI / LENOVO（历史会话）/ OpenCode / 打开内置终端 / 刷新快照 / 切换隐私遮罩 / 切换专注模式`，
+`Claude Code / Codex CLI / <you>（历史会话）/ OpenCode / 打开内置终端 / 刷新快照 / 切换隐私遮罩 / 切换专注模式`，
 底部提示 `↑↓ 选择 · Enter 执行 · Esc 关闭`；Esc 关闭正常。
 截图：`mac-island-analysis/palette-live-2.png`。
 

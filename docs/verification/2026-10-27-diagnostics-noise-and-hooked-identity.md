@@ -1,4 +1,4 @@
-﻿# 诊断噪音与 Agent 自报身份（2026-10-27）
+# 诊断噪音与 Agent 自报身份（2026-10-27）
 
 ## 一、问题：Claude 永远显示「11 项提示」
 
@@ -23,7 +23,7 @@
 ```json
 {"type":"mode","sessionId":"4c4cb04d-…"}
 {"type":"file-history-snapshot","sessionId":"4c4cb04d-…"}
-{"type":"user",…,"cwd":"C:\\Users\\LENOVO",…}
+{"type":"user",…,"cwd":"C:\\Users\\<you>",…}
 ```
 
 结果：`cwd = None` → 每个文件刷一条 `acquisition_incomplete`，**而且会话无法与进程对上**
@@ -63,9 +63,9 @@ session id。没有消息的会话就 fallback 到**文件名**，与索引阶�
 
 ```
 candidates=3 diagnostics=0
-candidate session=4c4cb04d-… cwd=Some("C:\\Users\\LENOVO")
-candidate session=a29d1bc4-… cwd=Some("C:\\Users\\LENOVO")
-candidate session=610ea405-… cwd=Some("C:\\Users\\LENOVO")
+candidate session=4c4cb04d-… cwd=Some("C:\\Users\\<you>")
+candidate session=a29d1bc4-… cwd=Some("C:\\Users\\<you>")
+candidate session=610ea405-… cwd=Some("C:\\Users\\<you>")
 ```
 
 界面上 Claude 的诊断从「11 项提示」变成「无异常」。

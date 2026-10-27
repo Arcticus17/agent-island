@@ -150,12 +150,13 @@ mod tests {
         assert_eq!(health.version, "1.19.4");
         assert!(parse_health("not json").is_none());
 
+        // 形状取自真实响应；id/路径换成中性值，避免把本机会话信息带进仓库
         let sessions = parse_sessions(
-            r#"[{"id":"ses_ea38f0a47ffe6W8ZH2qWVHWaMA","slug":"happy-rocket","directory":"C:\\Users\\LENOVO","title":"New session"},{"id":"ses_f50f72acbffeOeoKf7AQ7w9Cvn","directory":"D:\\l"}]"#,
+            r#"[{"id":"ses_example_a","slug":"happy-rocket","directory":"C:\\work\\demo","title":"New session"},{"id":"ses_example_b","directory":"D:\\work\\other"}]"#,
         );
         assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[0].id, "ses_ea38f0a47ffe6W8ZH2qWVHWaMA");
-        assert_eq!(sessions[0].directory.as_deref(), Some("C:\\Users\\LENOVO"));
+        assert_eq!(sessions[0].id, "ses_example_a");
+        assert_eq!(sessions[0].directory.as_deref(), Some("C:\\work\\demo"));
         assert_eq!(sessions[1].title, None);
     }
 

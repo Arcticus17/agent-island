@@ -1,4 +1,4 @@
-﻿# 根级改法：从「观测 Agent」到「岛自己拉起 Agent」
+# 根级改法：从「观测 Agent」到「岛自己拉起 Agent」
 
 日期：2026-10-22
 决策人：用户（选择 A）
@@ -189,8 +189,8 @@ GET /event           → SSE: data: {"type":"server.connected","properties":{}}
 ```text
 health=OpenCodeHealth { healthy: true, version: "1.19.4" }
 sessions=29
-  ses_ea38f0a4… Some("C:\\Users\\LENOVO") Some("New session - 2026-10-21T03:11:09.240Z")
-  ses_f50f72ac… Some("D:\\leetcode") Some("机票预定系统状态转换图绘制")
+  ses_example_a Some("C:\\Users\\<you>") Some("New session - 2026-10-21T03:11:09.240Z")
+  ses_example_b Some("D:\\work\\other") Some("（会话标题略）")
 busy=None
 ```
 
