@@ -74,24 +74,25 @@
     };
   }
 
-  /** 上一次真正上报给 PTY 的尺寸：只有列/行真的变了才通知后端。
-   *  ConPTY 在尺寸变化时会让 TUI 重绘整屏，拖动窗口时的连续 resize 会把重绘
-   *  一行行灌进 scrollback，看起来就是"内容重复"。 */
-  let reported = { cols: 0, rows: 0 };
-
-  function fit(): void {
+  /**
+   * 视觉上始终适配容器；是否让 PTY 跟着变由 App 决定（它持有"PTY 当前尺寸"）。
+   *
+   * 原因：ConPTY 尺寸一变，claude/codex 这类 TUI 会把整屏重新打印一遍，
+   * 而重打印的内容会被追加进 scrollback——拖动/伸缩窗口时就会看到同一段内容反复出现。
+   * 所以普通窗口伸缩只做本地 reflow（report=false），只有挂载对齐和用户点最大化才上报。
+   */
+  function fit(report = false): void {
     if (!fitAddon || !terminal) return;
     try {
       fitAddon.fit();
     } catch {
       return;
     }
-    if (terminal.cols === reported.cols && terminal.rows === reported.rows) return;
-    reported = { cols: terminal.cols, rows: terminal.rows };
+    if (!report) return;
     onResize?.(terminal.cols, terminal.rows);
   }
 
-  /** 拖动/展开窗口时 ResizeObserver 会连发很多次；等停下来再 fit，避免 resize 风暴。 */
+  /** 拖动/展开窗口时 ResizeObserver 会连发很多次；等停下来再做本地 reflow。 */
   let fitTimer: number | undefined;
   function scheduleFit(): void {
     if (fitTimer !== undefined) window.clearTimeout(fitTimer);
@@ -146,7 +147,8 @@
   /** 会话就绪（首次启动或重新挂载后拿到 id）→ 重新对齐尺寸并聚焦。 */
   $effect(() => {
     if (!sessionId || !terminal) return;
-    requestAnimationFrame(() => fit());
+    // 会话就绪时对齐一次 PTY 尺寸（这是唯一"必须让 TUI 知道"的时刻之一）
+    requestAnimationFrame(() => fit(true));
   });
 
   onMount(() => {
@@ -158,6 +160,8 @@
     }
     synced = true;
     requestAnimationFrame(() => {
+      // 首次挂载只做本地 reflow；PTY 尺寸由 open 时的 cols/rows 决定，
+      // 真正的对齐发生在会话就绪（下面的 $effect）和最大化时。
       fit();
       if (sessionId) instance.focus();
       onLayoutChange?.();
@@ -212,7 +216,11 @@
           aria-pressed={maximized}
           aria-label={maximized ? "还原终端大小" : "放大终端"}
           title={maximized ? "还原终端大小" : "放大终端：窗口一起放大"}
-          onclick={onToggleMax}
+          onclick={() => {
+            onToggleMax?.();
+            // 最大化/还原是用户明确要求的尺寸变化：等布局落定后再对齐 PTY
+            window.setTimeout(() => fit(true), 260);
+          }}
         >
           {#if maximized}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">

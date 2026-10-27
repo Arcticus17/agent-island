@@ -218,6 +218,8 @@
   let terminalExited = $state(false);
   let terminalError = $state<string | null>(null);
   let terminalSize = { cols: 80, rows: 20 };
+  /** PTY 当前的尺寸（null = 还没开或已关闭）；窗口拖动不应该改变它 */
+  let ptySize: { cols: number; rows: number } | null = null;
   function agentCliName(agent: { name: string } | null): string {
     const map: Record<string, string> = { "Claude Code": "claude", "Codex CLI": "codex", OpenCode: "opencode", Hermes: "hermes" };
     return (agent && map[agent.name]) ?? "Shell";
@@ -558,6 +560,8 @@
         return;
       }
       terminalId = id;
+      // 记录下来：PTY 从这一刻起就是这个尺寸，之后只有真正的尺寸变化才通知它
+      ptySize = { cols: terminalSize.cols, rows: terminalSize.rows };
       terminalProgram = target;
     } catch (cause) {
       terminalError = cause instanceof Error ? cause.message : String(cause);
@@ -570,6 +574,7 @@
   async function stopTerminal(): Promise<void> {
     const current = terminalId;
     terminalId = null;
+    ptySize = null;
     terminalProgram = null;
     terminalText = "";
     terminalExited = false;
@@ -1268,6 +1273,7 @@
         } else {
           terminalExited = true;
           terminalId = null;
+    ptySize = null;
           void syncWindowSize();
         }
       }).then((unlisten) => {
@@ -1545,7 +1551,12 @@
               onInput={(data) => { if (terminalId) void bridge.terminalWrite?.(terminalId, data).catch(() => undefined); }}
               onResize={(cols, rows) => {
                 terminalSize = { cols, rows };
-                if (terminalId) void bridge.terminalResize?.(terminalId, cols, rows).catch(() => undefined);
+                if (!terminalId) return;
+                // PTY 现在的尺寸由 App 记住（面板会重挂载，不能把"已上报"存在面板里）。
+                // 尺寸没变就绝不再通知后端：ConPTY 每变一次，TUI 就把整屏重打一遍。
+                if (ptySize && ptySize.cols === cols && ptySize.rows === rows) return;
+                ptySize = { cols, rows };
+                void bridge.terminalResize?.(terminalId, cols, rows).catch(() => undefined);
               }}
               onLayoutChange={() => void syncWindowSize()}
             />

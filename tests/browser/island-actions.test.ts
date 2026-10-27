@@ -1,4 +1,4 @@
-﻿import { mount, unmount } from "svelte";
+import { mount, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 
@@ -1181,6 +1181,26 @@ describe("pixel mascot motion", () => {
     expect(mascot!.classList.contains("resting")).toBe(resting);
   });
 });
+describe("terminal explicit resize", () => {
+  it("only tells the PTY about a size change when the user maximizes", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-toggle"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="terminal-panel"]') !== null);
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const before = harness.terminalCalls().filter((call) => call.kind === "resize").length;
+    const screen = target.querySelector<HTMLElement>('[data-testid="terminal-screen"]')!;
+    screen.style.height = "260px";
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(harness.terminalCalls().filter((call) => call.kind === "resize").length).toBe(before);
+    // 最大化是用户明确要求的尺寸变化 → 允许一次上报
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-maximize"]')!.click();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(harness.terminalCalls().filter((call) => call.kind === "resize").length).toBe(before + 1);
+  });
+});
+
 describe("terminal resize storm", () => {
   it("reports at most one PTY resize for a burst of container resizes", async () => {
     const harness = createBridgeHarness([snapshot(100)]);
@@ -1199,8 +1219,8 @@ describe("terminal resize storm", () => {
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
     const resizes = harness.terminalCalls().filter((call) => call.kind === "resize").length;
-    // 五次连续变化只允许换来一次 PTY resize（否则 TUI 会反复重绘、scrollback 里出现重复内容）
-    expect(resizes - baseline).toBeLessThanOrEqual(1);
+    // 拖动/伸缩只做本地 reflow：一次都不该通知 PTY（否则 TUI 反复重绘、scrollback 出现重复内容）
+    expect(resizes - baseline).toBe(0);
   });
 });
 describe("terminal launch binding", () => {
@@ -1362,6 +1382,7 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
 
 
 
