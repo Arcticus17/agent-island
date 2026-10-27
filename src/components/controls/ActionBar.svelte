@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { onDestroy } from "svelte";
   import type { AgentCommand, AgentView, CommandResult, SessionView } from "../../bridge/types";
   import type { CommandFailure, CommandUiState } from "../events/types";
@@ -115,16 +115,33 @@
     void execute(key, { name, agentName: agent.name });
   }
 
+  /**
+   * "为什么现在不能打开"——把原因说清楚，而不是等用户点了再弹一句笼统的错误。
+   * 三种情况完全不同：会话没确认 / 会话没有 cwd / 选中的历史记录已不在快照里。
+   */
+  const directoryReason = $derived(
+    session
+      ? session.cwd
+        ? null
+        : "这条会话没有记录工作目录（日志里缺少 cwd）"
+      : inspectingHistory
+        ? "所选历史记录已不在当前快照中，请重新选择"
+        : "当前会话未确认：先在「查看会话」里选一条记录",
+  );
+  const terminalReason = $derived(
+    agent && session ? null : inspectingHistory ? "所选历史记录已不可用" : "当前会话未确认，无法确定终端位置",
+  );
+
   function openDirectory(): void {
     const path = session?.cwd;
     if (path) void execute("directory", { name: "open_path", path });
-    else unavailable("directory", "尚未确认当前会话的工作目录，不能打开其他历史会话的目录。");
+    else unavailable("directory", directoryReason ?? "尚未确认当前会话的工作目录");
   }
 
   function openTerminal(): void {
     if (agent && session) {
       void execute("terminal", { name: "open_session_terminal", agentName: agent.name, sessionId: session.id });
-    } else unavailable("terminal", "尚未确认当前会话，无法确定终端应打开的位置。请先在总览中确认目标会话。");
+    } else unavailable("terminal", terminalReason ?? "尚未确认当前会话");
   }
 
   function unavailable(key: ActionKey, message: string): void {
@@ -158,8 +175,8 @@
   <div class="action-row">
   <div class="actions">
     <button type="button" data-testid="action-overview" disabled={states.overview === "pending"} onclick={() => void execute("overview", { name: "open_overview" })}>{actionLabel("overview", "总览", "打开中…", "已打开")}</button>
-    <button type="button" data-testid="action-directory" disabled={states.directory === "pending"} onclick={openDirectory}>{actionLabel("directory", "目录", "打开中…", "已打开")}</button>
-    <button type="button" data-testid="action-terminal" disabled={states.terminal === "pending"} onclick={openTerminal}>{actionLabel("terminal", "终端", "打开中…", "已打开")}</button>
+    <button type="button" data-testid="action-directory" title={directoryReason ?? "打开会话工作目录"} disabled={states.directory === "pending"} onclick={openDirectory}>{actionLabel("directory", "目录", "打开中…", "已打开")}</button>
+    <button type="button" data-testid="action-terminal" title={terminalReason ?? "在这个会话的目录里打开终端"} disabled={states.terminal === "pending"} onclick={openTerminal}>{actionLabel("terminal", "终端", "打开中…", "已打开")}</button>
     <button type="button" data-testid="action-focus" title={inspectingHistory ? "本地记录无法定位实时窗口" : agent?.state.process === "running" ? "切回 Agent 所在窗口" : "Agent 未运行，无法跳回"} disabled={inspectingHistory || agent?.state.process !== "running" || states.focus === "pending"} onclick={() => agentCommand("focus", "focus_agent_terminal")}>{actionLabel("focus", "跳回", "跳转中…", "已跳回")}</button>
     <button type="button" data-testid="action-restart" title="使用记录的启动方式重新打开 Agent；不会停止现有任务" disabled={inspectingHistory || agent?.can_restart !== true || states.restart === "pending"} onclick={() => agentCommand("restart", "restart_agent")}>{actionLabel("restart", "重启", "启动中…", "已请求启动")}</button>
     <button class="danger" type="button" data-testid="action-stop" data-action-state={states.stop} disabled={inspectingHistory || !agent || agent.state.process !== "running" || states.stop === "pending"} onclick={stop}>

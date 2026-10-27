@@ -1,4 +1,4 @@
-import { mount, unmount } from "svelte";
+﻿import { mount, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 
@@ -466,9 +466,10 @@ describe("Agent Island commands", () => {
     await waitFor(() => harness.commands.length === 1);
     expect(harness.commands[0]).toEqual({ name: "focus_agent_terminal", agentName: "Claude Code" });
     target.querySelector<HTMLButtonElement>('[data-testid="action-directory"]')!.click();
-    await waitFor(() => target.textContent?.includes("尚未确认当前会话的工作目录") === true);
+    // 没会话时要说清"该怎么做"，而不是笼统一句"未确认"
+    await waitFor(() => target.textContent?.includes("先在「查看会话」里选一条记录") === true);
     target.querySelector<HTMLButtonElement>('[data-testid="action-terminal"]')!.click();
-    await waitFor(() => target.textContent?.includes("无法确定终端应打开的位置") === true);
+    await waitFor(() => target.textContent?.includes("当前会话未确认，无法确定终端位置") === true);
     expect(harness.commands).toHaveLength(1);
   });
 
@@ -1382,6 +1383,7 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
 
 
 
