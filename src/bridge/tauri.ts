@@ -1,6 +1,7 @@
-﻿import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { availableMonitors, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
+import type { AgentTaskSnapshot } from "./types";
 import { clampWindowPlacement, parseWindowPlacement, WINDOW_PLACEMENT_KEY } from "./window-placement";
 
 // Temporary raw exports keep the reversible legacy UI working while all new
@@ -58,6 +59,8 @@ function commandInvocation(command: AgentCommand): {
         commandName: command.name,
         args: { name: command.agentName, sessionId: command.sessionId },
       };
+    case "run_task":
+      return { commandName: "start_agent_task", args: { prompt: command.prompt } };
     case "send_to_session":
       return {
         commandName: command.name,
@@ -278,6 +281,19 @@ export function createTauriBridge(): AgentIslandBridge {
         }
       });
     },
+    async startAgentTask(prompt) {
+      return await invoke<string>("start_agent_task", { prompt });
+    },
+    async cancelAgentTask(id) {
+      await invoke("cancel_agent_task", { id });
+    },
+    async listAgentTasks() {
+      return await invoke<AgentTaskSnapshot[]>("list_agent_tasks");
+    },
+    async onAgentTask(handler) {
+      const { listen } = await import("@tauri-apps/api/event");
+      return await listen<AgentTaskSnapshot>("agent-task", (event) => handler(event.payload));
+    },
     async bindSession(agentId, sessionId) {
       return await invoke<Array<[string, string]>>("bind_session", { agentId, sessionId });
     },
@@ -360,6 +376,7 @@ export function createTauriBridge(): AgentIslandBridge {
 }
 
 export const tauriBridge = createTauriBridge();
+
 
 
 

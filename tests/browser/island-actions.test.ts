@@ -14,6 +14,7 @@ import type {
   HookApproval,
   HookEvent,
   TerminalEvent,
+  AgentTaskSnapshot,
 } from "../../src/bridge/types";
 
 const mounted: Array<ReturnType<typeof mount>> = [];
@@ -91,7 +92,9 @@ interface BridgeHarness {
   readonly snapshotCalls: () => number;
   readonly listenerCount: () => number;
   readonly terminalCalls: () => Array<{ kind: string; [key: string]: unknown }>;
+  readonly taskCalls: () => Array<{ id: string; prompt: string }>;
   readonly resizeCalls: () => Array<{ width: number; height: number }>;
+  emitTask(task: AgentTaskSnapshot): void;
   emit(event: HookEvent): void;
   emitTerminal(event: TerminalEvent): void;
   emitWindowFocus(focused: boolean): void;
@@ -117,6 +120,8 @@ function createBridgeHarness(
   const approvalAudit: Array<{ at_ms: number; id: string; tool: string; command: string; rule: string; decision: string }> = [];
   const cliVersion = "0.1.0";
   const terminalLog: Array<{ kind: string; [key: string]: unknown }> = [];
+  const taskLog: Array<{ id: string; prompt: string }> = [];
+  const taskHandlers = new Set<(task: AgentTaskSnapshot) => void>();
   const resizeLog: Array<{ width: number; height: number }> = [];
   let terminalSequence = 0;
 
@@ -183,6 +188,21 @@ function createBridgeHarness(
     async listApprovalAudit(limit) {
       return approvalAudit.slice(0, limit ?? 20).map((entry) => ({ ...entry }));
     },
+    async startAgentTask(prompt) {
+      const id = `task-${taskLog.length + 1}`;
+      taskLog.push({ id, prompt });
+      return id;
+    },
+    async cancelAgentTask() {
+      return;
+    },
+    async listAgentTasks() {
+      return [];
+    },
+    async onAgentTask(handler) {
+      taskHandlers.add(handler);
+      return () => taskHandlers.delete(handler);
+    },
     async probeCliVersion(program) {
       return { program, version: cliVersion, raw: `mock ${cliVersion}`, ok: true };
     },
@@ -194,6 +214,10 @@ function createBridgeHarness(
     snapshotCalls: () => getSnapshotCalls,
     listenerCount: () => handlers.size,
     terminalCalls: () => terminalLog.map((entry) => ({ ...entry })),
+    taskCalls: () => taskLog.map((entry) => ({ ...entry })),
+    emitTask(task: AgentTaskSnapshot) {
+      for (const handler of taskHandlers) handler(structuredClone(task));
+    },
     resizeCalls: () => resizeLog.map((entry) => ({ ...entry })),
     emit(event) {
       for (const handler of handlers) handler(structuredClone(event));
@@ -1180,6 +1204,39 @@ describe("terminal launch binding", () => {
     expect(inferredTarget.querySelector('[data-testid="terminal-binding"]')).toBeNull();
   });
 });
+describe("island task mode", () => {
+  it("runs a codex task when the agent has no session, then reports completion", async () => {
+    const stopped = snapshot(100, "stopped");
+    stopped.agents[0].id = "codex";
+    stopped.agents[0].name = "Codex CLI";
+    stopped.agents[0].active_session = null;
+    const harness = createBridgeHarness([stopped]);
+    const target = await renderIsland(harness);
+
+    const input = await waitForElement(target, '[data-testid="prompt-input"]') as HTMLInputElement;
+    expect(input.placeholder).toContain("任务模式");
+    input.value = "把 README 里的错别字改掉";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const send = target.querySelector<HTMLButtonElement>('[data-testid="prompt-send"]')!;
+    expect(send.disabled).toBe(false);
+    send.click();
+
+    await waitFor(() => harness.taskCalls().length === 1);
+    expect(harness.taskCalls()[0].prompt).toBe("把 README 里的错别字改掉");
+    await waitFor(() => target.querySelector('[data-testid="prompt-output"]') !== null);
+
+    harness.emitTask({
+      id: "task-1",
+      agentId: "codex",
+      state: "succeeded",
+      sessionId: "thread-1",
+      message: "补丁已应用",
+    });
+    await waitFor(() => target.querySelector('[data-testid="prompt-output"]')?.textContent?.includes("已结束") ?? false);
+    expect(target.querySelector('[data-testid="prompt-output"]')?.textContent).toContain("补丁已应用");
+  });
+});
 describe("island built-in terminal", () => {
   it("opens a PTY for the selected agent and closes it when toggled off", async () => {
     const harness = createBridgeHarness([snapshot(100)]);
@@ -1283,6 +1340,8 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
+
 
 
 

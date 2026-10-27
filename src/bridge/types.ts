@@ -1,4 +1,4 @@
-﻿export type ProcessState = "stopped" | "running";
+export type ProcessState = "stopped" | "running";
 export type TurnState = "idle" | "executing" | "succeeded" | "failed";
 export type AttentionState = "none" | "input_required" | "approval_required";
 export type DisplayStatus = "stopped" | "idle" | "working" | "done" | "error" | "waiting";
@@ -298,6 +298,7 @@ export type AgentCommand =
   | { name: "restart_session"; agentName: string; sessionId: string }
   | { name: "stop_session"; agentName: string; sessionId: string }
   | { name: "send_to_session"; agentName: string; sessionId: string; prompt: string }
+  | { name: "run_task"; agentName: string; prompt: string }
   | { name: "get_send_output"; taskId: string }
   | { name: "get_hook_status" }
   | { name: "set_hook_enabled"; enabled: boolean }
@@ -308,7 +309,19 @@ export type AgentCommand =
   | { name: "privacy_active" }
   | { name: "get_stats_report"; days: number };
 
+export interface AgentTaskSnapshot {
+  id: string;
+  agentId: string;
+  state: "running" | "succeeded" | "failed" | "cancelled";
+  sessionId: string | null;
+  message: string | null;
+  /** 已产生的输出行（前端累积，用于复用发送回执） */
+  lines?: string[];
+}
+
 export interface SendOutput {
+  /** 任务模式：结束但失败（用于把「已结束」和「失败」区分开） */
+  failed?: boolean;
   done: boolean;
   lines: string[];
 }
@@ -373,6 +386,11 @@ export interface AgentIslandBridge {
   checkAppUpdate?(): Promise<AppUpdateInfo | null>;
   /** 下载并安装更新；安装完成后应用会退出。 */
   installAppUpdate?(onProgress?: (downloaded: number, total: number | null) => void): Promise<void>;
+  /** 岛内任务模式：用 `codex exec --json` 跑一次性任务，事件权威。 */
+  startAgentTask?(prompt: string): Promise<string>;
+  cancelAgentTask?(id: string): Promise<void>;
+  listAgentTasks?(): Promise<AgentTaskSnapshot[]>;
+  onAgentTask?(handler: (task: AgentTaskSnapshot) => void): Promise<() => void>;
   /** 手动把某个 Agent 绑定到指定会话（跨重启保留）。 */
   bindSession?(agentId: string, sessionId: string): Promise<Array<[string, string]>>;
   unbindSession?(agentId: string): Promise<Array<[string, string]>>;
@@ -441,6 +459,8 @@ export interface TerminalOpenRequest {
 export type TerminalEvent =
   | { kind: "data"; id: string; data: string }
   | { kind: "exit"; id: string };
+
+
 
 
 

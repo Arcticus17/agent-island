@@ -61,6 +61,8 @@ export function createMockBridge(
   const openedUrls: string[] = [];
   const revealedPaths: string[] = [];
   const sessionBindings = new Map<string, string>();
+  const agentTasks: Array<{ id: string; prompt: string }> = [];
+  const taskHandlers = new Set<(task: import("./types").AgentTaskSnapshot) => void>();
   const searchHits: Array<{ agent: string; session: string; role: string; snippet: string; at_ms: number; path: string }> = options.searchHits ?? [];
   const approvalRules: Array<{ id: string; tool: string; pattern: string }> = [];
   const approvalAudit: Array<{ at_ms: number; id: string; tool: string; command: string; rule: string; decision: string }> = [];
@@ -109,6 +111,23 @@ export function createMockBridge(
       if (options.installFails) throw new Error("download failed");
       onProgress?.(50, 100);
       onProgress?.(100, 100);
+    },
+    async startAgentTask(prompt) {
+      const id = `task-${agentTasks.length + 1}`;
+      agentTasks.push({ id, prompt });
+      return id;
+    },
+    async cancelAgentTask(id) {
+      for (const handler of taskHandlers) {
+        handler({ id, agentId: "codex", state: "cancelled", sessionId: null, message: null });
+      }
+    },
+    async listAgentTasks() {
+      return agentTasks.map((task) => ({ id: task.id, agentId: "codex", state: "running" as const, sessionId: null, message: null }));
+    },
+    async onAgentTask(handler) {
+      taskHandlers.add(handler);
+      return () => taskHandlers.delete(handler);
     },
     async bindSession(agentId, sessionId) {
       sessionBindings.set(agentId, sessionId);
@@ -226,6 +245,7 @@ export function createMockBridge(
   }
   return bridge;
 }
+
 
 
 

@@ -9,6 +9,7 @@
     runCommand,
     onLayoutChange,
     disabledReason = null,
+    taskCapable = false,
   }: {
     agent: AgentView | null;
     session: SessionView | null;
@@ -16,6 +17,8 @@
     onLayoutChange?: () => void;
     /** 例如正在查看历史记录 / 隐私遮罩时的说明 */
     disabledReason?: string | null;
+    /** 没有会话也能发（岛内任务模式：`codex exec --json`） */
+    taskCapable?: boolean;
   } = $props();
 
   type SendState = "idle" | "pending" | "streaming" | "done" | "failed";
@@ -28,9 +31,16 @@
   let timer: number | undefined;
 
   const busy = $derived(sendState === "pending" || sendState === "streaming");
-  const canSend = $derived(Boolean(agent && session && draft.trim().length > 0 && !busy && !disabledReason));
+  const canSend = $derived(
+    Boolean(agent && (session || taskCapable) && draft.trim().length > 0 && !busy && !disabledReason),
+  );
   const placeholder = $derived(
-    disabledReason ?? (session ? "给当前会话发一条指令…" : "当前会话未确认，无法发送指令"),
+    disabledReason
+      ?? (session
+        ? "给当前会话发一条指令…"
+        : taskCapable
+          ? "让 Codex 跑一个任务（岛内任务模式，事件来自 --json）…"
+          : "当前会话未确认，无法发送指令"),
   );
 
   function clearTimer(): void {
@@ -61,14 +71,14 @@
       sendState = "failed";
       return;
     }
-    const value = result.value as { done?: unknown; lines?: unknown } | undefined;
+    const value = result.value as { done?: unknown; lines?: unknown; failed?: unknown } | undefined;
     if (!value || typeof value.done !== "boolean" || !Array.isArray(value.lines)) {
       failure = { code: "invalid_send_output", message: "发送回执格式无效", retryable: false };
       sendState = "failed";
       return;
     }
     lines = value.lines.filter((line): line is string => typeof line === "string");
-    sendState = value.done ? "done" : "streaming";
+    sendState = value.done ? (value.failed === true ? "failed" : "done") : "streaming";
     if (!value.done) schedulePoll();
     else clearTimer();
     onLayoutChange?.();
@@ -76,7 +86,7 @@
 
   async function send(): Promise<void> {
     const prompt = draft.trim();
-    if (!prompt || !agent || !session || busy || disabledReason) return;
+    if (!prompt || !agent || (!session && !taskCapable) || busy || disabledReason) return;
     clearTimer();
     failure = null;
     lines = [];
@@ -84,7 +94,9 @@
     sendState = "pending";
     let result: CommandResult;
     try {
-      result = await runCommand({ name: "send_to_session", agentName: agent.name, sessionId: session.id, prompt });
+      result = session
+        ? await runCommand({ name: "send_to_session", agentName: agent.name, sessionId: session.id, prompt })
+        : await runCommand({ name: "run_task", agentName: agent.name, prompt });
     } catch (error) {
       failure = { code: "send_failed", message: error instanceof Error ? error.message : String(error), retryable: true };
       sendState = "failed";
@@ -196,6 +208,8 @@
   .waiting { margin: 0; color: var(--island-text-tertiary); font-size: 11px; }
   .error { margin: 0; color: var(--island-refresh-error-text); font-size: 11px; overflow-wrap: anywhere; }
 </style>
+
+
 
 
 

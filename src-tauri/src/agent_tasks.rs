@@ -1,4 +1,4 @@
-﻿//! 岛内任务模式：用 `codex exec --json` 让 Agent 明确说出它做了什么。
+//! 岛内任务模式：用 `codex exec --json` 让 Agent 明确说出它做了什么。
 //!
 //! 这是 Codex 唯一的显式事件通道（0.163.0 起支持 `--json`：Print events to stdout as JSONL）。
 //! 事件形态来自真实运行捕获（`tests/fixtures/codex/exec-json.jsonl`）：
@@ -268,8 +268,15 @@ pub(crate) fn start_agent_task(
                 break;
             }
         }
-        // 进程退出本身也是一次结束：CLI 升级改了事件名也不会永远"运行中"
+        // 进程退出本身也是一次结束：CLI 升级改了事件名也不会永远"运行中"。
+        // 已经判定失败/成功（例如 turn.failed）时，进程可能还在重试，直接结束它——
+        // 否则会留下一个一直连网的 codex 子进程。
         let mut runtime = task.lock().unwrap_or_else(|poison| poison.into_inner());
+        if matches!(runtime.state, TaskState::Failed | TaskState::Cancelled) {
+            if let Some(child) = runtime.child.as_mut() {
+                let _ = child.kill();
+            }
+        }
         let exit_ok = runtime
             .child
             .as_mut()

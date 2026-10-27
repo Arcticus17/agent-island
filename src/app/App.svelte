@@ -1045,7 +1045,26 @@
     void syncWindowSize();
   }
 
+  /** 岛内任务模式的输出：key 是任务 id（`codex exec --json` 的事件流累积） */
+  const taskOutputs = new Map<string, { lines: string[]; done: boolean; failed: boolean }>();
+
   async function runActionCommand(command: Parameters<AgentIslandBridge["runCommand"]>[0]): Promise<CommandResult> {
+    if (command.name === "run_task") {
+      if (!bridge.startAgentTask) {
+        return { ok: false, code: "task_mode_unsupported", message: "当前宿主不支持岛内任务模式", retryable: false };
+      }
+      try {
+        const id = await bridge.startAgentTask(command.prompt);
+        taskOutputs.set(id, { lines: [], done: false, failed: false });
+        return { ok: true, value: id };
+      } catch (cause) {
+        return { ok: false, code: "task_start_failed", message: cause instanceof Error ? cause.message : String(cause), retryable: true };
+      }
+    }
+    if (command.name === "get_send_output") {
+      const task = taskOutputs.get(command.taskId);
+      if (task) return { ok: true, value: { done: task.done, lines: [...task.lines], failed: task.failed } };
+    }
     const result = await bridge.runCommand(command);
     if (result.ok && (command.name === "stop_agent" || command.name === "restart_agent")) {
       await store.refresh();
@@ -1225,6 +1244,18 @@
       expanded = true;
       void syncWindowSize();
     });
+    // 收起岛会卸载发送框：任务记录要能从后端补回来，否则一收一开就丢了
+    if (bridge.listAgentTasks) {
+      void bridge.listAgentTasks().then((tasks) => {
+        for (const task of tasks) {
+          taskOutputs.set(task.id, {
+            lines: task.message ? [task.message] : [],
+            done: task.state !== "running",
+            failed: task.state === "failed",
+          });
+        }
+      }).catch(() => undefined);
+    }
     void refreshAll();
     // 终端输出由 App 常驻订阅：收起面板/收起岛期间也不会丢字节，重新展开接得上
     let stopTerminalEvents: (() => void) | undefined;
@@ -1275,6 +1306,7 @@
     }
     // 全局快捷键（Ctrl+Shift+A）：展开态再按一次直接隐藏，隐藏/胶囊态按一次展开
     let stopHotkey: (() => void) | undefined;
+    let stopAgentTask: (() => void) | undefined;
     if (bridge.listenIslandHotkey) {
       void bridge.listenIslandHotkey(() => {
         if (disposed) return;
@@ -1283,6 +1315,20 @@
       }).then((unlisten) => {
         if (disposed) unlisten();
         else stopHotkey = unlisten;
+      }).catch(() => undefined);
+    }
+    // 任务事件：把 codex 的 JSONL 事件累积成"发送回执"，结束时刷新一次快照
+    if (bridge.onAgentTask) {
+      void bridge.onAgentTask((task) => {
+        const entry = taskOutputs.get(task.id) ?? { lines: [], done: false, failed: false };
+        if (task.message) entry.lines = [...entry.lines, task.message];
+        entry.done = task.state !== "running";
+        taskOutputs.set(task.id, entry);
+        if (entry.done) void refreshAll();
+        void syncWindowSize();
+      }).then((unlisten) => {
+        if (disposed) unlisten();
+        else stopAgentTask = unlisten;
       }).catch(() => undefined);
     }
     return () => {
@@ -1295,6 +1341,7 @@
       stopTerminalEvents?.();
       stopWindowFocus?.();
       stopHotkey?.();
+      stopAgentTask?.();
       cancelBlur();
       for (const timer of notificationTimers.values()) window.clearTimeout(timer.handle);
       notificationTimers.clear();
@@ -1422,6 +1469,7 @@
               runCommand={runActionCommand}
               onLayoutChange={() => void syncWindowSize()}
               disabledReason={viewingArchive ? "正在查看本地历史记录，不能向历史会话发送指令" : null}
+              taskCapable={selectedAgent?.id === "codex" && !selectedAgent?.active_session}
             />
           </div>
         {/if}
@@ -1769,6 +1817,8 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
 </style>
+
+
 
 
 
