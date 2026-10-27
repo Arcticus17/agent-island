@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
@@ -72,6 +72,11 @@
     };
   }
 
+  /** 上一次真正上报给 PTY 的尺寸：只有列/行真的变了才通知后端。
+   *  ConPTY 在尺寸变化时会让 TUI 重绘整屏，拖动窗口时的连续 resize 会把重绘
+   *  一行行灌进 scrollback，看起来就是"内容重复"。 */
+  let reported = { cols: 0, rows: 0 };
+
   function fit(): void {
     if (!fitAddon || !terminal) return;
     try {
@@ -79,7 +84,19 @@
     } catch {
       return;
     }
+    if (terminal.cols === reported.cols && terminal.rows === reported.rows) return;
+    reported = { cols: terminal.cols, rows: terminal.rows };
     onResize?.(terminal.cols, terminal.rows);
+  }
+
+  /** 拖动/展开窗口时 ResizeObserver 会连发很多次；等停下来再 fit，避免 resize 风暴。 */
+  let fitTimer: number | undefined;
+  function scheduleFit(): void {
+    if (fitTimer !== undefined) window.clearTimeout(fitTimer);
+    fitTimer = window.setTimeout(() => {
+      fitTimer = undefined;
+      fit();
+    }, 160);
   }
 
   function createTerminal(): Terminal {
@@ -143,7 +160,7 @@
     });
 
     if (host && typeof ResizeObserver !== "undefined") {
-      observer = new ResizeObserver(() => { if (sessionId) fit(); });
+      observer = new ResizeObserver(() => { if (sessionId) scheduleFit(); });
       observer.observe(host as HTMLElement);
     }
 
@@ -241,5 +258,6 @@
   .terminal-panel:has(.screen.maximized) { gap: 8px; }
   .error { margin: 0; color: var(--island-refresh-error-text); font-size: 11px; overflow-wrap: anywhere; }
 </style>
+
 
 

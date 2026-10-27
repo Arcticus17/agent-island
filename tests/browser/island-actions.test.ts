@@ -1181,6 +1181,28 @@ describe("pixel mascot motion", () => {
     expect(mascot!.classList.contains("resting")).toBe(resting);
   });
 });
+describe("terminal resize storm", () => {
+  it("reports at most one PTY resize for a burst of container resizes", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-toggle"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="terminal-panel"]') !== null);
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
+    const screen = target.querySelector<HTMLElement>('[data-testid="terminal-screen"]')!;
+    // 等首帧对齐尺寸稳定下来，再开始"拖动"
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const baseline = harness.terminalCalls().filter((call) => call.kind === "resize").length;
+    // 模拟拖动窗口：连续改高度（ResizeObserver 会连发很多次）
+    for (const height of [140, 150, 160, 170, 180]) {
+      screen.style.height = `${height}px`;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const resizes = harness.terminalCalls().filter((call) => call.kind === "resize").length;
+    // 五次连续变化只允许换来一次 PTY resize（否则 TUI 会反复重绘、scrollback 里出现重复内容）
+    expect(resizes - baseline).toBeLessThanOrEqual(1);
+  });
+});
 describe("terminal launch binding", () => {
   it("marks the terminal as bound when the agent was launched from the island", async () => {
     const bound = snapshot(100);
@@ -1340,6 +1362,8 @@ describe("island terminal maximize", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "close"));
   });
 });
+
+
 
 
 
