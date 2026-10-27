@@ -2,7 +2,7 @@
 
 一个常驻 Windows 桌面的“Agent 灵动岛”：一眼看到正在运行的 AI 编程 Agent，并直接在桌面上控制它们。
 
-**当前状态**：v1.9.0 测试版。安装包已发布，但在完成干净环境、混合 DPI、多显示器与安装/卸载验收前不宣称正式支持，详见[公开发布适配门槛](docs/verification/public-release-compatibility.md)与[发布记录](docs/verification/2026-09-30-v1.9.0-release.md)。
+**当前状态**：v1.9.1 测试版。安装包已发布，但在完成干净环境、混合 DPI、多显示器与安装/卸载验收前不宣称正式支持，详见[公开发布适配门槛](docs/verification/public-release-compatibility.md)与[发布记录](docs/verification/2026-09-30-v1.9.0-release.md)。
 
 ## 目录
 
@@ -59,7 +59,7 @@
 
 ## 发布与验收
 
-仓库当前版本为 1.9.0，安装包由 GitHub Actions 自动构建并发布（Release `v1.9.0`，含 EXE 安装器与 MSI）。按[公开发布适配门槛](docs/verification/public-release-compatibility.md)口径，在完成干净环境、混合 DPI、多显示器与安装/卸载验收前仍属**测试版**。
+仓库当前版本为 1.9.1，安装包由 GitHub Actions 自动构建并发布（Release `v1.9.1`，含 EXE 安装器、MSI 与更新清单 latest.json）。按[公开发布适配门槛](docs/verification/public-release-compatibility.md)口径，在完成干净环境、混合 DPI、多显示器与安装/卸载验收前仍属**测试版**。
 
 本项目面向其他用户分发，不应依赖开发者本机环境。门槛清单覆盖干净系统、普通权限、中文/空格路径、CLI 安装方式、混合 DPI、多屏和升级卸载；未实测的系统与架构不列为已支持。实测记录见 [docs/verification/](docs/verification/)，索引在 [验证记录索引](docs/verification/README.md)。
 
