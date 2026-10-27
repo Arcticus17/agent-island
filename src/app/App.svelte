@@ -1710,7 +1710,16 @@
     box-shadow: var(--island-inset-highlight);
     isolation: isolate;
   }
-  .agent-island.expanded { max-height: 100vh; overflow-y: auto; scrollbar-color: var(--island-scrollbar-thumb) var(--island-scrollbar-track); }
+  /* 自绘滚动条：原生 scrollbar-color 会让 Chromium 用"标准"滚动条，
+     那条方形轨道会盖住右上/右下两个圆角（左侧看起来是圆的、右侧是方的）。
+     这里改用 ::-webkit-scrollbar 并给轨道留出上下边距，四角才一致。 */
+  .agent-island.expanded { max-height: 100vh; overflow-y: auto; background-clip: padding-box; }
+  .agent-island.expanded::-webkit-scrollbar { width: 8px; background: transparent; }
+  .agent-island.expanded::-webkit-scrollbar-track { margin: 22px 0; background: transparent; }
+  .agent-island.expanded::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: var(--island-scrollbar-thumb);
+  }
   /* 隐藏态：只剩一条很淡的"存在感"热区，鼠标扫过 → 胶囊，点一下 → 展开 */
   .agent-island.idle-hidden {
     display: grid;

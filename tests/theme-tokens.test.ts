@@ -1,4 +1,4 @@
-﻿// @ts-expect-error The project intentionally omits @types/node; Vitest runs this file in Node.
+// @ts-expect-error The project intentionally omits @types/node; Vitest runs this file in Node.
 import { readFileSync, readdirSync } from "node:fs";
 // @ts-expect-error The project intentionally omits @types/node; Vitest runs this file in Node.
 import { extname, join, relative } from "node:path";
@@ -120,6 +120,14 @@ describe("Agent Island semantic themes", () => {
   it("loads the token contract and both theme definitions from the App", () => {
     const app = source("src/app/App.svelte");
     for (const file of ["tokens.css", "graphite.css", "pure-black.css"]) expect(app).toContain(file);
+  });
+
+  it("draws the island scrollbar itself so both right corners stay rounded", () => {
+    // 原生 scrollbar-color 会让 Chromium 改用标准滚动条，方形轨道会盖住右上/右下圆角。
+    const app = source("src/app/App.svelte");
+    expect(app).not.toMatch(/\.agent-island\.expanded[^}]*scrollbar-color/s);
+    expect(app).toMatch(/\.agent-island\.expanded::-webkit-scrollbar-thumb/);
+    expect(app).toMatch(/\.agent-island\.expanded::-webkit-scrollbar-track\s*\{[^}]*margin:\s*22px 0/s);
   });
 });
 
