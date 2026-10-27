@@ -63,6 +63,16 @@
 
 本项目面向其他用户分发，不应依赖开发者本机环境。门槛清单覆盖干净系统、普通权限、中文/空格路径、CLI 安装方式、混合 DPI、多屏和升级卸载；未实测的系统与架构不列为已支持。实测记录见 [docs/verification/](docs/verification/)，索引在 [验证记录索引](docs/verification/README.md)。
 
+### 发版流程
+
+```bash
+npm run release:minor -- --dry-run   # 先看会改哪四个文件（package.json / Cargo.toml / tauri.conf.json / Cargo.lock）
+npm run release:minor                # 一次性改完版本号，Cargo.lock 不会漏
+git commit -am "chore: release X.Y.Z"
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
+打 tag 后 GitHub Actions 会自动跑回归、构建并发布 EXE/MSI、`.sig` 与 `latest.json`（自动更新清单）。前提是仓库 Secrets 里已有 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
 ## 使用
 
 ### 快捷键

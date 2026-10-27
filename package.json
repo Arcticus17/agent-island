@@ -14,6 +14,9 @@
     "test:unit": "vitest run",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:visual": "vitest run --config vitest.visual.config.ts --update=none",
+    "release:patch": "node scripts/release.mjs patch",
+    "release:minor": "node scripts/release.mjs minor",
+    "release:major": "node scripts/release.mjs major",
     "test:visual:update": "vitest run --config vitest.visual.config.ts --update",
     "perf": "cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --lib session_scan_meets_the_performance_budget -- --nocapture",
     "test": "npm run test:frontend && npm run test:unit && npm run test:browser && npm run test:visual && cargo test --manifest-path src-tauri/Cargo.toml --lib"
