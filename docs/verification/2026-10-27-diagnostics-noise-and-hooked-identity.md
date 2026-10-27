@@ -115,9 +115,9 @@ Claude 的 hook 每次都会带 `session_id` 和 `cwd`——这是唯一能**直
 
 OpenCode 本机没有安装（`opencode` 不在 PATH），无法验证它的 server/SSE 事件，
 所以本轮没有为它写任何"看起来能用"的代码——没验证过的集成比没有更危险。
-## 六、S4.2 进度：Codex 显式事件的解析层（已落地，UI 待接）
+## 六、S4.2：Codex 显式事件 + 岛内任务模式（已完成）
 
-用真实运行抓到了 `codex exec --json` 的事件流（本机网络到不了 Codex 后端，所以任务本身失败，
+用真实运行抓到了 `codex exec --json` 的事件流（本机到不了 Codex 后端，任务本身失败，
 但事件格式是真实的），存成 `src-tauri/tests/fixtures/codex/exec-json.jsonl`：
 
 ```text
@@ -128,15 +128,28 @@ OpenCode 本机没有安装（`opencode` 不在 PATH），无法验证它的 ser
 {"type":"turn.failed","error":{"message":"…"}}
 ```
 
-新增 `agent_tasks.rs`：
-- `parse_codex_event()`：只认上述事件；stderr 的 tracing 行、未知类型一律忽略（CLI 升级不至于把任务卡死）；
-- `next_state()`：事件 + 进程是否退出 → 状态机；**进程退出本身也算结束**，避免"永远运行中"；
-- `start_agent_task` / `list_agent_tasks` / `cancel_agent_task` 三个命令：
-  起 `codex exec --json --skip-git-repo-check`，逐行解析，`thread.started` 的 thread id 直接
-  当成权威 session id 写进 `hooked`，事件通过 `agent-task` 推给前端。
+**后端** `agent_tasks.rs`
+- `parse_codex_event()`：只认上述事件；stderr 的 tracing 行与未知类型一律忽略（CLI 升级不至于卡死）；
+- `next_state()`：事件 + 进程退出 → 状态机；**进程退出也算结束**；判定失败后**杀掉仍在重试的子进程**（否则留下一直连网的 codex）；
+- 命令 `start_agent_task` / `list_agent_tasks` / `cancel_agent_task`；
+- `thread.started` 的 thread id 直接写进 `hooked` —— 这就是 Codex 的「已确认」来源。
 
-**测试**：`agent_tasks::tests` 3 条（真实事件流解析、忽略非 JSON/未知类型、状态机含退出兜底）。
+**前端**
+- 发送框新增任务模式：当选中 Agent 是 Codex 且**没有会话**时，占位符变成
+  「让 Codex 跑一个任务（岛内任务模式，事件来自 --json）…」，发送走 `run_task`；
+- 回执复用既有轮询：`get_send_output` 由 App 从 `agent-task` 事件累积，**失败与完成分开显示**；
+- 收起岛会卸载发送框，所以挂载时用 `list_agent_tasks` 把任务记录补回来。
 
-**还差**：前端没有接「任务」入口（下一步：把发送框对"停止状态的 Codex"启用，走这条链路）。
-另外本机 Codex 后端不可达（`chatgpt.com/backend-api` 超时），所以真实任务的成功路径无法在本机验证——
-这一点必须如实记录，不能拿"解析器通过"冒充"任务能跑通"。
+**验证**
+- Rust：`agent_tasks::tests` 3 条（真实事件流、忽略噪声、状态机含退出兜底）；
+- 浏览器：`island task mode` —— 无会话的 Codex 能发送，`startAgentTask` 收到 prompt，
+  收到 `succeeded` 事件后输出区显示「已结束」并带出消息；
+- 真机（CDP）：选 Codex → 占位符为任务模式文案 → 输入 prompt 发送 → 输出区进入
+  「返回中… 等待 Agent 输出…」，说明 `start_agent_task` 已启动并进入事件轮询。
+
+**仍然无法在本机验证的部分**：任务的成功路径。这台机器连不上 Codex 后端
+（`chatgpt.com/backend-api` 超时），真实任务只跑到 `turn.failed`。
+所以"能跑通一个成功任务"这件事没有证据，不能宣称完成。
+
+OpenCode 本机没有安装，无法验证它的 server/SSE 事件，因此没有为它写任何
+"看起来能用"的代码——没验证过的集成比没有更危险。
