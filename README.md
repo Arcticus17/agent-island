@@ -52,10 +52,10 @@
 
 | 资产 | 说明 |
 | --- | --- |
-| `Agent.Island_<版本>_x64-setup.exe` | Windows 安装器（NSIS） |
-| `Agent.Island_<版本>_en-US.msi` | MSI 安装包 |
+| `Agent.Island_<version>_x64-setup.exe` | Windows 安装器（NSIS） |
+| `Agent.Island_<version>_en-US.msi` | MSI 安装包 |
 
-安装后直接运行 `Agent Island` 即可。
+`<version>` 指当前发布版本号，例如 `Agent.Island_1.9.1_x64-setup.exe`。安装后直接运行 `Agent Island` 即可。
 
 ## 发布与验收
 
@@ -169,7 +169,7 @@ npm run tauri build
 
 ### Playwright Chromium 镜像加速
 
-若 `npx playwright install chromium` 长时间无进展（官方地址会跳转到 Google 存储，实测只有几十到两百 KB/s），可用 npmmirror 镜像装同一版本：从 `npx playwright install --dry-run chromium` 读出版本号与目录名，下载 `https://cdn.npmmirror.com/binaries/chrome-for-testing/<版本>/win64/chrome-win64.zip`，解压到 `%LOCALAPPDATA%\ms-playwright\chromium-<revision>\`，确认 `chrome-win64\chrome.exe` 存在，再在该目录下创建空的 `INSTALLATION_COMPLETE` 文件。实测镜像速度约为官方路径的 26 倍。
+若 `npx playwright install chromium` 长时间无进展（官方地址会跳转到 Google 存储，实测只有几十到两百 KB/s），可用 npmmirror 镜像装同一版本：从 `npx playwright install --dry-run chromium` 读出版本号与目录名，下载 `https://cdn.npmmirror.com/binaries/chrome-for-testing/<version>/win64/chrome-win64.zip`，解压到 `%LOCALAPPDATA%\ms-playwright\chromium-<revision>\`，确认 `chrome-win64\chrome.exe` 存在，再在该目录下创建空的 `INSTALLATION_COMPLETE` 文件。实测镜像速度约为官方路径的 26 倍。
 
 ### 临时回退旧界面
 
