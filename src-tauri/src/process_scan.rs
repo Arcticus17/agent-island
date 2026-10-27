@@ -297,6 +297,7 @@ pub(crate) fn scan_agents(
     pty_roots: &std::collections::HashSet<u32>,
     launch_facts: &std::collections::HashMap<String, u64>,
     bindings: &std::collections::HashMap<String, crate::bindings::BoundSession>,
+    hooked_sessions: &std::collections::HashMap<String, crate::hooked::HookedSession>,
 ) -> (
     Vec<AgentInfo>,
     interface::snapshot::AgentViewSnapshot,
@@ -567,24 +568,52 @@ pub(crate) fn scan_agents(
         &acquisition_issues,
     );
     attach_runtime_metadata_to_snapshot(&mut snapshot, &agents);
-    // 权威绑定：Agent 进程若是岛内 PTY 的后代，标记为 launched（不再依赖日志推断）
+    // 权威绑定：Agent 自报（hooks）> 岛内 PTY 后代（launched）> 手动绑定 > 日志推断
     for agent in &mut snapshot.agents {
         let pids: Vec<u32> = process_facts
             .iter()
             .find(|fact| fact.identity.agent_id == agent.id)
             .map(|fact| fact.identity.process_ids.clone())
             .unwrap_or_default();
-        agent.binding = launcher::binding_for_pids(&pids, &parents, pty_roots);
-        // 用户手动绑定优先：把活动会话固定到指定 session（岛外启动也能确认身份）
+        let launched = matches!(
+            launcher::binding_for_pids(&pids, &parents, pty_roots),
+            launcher::SessionBinding::Launched
+        );
+        // Agent 自己报过身份：直接把活动会话固定到它说的那个 session
+        let mut hooked = false;
+        if let Some(report) = hooked_sessions.get(&agent.id) {
+            let matches_candidate = session_candidates.iter().any(|candidate| {
+                candidate.identity.agent_id == agent.id
+                    && candidate.identity.session_id == report.session_id
+            });
+            if matches_candidate {
+                if let Some(candidate) = session_candidates.iter().find(|candidate| {
+                    candidate.identity.agent_id == agent.id
+                        && candidate.identity.session_id == report.session_id
+                }) {
+                    agent.active_session = Some(candidate.view.clone());
+                }
+                hooked = true;
+            } else if agent
+                .active_session
+                .as_ref()
+                .is_some_and(|session| session.id == report.session_id)
+            {
+                hooked = true;
+            }
+        }
+        // 用户手动绑定的会话（岛外启动也能确认身份）
+        let mut manual = false;
         if let Some(bound) = bindings.get(&agent.id) {
             if let Some(candidate) = session_candidates.iter().find(|candidate| {
                 candidate.identity.agent_id == agent.id
                     && candidate.identity.session_id == bound.session_id
             }) {
                 agent.active_session = Some(candidate.view.clone());
-                agent.binding = launcher::SessionBinding::Manual;
+                manual = true;
             }
         }
+        agent.binding = launcher::choose_binding(launched, hooked, manual);
     }
     for agent in &snapshot.agents {
         if let Some(view) = &agent.diagnostic {

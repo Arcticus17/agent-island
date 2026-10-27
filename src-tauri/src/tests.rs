@@ -1,4 +1,4 @@
-use super::*;
+﻿use super::*;
 
 #[test]
 fn interactive_resume_works_without_a_recorded_process_command() {
@@ -1976,3 +1976,58 @@ fn tauri_config_wires_the_signed_updater() {
         "清单地址必须是 https 且指向 latest.json: {endpoint}"
     );
 }
+#[test]
+fn claude_session_finds_cwd_even_when_the_first_session_line_lacks_it() {
+    // 真实日志里 `mode` 行带 sessionId 但没有 cwd；旧实现找到第一行就停，cwd 永远是 None，
+    // 既刷一条 acquisition_incomplete，也让会话无法与进程对上。
+    let root = std::env::temp_dir().join(format!("agent-island-late-cwd-{}", epoch_millis()));
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("late.jsonl");
+    fs::write(
+        &path,
+        concat!(
+            "{\"type\":\"mode\",\"sessionId\":\"s-late\"}\n",
+            "{\"type\":\"file-history-snapshot\",\"sessionId\":\"s-late\"}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s-late\",\"uuid\":\"u1\",\"timestamp\":\"2026-10-27T09:45:29.000Z\",\"cwd\":\"D:/work/late\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n",
+        ),
+    )
+    .unwrap();
+    let scan = scan_session_directory("claude", &root, None);
+    fs::remove_dir_all(root).unwrap();
+    assert!(scan.diagnostics.is_empty(), "不该再有采集不完整的噪音");
+    assert_eq!(scan.candidates.len(), 1);
+    assert_eq!(
+        scan.candidates[0].identity.project_path.as_deref(),
+        Some("D:/work/late")
+    );
+}
+
+#[test]
+fn claude_command_only_session_produces_no_diagnostics() {
+    // 只有斜杠命令、没有对话消息的会话是正常存在的（例如启动后立刻 /exit）。
+    let root = std::env::temp_dir().join(format!("agent-island-command-only-{}", epoch_millis()));
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("cmd.jsonl");
+    fs::write(
+        &path,
+        concat!(
+            "{\"type\":\"mode\",\"sessionId\":\"s-cmd\",\"cwd\":\"D:/work/cmd\"}\n",
+            "{\"type\":\"permission-mode\",\"sessionId\":\"s-cmd\",\"cwd\":\"D:/work/cmd\"}\n",
+            "{\"type\":\"file-history-snapshot\",\"sessionId\":\"s-cmd\",\"cwd\":\"D:/work/cmd\"}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s-cmd\",\"uuid\":\"u1\",\"timestamp\":\"2026-10-27T09:45:29.000Z\",\"cwd\":\"D:/work/cmd\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/exit</command-name>\"}}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s-cmd\",\"uuid\":\"u2\",\"timestamp\":\"2026-10-27T09:45:29.100Z\",\"cwd\":\"D:/work/cmd\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>See ya!</local-command-stdout>\"}}\n",
+        ),
+    )
+    .unwrap();
+    let scan = scan_session_directory("claude", &root, None);
+    fs::remove_dir_all(root).unwrap();
+    assert!(
+        scan.diagnostics.is_empty(),
+        "命令信封不该被当成解析失败: {:?}",
+        scan.diagnostics.iter().map(|r| r.view.code.clone()).collect::<Vec<_>>()
+    );
+    assert_eq!(scan.candidates.len(), 1);
+    assert_eq!(scan.candidates[0].identity.session_id, "s-cmd");
+}
+
+

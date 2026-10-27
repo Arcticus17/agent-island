@@ -216,3 +216,35 @@ mod launch_filter_tests {
         assert_eq!(agent_for_program("powershell.exe", &ids), None);
     }
 }
+/// 绑定优先级：Agent 自报（hooks）> 岛内启动 > 用户手动绑定 > 日志推断。
+///
+/// 理由：自报带 session_id，是唯一能直接指出"哪个会话"的证据；岛内启动只证明我们
+/// 拥有这个进程；手动绑定是用户的明确选择；其余只能推断。
+pub(crate) fn choose_binding(launched: bool, hooked: bool, manual: bool) -> SessionBinding {
+    if hooked {
+        SessionBinding::Hooked
+    } else if launched {
+        SessionBinding::Launched
+    } else if manual {
+        SessionBinding::Manual
+    } else {
+        SessionBinding::Inferred
+    }
+}
+#[cfg(test)]
+mod binding_priority_tests {
+    use super::*;
+
+    #[test]
+    fn self_reported_identity_beats_everything() {
+        assert_eq!(choose_binding(true, true, true), SessionBinding::Hooked);
+        assert_eq!(choose_binding(false, true, false), SessionBinding::Hooked);
+    }
+
+    #[test]
+    fn ownership_beats_a_manual_guess() {
+        assert_eq!(choose_binding(true, false, true), SessionBinding::Launched);
+        assert_eq!(choose_binding(false, false, true), SessionBinding::Manual);
+        assert_eq!(choose_binding(false, false, false), SessionBinding::Inferred);
+    }
+}

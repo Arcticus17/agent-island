@@ -54,6 +54,8 @@ impl AgentAdapter for ClaudeAdapter {
             };
 
             let mut role = None;
+            // 字符串内容会被包装成一个 text block，生命周期要跟 blocks 一样长
+            let mut owned_blocks: Vec<Value> = Vec::new();
             let mut blocks = None;
             let mut message_text = None;
             let mut stop_reason = None;
@@ -69,14 +71,32 @@ impl AgentAdapter for ClaudeAdapter {
                     report.skipped_lines += 1;
                     continue;
                 }
-                let Some(content) = message.get("content").and_then(Value::as_array) else {
-                    report.skipped_lines += 1;
-                    continue;
-                };
-                if !content_blocks_are_valid(content) {
-                    report.skipped_lines += 1;
+                // Claude 把斜杠命令、命令输出、上下文提示写成字符串内容并带 isMeta：
+                // 这些是已知的非消息行（/exit、caveat 等），属于正常数据，不计入解析失败。
+                let meta = record.get("isMeta").and_then(Value::as_bool).unwrap_or(false);
+                if meta {
                     continue;
                 }
+                let content: &[Value] = match message.get("content") {
+                    Some(Value::Array(items)) => {
+                        if !content_blocks_are_valid(items) {
+                            report.skipped_lines += 1;
+                            continue;
+                        }
+                        items.as_slice()
+                    }
+                    Some(Value::String(text)) => {
+                        if is_command_envelope(text) {
+                            continue;
+                        }
+                        owned_blocks.push(serde_json::json!({ "type": "text", "text": text }));
+                        owned_blocks.as_slice()
+                    }
+                    _ => {
+                        report.skipped_lines += 1;
+                        continue;
+                    }
+                };
                 stop_reason = match message.get("stop_reason") {
                     None | Some(Value::Null) => None,
                     Some(Value::String(reason)) => Some(reason.as_str()),
@@ -85,7 +105,7 @@ impl AgentAdapter for ClaudeAdapter {
                         continue;
                     }
                 };
-                blocks = Some(content.as_slice());
+                blocks = Some(content);
                 message_text = explicit_text(content);
             } else if record_type == "result"
                 && record.get("is_error").and_then(Value::as_bool).is_none()
@@ -561,5 +581,55 @@ mod tests {
                 Some(EventKind::TurnSucceeded)
             ));
         }
+    }
+}
+/// Claude Code 把斜杠命令及其输出存成字符串内容（`<command-name>…</command-name>`、
+/// `<local-command-stdout>…` 等）。这些不是对话消息，属于正常数据，不应算作解析失败。
+fn is_command_envelope(text: &str) -> bool {
+    const PREFIXES: [&str; 7] = [
+        "<command-name>",
+        "<command-message>",
+        "<command-args>",
+        "<command-stdout>",
+        "<local-command-stdout>",
+        "<local-command-caveat>",
+        "<command-caveat>",
+    ];
+    let trimmed = text.trim_start();
+    PREFIXES.iter().any(|prefix| trimmed.starts_with(prefix))
+}
+#[cfg(test)]
+mod log_noise_tests {
+    use super::ClaudeAdapter;
+    use crate::adapters::AgentAdapter;
+    use crate::domain::{EventKind, MessageRole};
+
+    /// 真实 Claude 日志里，斜杠命令/命令输出/上下文提示是字符串内容（常带 isMeta）。
+    /// 这些是正常数据，不能算解析失败——否则每个会话都会刷出诊断噪音。
+    #[test]
+    fn command_envelopes_and_meta_lines_are_not_parse_failures() {
+        let text = concat!(
+            "{\"type\":\"mode\",\"sessionId\":\"s-1\",\"cwd\":\"C:\\\\work\"}\n",
+            "{\"type\":\"file-history-snapshot\",\"sessionId\":\"s-1\",\"cwd\":\"C:\\\\work\"}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s-1\",\"uuid\":\"u0\",\"timestamp\":\"2026-10-27T09:45:29.299Z\",\"isMeta\":true,\"cwd\":\"C:\\\\work\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-caveat>ran directly</local-command-caveat>\"}}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s-1\",\"uuid\":\"u1\",\"timestamp\":\"2026-10-27T09:45:29.297Z\",\"cwd\":\"C:\\\\work\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/exit</command-name>\"}}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s-1\",\"uuid\":\"u2\",\"timestamp\":\"2026-10-27T09:45:30.000Z\",\"cwd\":\"C:\\\\work\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>See ya!</local-command-stdout>\"}}\n",
+        );
+        let report = ClaudeAdapter.parse(text);
+        assert_eq!(report.skipped_lines, 0, "命令信封不应计入跳过行");
+        assert!(report.events.is_empty());
+        assert!(report.messages.is_empty());
+    }
+
+    /// 纯文本用户消息（字符串 content）也会出现，必须照常解析成一轮对话。
+    #[test]
+    fn plain_text_user_message_is_parsed() {
+        let text = "{\"type\":\"user\",\"sessionId\":\"s-2\",\"uuid\":\"u1\",\"timestamp\":\"2026-10-27T09:45:31.000Z\",\"cwd\":\"C:\\\\work\",\"message\":{\"role\":\"user\",\"content\":\"帮我看看这个报错\"}}\n";
+        let report = ClaudeAdapter.parse(text);
+        assert_eq!(report.skipped_lines, 0);
+        assert_eq!(report.messages.len(), 1);
+        assert_eq!(report.messages[0].role, MessageRole::User);
+        assert_eq!(report.messages[0].text, "帮我看看这个报错");
+        assert!(matches!(report.events[0].kind, EventKind::TurnStarted));
     }
 }

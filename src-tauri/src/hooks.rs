@@ -1,4 +1,4 @@
-﻿//! Claude hooks bridge: settings merge, local event server, and approval cards.
+//! Claude hooks bridge: settings merge, local event server, and approval cards.
 
 use crate::*;
 
@@ -451,6 +451,15 @@ pub(crate) fn handle_hook_conn(mut stream: std::net::TcpStream, app: tauri::AppH
         return;
     }
     let enabled = state.hook_enabled.load(Ordering::SeqCst);
+    // 任何 hook 都带着 Agent 自报的 session/cwd：记下来，供快照判定"已确认"。
+    // 这比读日志猜更权威——agent 自己说它是谁。
+    {
+        let event: Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+        let session = event.get("session").and_then(|s| s.as_str()).unwrap_or("");
+        let cwd = event.get("cwd").and_then(|c| c.as_str());
+        let mut hooked = state.hooked.lock_recover();
+        record_hooked(&mut hooked, "claude", session, cwd, epoch_millis());
+    }
     if uri.starts_with("/event") {
         let event: Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
         let name = event.get("name").and_then(|n| n.as_str()).unwrap_or("");

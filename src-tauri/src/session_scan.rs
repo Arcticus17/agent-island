@@ -1,4 +1,4 @@
-//! Session discovery: bounded reads, per-agent scans, and identity matching.
+﻿//! Session discovery: bounded reads, per-agent scans, and identity matching.
 
 use crate::*;
 use std::collections::{HashMap, HashSet};
@@ -277,7 +277,14 @@ pub(crate) fn session_scan_from_file_with_budget(
                 metadata_cwd,
             )
         }
-        "claude" => (adapters::claude::ClaudeAdapter.parse(&text), None, None),
+        "claude" => {
+            let (metadata_id, metadata_cwd) = claude_metadata(&text);
+            (
+                adapters::claude::ClaudeAdapter.parse(&text),
+                metadata_id,
+                metadata_cwd,
+            )
+        }
         "opencode" => (
             adapters::opencode::OpenCodeAdapter.parse(&text),
             Some("opencode".into()),
@@ -738,22 +745,11 @@ pub(crate) fn index_session_file(agent_id: &str, path: &Path) -> SessionScan {
     let (id, cwd) = if agent_id == "codex" {
         codex_metadata(&acquired.text)
     } else {
-        acquired
-            .text
-            .lines()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .find_map(|value| {
-                let id = value
-                    .get("sessionId")
-                    .or_else(|| value.get("session_id"))?
-                    .as_str()?
-                    .to_owned();
-                let cwd = value.get("cwd").and_then(Value::as_str).map(str::to_owned);
-                Some((Some(id), cwd))
-            })
-            .unwrap_or_default()
+        claude_metadata(&acquired.text)
     };
-    if id.is_none() || cwd.is_none() {
+    // 没有 sessionId 才是真的"采集不完整"；没有 cwd 只是目录未知（界面显示"未提供工作目录"），
+    // 不该当成数据缺陷刷诊断噪音。
+    if id.is_none() {
         scan.record_issue(agent_id, domain::DataIssue::AcquisitionIncomplete);
     }
     let id = id.unwrap_or_else(|| path.to_string_lossy().into_owned());
@@ -1110,5 +1106,28 @@ pub(crate) fn read_bounded_stream(
     acquired.text = String::from_utf8_lossy(&bytes).into_owned();
 }
 
-
-
+/// Claude 的 sessionId / cwd 散落在不同类型的行里（`mode` 行有 id 没 cwd，消息行两者都有）。
+/// 必须分别收集：一旦在第一行停下，cwd 就永远拿不到。
+pub(crate) fn claude_metadata(text: &str) -> (Option<String>, Option<String>) {
+    let mut id: Option<String> = None;
+    let mut cwd: Option<String> = None;
+    for value in text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+    {
+        if id.is_none() {
+            id = value
+                .get("sessionId")
+                .or_else(|| value.get("session_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+        if cwd.is_none() {
+            cwd = value.get("cwd").and_then(Value::as_str).map(str::to_owned);
+        }
+        if id.is_some() && cwd.is_some() {
+            break;
+        }
+    }
+    (id, cwd)
+}

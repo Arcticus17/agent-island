@@ -6,6 +6,7 @@ mod commands;
 mod domain;
 mod external;
 mod hooks;
+mod hooked;
 mod hotkey;
 mod launcher;
 mod logging;
@@ -27,6 +28,7 @@ use bindings::*;
 use commands::*;
 use external::*;
 use hooks::*;
+use hooked::*;
 use hotkey::*;
 use logging::*;
 use process_scan::*;
@@ -366,6 +368,8 @@ struct AppState {
     approvals: Mutex<HashMap<String, HookApproval>>,
     /// 手动会话绑定（agent_id → session），持久化在 ~/.agent-island/session-bindings.json
     bindings: Mutex<HashMap<String, BoundSession>>,
+    /// Agent 通过 hooks 自报的会话身份（agent_id → 最近一次上报）
+    hooked: Mutex<HashMap<String, HookedSession>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -469,6 +473,7 @@ pub fn run() {
             hook_token: Mutex::new(hook_token),
             approvals: Mutex::new(HashMap::new()),
             bindings: Mutex::new(load_bindings(&bindings_path())),
+            hooked: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             get_agents,

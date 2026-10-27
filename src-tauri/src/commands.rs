@@ -179,9 +179,19 @@ pub(crate) fn collect_agent_data(
         }
     }
     let bindings = state.bindings.lock_recover();
+    // 只取仍然有效的自报身份（超时的会话不该继续声称"已确认"）
+    let now_ms = epoch_millis();
+    let hooked_sessions: std::collections::HashMap<String, crate::hooked::HookedSession> = {
+        let hooked = state.hooked.lock_recover();
+        hooked
+            .iter()
+            .filter(|(agent_id, _)| fresh_hooked(&hooked, agent_id, now_ms).is_some())
+            .map(|(agent_id, record)| (agent_id.clone(), record.clone()))
+            .collect()
+    };
     let (agents, snapshot, _diagnostics, scan_result) =
         collect_cached_with(&mut cache, Instant::now, || {
-            scan_agents(&mut sys, &mut session, &pty_roots, &launch_facts, &bindings)
+            scan_agents(&mut sys, &mut session, &pty_roots, &launch_facts, &bindings, &hooked_sessions)
         });
     session.cache = cache;
     if let Some((changed, completed_at)) = scan_result {
