@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 
 #[test]
 fn interactive_resume_works_without_a_recorded_process_command() {
@@ -1253,7 +1253,7 @@ fn claude_file_scan_uses_adapter_session_shape() {
 #[test]
 fn opencode_file_scan_uses_adapter_session_shape() {
     let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/opencode/text-error.log");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/opencode/text-error.log.txt");
 
     let scan = session_scan_from_file("opencode", &fixture).unwrap();
 

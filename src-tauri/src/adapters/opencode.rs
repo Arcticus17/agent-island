@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn text_error_is_only_a_diagnostic_hint() {
         let report =
-            OpenCodeAdapter.parse(include_str!("../../tests/fixtures/opencode/text-error.log"));
+            OpenCodeAdapter.parse(include_str!("../../tests/fixtures/opencode/text-error.log.txt"));
         assert!(report
             .events
             .iter()
