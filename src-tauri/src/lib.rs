@@ -1,4 +1,5 @@
 mod adapters;
+mod agent_tasks;
 mod approval_rules;
 mod bindings;
 mod application;
@@ -23,6 +24,7 @@ mod updates;
 mod usage;
 
 use adapters::AgentAdapter;
+use agent_tasks::*;
 use approval_rules::*;
 use bindings::*;
 use commands::*;
@@ -370,6 +372,8 @@ struct AppState {
     bindings: Mutex<HashMap<String, BoundSession>>,
     /// Agent 通过 hooks 自报的会话身份（agent_id → 最近一次上报）
     hooked: Mutex<HashMap<String, HookedSession>>,
+    /// 岛内任务模式：`codex exec --json` 的运行实例
+    tasks: Mutex<HashMap<String, std::sync::Arc<std::sync::Mutex<agent_tasks::TaskRuntime>>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -474,6 +478,7 @@ pub fn run() {
             approvals: Mutex::new(HashMap::new()),
             bindings: Mutex::new(load_bindings(&bindings_path())),
             hooked: Mutex::new(HashMap::new()),
+            tasks: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             get_agents,
@@ -506,6 +511,9 @@ pub fn run() {
             bind_session,
             unbind_session,
             list_session_bindings,
+            start_agent_task,
+            list_agent_tasks,
+            cancel_agent_task,
             reveal_session,
             list_approval_rules,
             add_approval_rule,

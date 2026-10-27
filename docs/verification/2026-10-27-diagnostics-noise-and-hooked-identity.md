@@ -1,4 +1,4 @@
-# 诊断噪音与 Agent 自报身份（2026-10-27）
+﻿# 诊断噪音与 Agent 自报身份（2026-10-27）
 
 ## 一、问题：Claude 永远显示「11 项提示」
 
@@ -115,3 +115,28 @@ Claude 的 hook 每次都会带 `session_id` 和 `cwd`——这是唯一能**直
 
 OpenCode 本机没有安装（`opencode` 不在 PATH），无法验证它的 server/SSE 事件，
 所以本轮没有为它写任何"看起来能用"的代码——没验证过的集成比没有更危险。
+## 六、S4.2 进度：Codex 显式事件的解析层（已落地，UI 待接）
+
+用真实运行抓到了 `codex exec --json` 的事件流（本机网络到不了 Codex 后端，所以任务本身失败，
+但事件格式是真实的），存成 `src-tauri/tests/fixtures/codex/exec-json.jsonl`：
+
+```text
+{"type":"thread.started","thread_id":"01a17db0-…"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{…}}
+{"type":"error","message":"…"}
+{"type":"turn.failed","error":{"message":"…"}}
+```
+
+新增 `agent_tasks.rs`：
+- `parse_codex_event()`：只认上述事件；stderr 的 tracing 行、未知类型一律忽略（CLI 升级不至于把任务卡死）；
+- `next_state()`：事件 + 进程是否退出 → 状态机；**进程退出本身也算结束**，避免"永远运行中"；
+- `start_agent_task` / `list_agent_tasks` / `cancel_agent_task` 三个命令：
+  起 `codex exec --json --skip-git-repo-check`，逐行解析，`thread.started` 的 thread id 直接
+  当成权威 session id 写进 `hooked`，事件通过 `agent-task` 推给前端。
+
+**测试**：`agent_tasks::tests` 3 条（真实事件流解析、忽略非 JSON/未知类型、状态机含退出兜底）。
+
+**还差**：前端没有接「任务」入口（下一步：把发送框对"停止状态的 Codex"启用，走这条链路）。
+另外本机 Codex 后端不可达（`chatgpt.com/backend-api` 超时），所以真实任务的成功路径无法在本机验证——
+这一点必须如实记录，不能拿"解析器通过"冒充"任务能跑通"。
