@@ -159,3 +159,46 @@ claude 停在模型选择界面、**还没有产生会话文件**——没有会
 直接读真实 DOM 做验证——比截图可靠得多（截图会被遮挡、缩放、窗口位置误导）。
 
 顺带改进：加载态现在会显示真实错误（`data-testid="connect-error"`），而不是永远「正在连接…」。
+## 十一、S4.3：OpenCode 的显式通道（2026-10-27）
+
+OpenCode 的 TUI 本身就是一个 HTTP 客户端：它起一个本机服务，所有状态都在服务里。
+所以这里不需要猜日志——直接问服务。依据官方文档 `/docs/server/` + 本机 **opencode 1.19.4** 实测：
+
+```text
+GET /global/health   → {"healthy":true,"version":"1.19.4"}
+GET /session         → [{ id, directory, title, … }]        // directory 就是工作目录
+GET /session/status  → { [sessionID]: SessionStatus }        // 空闲时是 {}
+GET /event           → SSE: data: {"type":"server.connected","properties":{}}
+```
+
+实现（`opencode_events.rs`，零新依赖）：
+
+| 函数 | 作用 |
+| --- | --- |
+| `parse_health` | 健康 + 版本 |
+| `parse_sessions` | 会话 id / 目录 / 标题 |
+| `busy_session` | 状态表里有哪个 `ses_*` → 它正在忙（空对象 = 全空闲，不用猜 SessionStatus 内部结构） |
+| `http_get` / `dechunk` | 手写 HTTP/1.1 GET，支持 chunked（SSE 就是 chunked） |
+| `configured_endpoint` | 从 `AGENT_ISLAND_OPENCODE_URL` 读服务地址 |
+
+接线：扫描前若配置了服务地址，最多每 3 秒问一次 `/session/status`；有忙的会话就把
+`opencode` 标成自报身份（`hooked`）——和 Claude hooks、Codex `thread.started` 同一条路径。
+
+**真机验证**（服务确实在本机跑着：`opencode serve --port 4199`）：
+
+```text
+health=OpenCodeHealth { healthy: true, version: "1.19.4" }
+sessions=29
+  ses_ea38f0a4… Some("C:\\Users\\LENOVO") Some("New session - 2026-10-21T03:11:09.240Z")
+  ses_f50f72ac… Some("D:\\leetcode") Some("机票预定系统状态转换图绘制")
+busy=None
+```
+
+即：**客户端、解析器、真实服务三者对得上**。`busy` 为 None 是因为当前没有会话在跑。
+
+**已知局限**（必须写清楚，否则就是假装支持）
+- TUI 自己起的服务用**随机端口**，岛无法自动发现；目前要求用户 `opencode serve --port 4096`
+  并把地址写进 `AGENT_ISLAND_OPENCODE_URL`（或后续加设置项）。
+- "忙 → hooked" 的成功路径没有实机验证：要制造一个 busy 会话必须真的发一条消息给模型
+  （会消耗额度）。解析逻辑只有单测 + 空的真实状态表做支撑。
+- 本机 opencode 是临时装在 `%TEMP%\oc-probe`（未装到全局），验证完即弃。

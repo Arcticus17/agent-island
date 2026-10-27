@@ -158,6 +158,9 @@ where
     (agents, snapshot, diagnostics, Some((changed, completed_at)))
 }
 
+/// OpenCode 服务探测节流：每 3 秒最多问一次
+static OPENCODE_PROBE_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub(crate) fn collect_agent_data(
     state: &AppState,
 ) -> (Vec<AgentInfo>, interface::snapshot::AgentViewSnapshot) {
@@ -179,6 +182,25 @@ pub(crate) fn collect_agent_data(
         }
     }
     let bindings = state.bindings.lock_recover();
+    // OpenCode：配置了本机服务地址时，问它"哪个会话在忙"——这是它自己报的，不是猜的。
+    // 每 3 秒最多问一次，避免每轮轮询都打一次 HTTP。
+    if let Some((host, port)) = configured_endpoint() {
+        let now = epoch_millis();
+        let should_probe = OPENCODE_PROBE_AT
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .checked_add(3_000)
+            .map(|next| now >= next)
+            .unwrap_or(true);
+        if should_probe {
+            OPENCODE_PROBE_AT.store(now, std::sync::atomic::Ordering::Relaxed);
+            if let Ok(body) = http_get(&host, port, "/session/status") {
+                if let Some(session_id) = busy_session(&body) {
+                    let mut hooked = state.hooked.lock_recover();
+                    record_hooked(&mut hooked, "opencode", &session_id, None, now);
+                }
+            }
+        }
+    }
     // 只取仍然有效的自报身份（超时的会话不该继续声称"已确认"）
     let now_ms = epoch_millis();
     let hooked_sessions: std::collections::HashMap<String, crate::hooked::HookedSession> = {
