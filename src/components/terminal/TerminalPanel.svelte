@@ -53,6 +53,8 @@
   let fitAddon: FitAddon | null = null;
   let observer: ResizeObserver | null = null;
   let written = 0;
+  /** 首次整段重放由 onMount 负责；effect 在挂载早期不重复写，避免内容出现两遍 */
+  let synced = false;
   /** 上一帧应用的输出长度，用来处理"历史被截断"的情况 */
   let appliedSnapshot = 0;
 
@@ -128,7 +130,8 @@
   $effect(() => {
     const next = text;
     const instance = terminal;
-    if (!instance) return;
+    // 首次整段重放交给 onMount：两个入口都写一遍就会看到两倍内容
+    if (!instance || !synced) return;
     if (next.length < appliedSnapshot) {
       instance.reset();
       written = 0;
@@ -153,6 +156,7 @@
       written = text.length;
       appliedSnapshot = text.length;
     }
+    synced = true;
     requestAnimationFrame(() => {
       fit();
       if (sessionId) instance.focus();
@@ -258,6 +262,7 @@
   .terminal-panel:has(.screen.maximized) { gap: 8px; }
   .error { margin: 0; color: var(--island-refresh-error-text); font-size: 11px; overflow-wrap: anywhere; }
 </style>
+
 
 
 
