@@ -116,7 +116,7 @@ fn node_entrypoint_matches(args: &[String], keyword: &str) -> bool {
 
 #[cfg(test)]
 mod process_classifier_tests {
-    use super::{known_program_paths, known_program_paths_from, matches_agent_process, program_available};
+    use super::{environment_program_paths_from, known_program_paths, known_program_paths_from, matches_agent_process, program_available};
 
     fn matches(name: &str, args: &[&str], keyword: &str) -> bool {
         matches_agent_process(
@@ -292,16 +292,74 @@ mod process_classifier_tests {
                 .eq_ignore_ascii_case("C:\\volta\\bin\\codex.cmd")
         }));
     }
+
+    #[test]
+    fn finds_agents_from_environment_variables() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-island-env-agent-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("opencode").join("bin")).unwrap();
+        let direct = root.join("claude.exe");
+        std::fs::write(&direct, b"stub").unwrap();
+        let nested = root.join("opencode").join("bin").join("opencode.cmd");
+        std::fs::write(&nested, b"stub").unwrap();
+
+        let found = environment_program_paths_from(
+            "claude",
+            vec![(
+                std::ffi::OsString::from("CLAUDE_CODE_PATH"),
+                std::ffi::OsString::from(direct.to_string_lossy().as_ref()),
+            )],
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "CLAUDE_CODE_PATH");
+        assert_eq!(found[0].1, direct);
+
+        let found = environment_program_paths_from(
+            "opencode",
+            vec![(
+                std::ffi::OsString::from("OPENCODE_HOME"),
+                std::ffi::OsString::from(root.join("opencode").to_string_lossy().as_ref()),
+            )],
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "OPENCODE_HOME");
+        assert_eq!(found[0].1, nested);
+
+        // A prompt-like value is not a path and must never become an agent.
+        let found = environment_program_paths_from(
+            "hermes",
+            vec![(
+                std::ffi::OsString::from("PROMPT"),
+                std::ffi::OsString::from("please use hermes"),
+            )],
+        );
+        assert!(found.is_empty());
+
+        std::fs::remove_dir_all(root).ok();
+    }
 }
 
 /// CLI 是否仍装在系统上：先查 PATH（Windows 用 `where.exe`），再兜底常见安装目录。
 ///
 /// 只认可执行文件——卸载后残留的日志/会话记录**不算**存在，所以"下载过又卸载"
 /// 的 Agent 不会再出现在岛上。
-static PROGRAM_CACHE: OnceLock<Mutex<HashMap<String, (Instant, Option<PathBuf>)>>> =
+#[derive(Debug, Clone)]
+pub(crate) struct ProgramResolution {
+    pub path: PathBuf,
+    /// path | env:NAME
+    pub source: String,
+}
+
+static PROGRAM_CACHE: OnceLock<Mutex<HashMap<String, (Instant, Option<ProgramResolution>)>>> =
     OnceLock::new();
 
 pub(crate) fn resolve_agent_program(program: &str) -> Option<PathBuf> {
+    resolve_agent_program_source(program).map(|resolution| resolution.path)
+}
+
+pub(crate) fn resolve_agent_program_source(program: &str) -> Option<ProgramResolution> {
     let program = program.trim();
     if program.is_empty() {
         return None;
@@ -335,19 +393,113 @@ pub(crate) fn clear_program_cache() {
     }
 }
 
-fn resolve_program_path(program: &str) -> Option<PathBuf> {
+fn resolve_program_path(program: &str) -> Option<ProgramResolution> {
     // Explicit paths are returned as-is, matching restart_program_available.
     if program.contains(['\\', '/']) || std::path::Path::new(program).is_absolute() {
         let path = PathBuf::from(program);
-        return path.is_file().then_some(path);
+        return path.is_file().then_some(ProgramResolution {
+            path,
+            source: "path".to_string(),
+        });
+    }
+    // Environment variables are an explicit user signal: check them before
+    // generic install dirs so a custom location wins over an older PATH copy.
+    if let Some((name, path)) = environment_program_paths(program).into_iter().next() {
+        return Some(ProgramResolution {
+            path,
+            source: format!("env:{name}"),
+        });
     }
     if let Some(path) = known_program_paths(program)
         .into_iter()
         .find(|candidate| candidate.is_file())
     {
-        return Some(path);
+        return Some(ProgramResolution {
+            path,
+            source: "path".to_string(),
+        });
     }
-    where_program_path(program)
+    where_program_path(program).map(|path| ProgramResolution {
+        path,
+        source: "path".to_string(),
+    })
+}
+
+fn program_extensions() -> &'static [&'static str] {
+    if cfg!(target_os = "windows") {
+        &[".exe", ".cmd", ".bat", ".ps1", ""]
+    } else {
+        &[""]
+    }
+}
+
+/// Discover agent executables referenced by environment variables.
+///
+/// Examples:
+/// - `CLAUDE_CODE_PATH=C:\tools\claude.exe` (direct file)
+/// - `CLAUDE_CONFIG_DIR=C:\Users\me\.claude` containing `local\claude.exe`
+/// - `OPENCODE_HOME=C:\tools\opencode` containing `bin\opencode.cmd`
+///
+/// Only existing files/directories are considered; prompt text, tokens and
+/// other arbitrary values cannot become an agent.
+fn environment_program_paths(program: &str) -> Vec<(String, PathBuf)> {
+    environment_program_paths_from(program, std::env::vars_os())
+}
+
+fn environment_program_paths_from<I>(program: &str, vars: I) -> Vec<(String, PathBuf)>
+where
+    I: IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+{
+    let program_lower = program.trim().to_ascii_lowercase();
+    if program_lower.is_empty() {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    for (name, value) in vars {
+        let name_text = name.to_string_lossy().into_owned();
+        if name_text.eq_ignore_ascii_case("PATH") {
+            continue;
+        }
+        let value_text = value.to_string_lossy().trim().trim_matches('"').to_string();
+        if value_text.is_empty() || value_text.len() > 4096 {
+            continue;
+        }
+        let candidate = PathBuf::from(&value_text);
+        if candidate.is_file() {
+            if candidate
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().eq_ignore_ascii_case(&program_lower))
+                .unwrap_or(false)
+            {
+                found.push((name_text, candidate));
+            }
+            continue;
+        }
+        if !candidate.is_dir() {
+            continue;
+        }
+        // Directory-valued vars are scanned only when the variable name or
+        // path mentions the agent, keeping the check cheap and deterministic.
+        if !name_text.to_ascii_lowercase().contains(&program_lower)
+            && !value_text.to_ascii_lowercase().contains(&program_lower)
+        {
+            continue;
+        }
+        for subdir in ["", "bin", "local", "node_modules/.bin"] {
+            let directory = if subdir.is_empty() {
+                candidate.clone()
+            } else {
+                candidate.join(subdir)
+            };
+            for extension in program_extensions() {
+                let path = directory.join(format!("{program_lower}{extension}"));
+                if path.is_file() {
+                    found.push((name_text.clone(), path));
+                }
+            }
+        }
+    }
+    found
 }
 
 #[cfg(target_os = "windows")]
@@ -504,7 +656,7 @@ pub(crate) struct AgentDetection {
     pub process_count: usize,
     /// 实际解析到的可执行文件；不存在时为 null。
     pub path: Option<String>,
-    /// process | path | missing
+    /// process | path | env:NAME | missing
     pub source: String,
 }
 
@@ -517,15 +669,16 @@ pub(crate) fn detect_agents(state: tauri::State<AppState>) -> Vec<AgentDetection
         .into_iter()
         .map(|def| {
             let processes = matching_processes(&sys, &def.keyword);
-            let path = resolve_agent_program(def.program());
+            let resolution = resolve_agent_program_source(def.program());
+            let path = resolution.as_ref().map(|value| value.path.clone());
             let running = !processes.is_empty();
             let installed = path.is_some() || running;
             let source = if running {
-                "process"
-            } else if path.is_some() {
-                "path"
+                "process".to_string()
             } else {
-                "missing"
+                resolution
+                    .map(|value| value.source)
+                    .unwrap_or_else(|| "missing".to_string())
             };
             AgentDetection {
                 id: if def.log_kind.is_empty() {
@@ -539,7 +692,7 @@ pub(crate) fn detect_agents(state: tauri::State<AppState>) -> Vec<AgentDetection
                 running,
                 process_count: processes.len(),
                 path: path.map(|value| value.to_string_lossy().into_owned()),
-                source: source.to_string(),
+                source,
             }
         })
         .collect()

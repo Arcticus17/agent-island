@@ -285,10 +285,10 @@ describe("approval 2.0", () => {
         name: "Claude Code",
         keyword: "claude",
         installed: true,
-        running: true,
-        process_count: 1,
+        running: false,
+        process_count: 0,
         path: "D:\\node_global\\claude.cmd",
-        source: "process",
+        source: "env:CLAUDE_CODE_PATH",
       },
       {
         id: "hermes",
@@ -317,6 +317,7 @@ describe("approval 2.0", () => {
     const hermes = target.querySelector('[data-testid="agent-detection-row"][data-agent-id="hermes"]')!;
     expect(claude.getAttribute("data-installed")).toBe("true");
     expect(claude.textContent).toContain("D:\\node_global\\claude.cmd");
+    expect(claude.textContent).toContain("环境变量");
     expect(hermes.getAttribute("data-installed")).toBe("false");
     expect(hermes.textContent).toContain("未找到可执行文件");
   });

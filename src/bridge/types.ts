@@ -341,7 +341,8 @@ export interface AgentDetection {
   process_count: number;
   /** 实际解析到的可执行文件；未安装时为 null */
   path: string | null;
-  source: "process" | "path" | "missing";
+  /** process | path | env:变量名 | missing */
+  source: string;
 }
 
 export interface AgentCandidate {

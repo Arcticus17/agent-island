@@ -49,7 +49,29 @@ name.contains(keyword) || args.join(" ").contains(keyword)
 
 `resolve_agent_program` 返回**实际路径**，不再只返回 bool；`program_available` 复用它。缓存 60 秒，`refresh_agent_detection` 会清缓存。
 
-### 3. 诊断可见：为什么这个 Agent 显示/隐藏
+### 3. 环境变量探测
+
+除 PATH/常见目录外，新增 `environment_program_paths`：
+
+- **直接文件值**：任意环境变量的值本身是文件，且文件名匹配 Agent（例如 `CLAUDE_CODE_PATH=C:\tools\claude.exe`）→ 直接采用；
+- **目录值**：变量名或路径里包含 Agent 关键字（例如 `CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`OPENCODE_HOME`、`HERMES_HOME`），在该目录及 `bin/`、`local/`、`node_modules/.bin/` 下查找 `<agent>.exe/.cmd/.bat/.ps1`；
+- `PATH` 本身不按目录值处理（已有专门的 PATH 解析）；
+- 只认**真实存在的文件/目录**；提示词、token、任意文本不会变成 Agent。
+
+环境变量命中的路径优先于常见安装目录，诊断里显示为「环境变量」，tooltip 带变量名。纯函数 `environment_program_paths_from` 有单测覆盖直接文件、目录 + `bin`、提示词误值三种情况。
+
+支持示例：
+
+```text
+CLAUDE_CODE_PATH=C:\tools\claude.exe
+CLAUDE_CONFIG_DIR=C:\Users\me\.claude      → .claude\local\claude.exe
+CODEX_HOME=C:\tools\codex                 → codex\bin\codex.exe
+OPENCODE_HOME=D:\tools\opencode           → opencode\bin\opencode.cmd
+```
+
+注意：这里读的是**应用进程启动时继承的环境变量**；运行中修改系统环境变量后，需要点「重新检测」并重启应用才会看到新值。
+
+### 4. 诊断可见：为什么这个 Agent 显示/隐藏
 
 新增命令：
 
@@ -73,7 +95,7 @@ Hermes        未找到可执行文件                           未检测到
 
 | 层 | 结果 |
 | --- | --- |
-| Rust | **226 passed**：新增/更新 9 条 process_scan 用例（提示词不匹配、opencode/hermes 幽灵、cmd shim、`.npmrc` prefix、Scoop/Volta） |
+| Rust | **227 passed**：新增/更新 10 条 process_scan 用例（提示词不匹配、opencode/hermes 幽灵、cmd shim、`.npmrc` prefix、Scoop/Volta、环境变量文件/目录） |
 | 浏览器 | **136 passed**：新增「Agent 检测只显示本机找到的」与「+ 检测/添加面板」2 条用例 |
 | 视觉 | 24 passed |
 | `svelte-check` | 0 errors / 0 warnings |
@@ -84,6 +106,7 @@ Hermes        未找到可执行文件                           未检测到
 - `accepts_cmd_shims_only_when_the_command_token_is_the_agent`
 - `finds_the_npm_prefix_from_the_user_npmrc`
 - `includes_scoop_and_volta_prefixes_from_the_environment`
+- `finds_agents_from_environment_variables`
 
 ### 真机（CDP）
 

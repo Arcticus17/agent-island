@@ -478,6 +478,21 @@
     }
   }
 
+  function detectionTag(detection: AgentDetection): string {
+    if (detection.running) return "运行中";
+    if (!detection.installed) return "未检测到";
+    if (detection.source.startsWith("env:")) return "环境变量";
+    return "已安装";
+  }
+
+  function detectionTitle(detection: AgentDetection): string {
+    if (detection.source.startsWith("env:")) {
+      return `来源：环境变量 ${detection.source.slice(4)}`;
+    }
+    if (detection.running) return "来源：正在运行的进程";
+    return detection.installed ? "来源：PATH / 常见安装目录" : "本机未找到可执行文件";
+  }
+
   async function loadAgentDetections(force = false): Promise<void> {
     if (!bridge.detectAgents && !bridge.refreshAgentDetection) return;
     if (detectionStatus === "loading") return;
@@ -1872,7 +1887,7 @@
                     <span class="detection-dot" class:on={detection.installed} aria-hidden="true"></span>
                     <strong>{detection.name}</strong>
                     <span class="detection-path sensitive" title={detection.path ?? ""}>{detection.path ?? "未找到可执行文件"}</span>
-                    <span class="detection-tag">{detection.running ? "运行中" : detection.installed ? "已安装" : "未检测到"}</span>
+                    <span class="detection-tag" title={detectionTitle(detection)}>{detectionTag(detection)}</span>
                   </div>
                 {/each}
               {/if}
