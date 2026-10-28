@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import type { AgentView, DisplayStatus } from "../../bridge/types";
   import PixelAgent from "../brand/PixelAgent.svelte";
 
@@ -8,6 +8,7 @@
     onToggle,
     iconStyle = "pixel",
     pendingApprovals = false,
+    inboxCount = 0,
     binding = "inferred",
   }: {
     agent: AgentView | null;
@@ -17,6 +18,8 @@
     iconStyle?: "dot" | "pixel";
     /** 有审批在等：胶囊也要显性提示，不能只靠展开面板 */
     pendingApprovals?: boolean;
+    /** 收件箱里未解决的事件数（通知/完成/审批） */
+    inboxCount?: number;
     /** 会话身份来源：launched（岛内终端）/ hooked（hooks）/ inferred（推断） */
     binding?: "launched" | "hooked" | "inferred" | "manual";
   } = $props();
@@ -42,9 +45,9 @@
   });
 </script>
 
-<button class="compact" class:pixel class:pending={pendingApprovals} type="button" data-testid="compact-toggle" aria-expanded={expanded} aria-controls="expanded-island" onclick={onToggle}>
+<button class="compact" class:pixel class:pending={pendingApprovals || inboxCount > 0} type="button" data-testid="compact-toggle" aria-expanded={expanded} aria-controls="expanded-island" onclick={onToggle}>
   {#if pixel}
-    <span class="avatar" class:attention={status === "waiting" || pendingApprovals} aria-hidden="true"><PixelAgent agentName={agent?.name ?? null} size={20} {status} /></span>
+    <span class="avatar" class:attention={status === "waiting" || pendingApprovals || inboxCount > 0} aria-hidden="true"><PixelAgent agentName={agent?.name ?? null} size={20} {status} /></span>
   {:else}
     <span class="orb" aria-hidden="true"></span>
   {/if}
@@ -52,6 +55,8 @@
   {#if pixel}
     {#if pendingApprovals}
       <span class="badge attention" data-testid="compact-badge" data-pending="true" role="img" aria-label="有审批等待你确认" title="有审批等待你确认">!</span>
+    {:else if inboxCount > 0}
+      <span class="badge attention" data-testid="compact-badge" data-inbox="true" role="img" aria-label={`${inboxCount} 件待处理`} title={`${inboxCount} 件待处理`}>{inboxCount > 9 ? "9+" : inboxCount}</span>
     {:else if status === "waiting"}
       <span class="badge attention" data-testid="compact-badge" role="img" aria-label="等待你确认" title="等待你确认">?</span>
     {:else if badge}
@@ -61,7 +66,7 @@
   {#if binding !== "inferred"}
     <span class="binding" data-testid="agent-binding" data-binding={binding} title={binding === "hooked" ? "会话身份由 hooks 自报" : "该 Agent 由岛内终端启动，身份可确认"}>{binding === "hooked" ? "hooks" : binding === "manual" ? "已绑定" : "岛内启动"}</span>
   {/if}
-  <span class="status" role="status" data-testid="compact-status">{pendingApprovals ? "待确认" : labels[status]}</span>
+  <span class="status" role="status" data-testid="compact-status">{pendingApprovals ? "待确认" : inboxCount > 0 ? "待处理" : labels[status]}</span>
   <span class="chevron" aria-hidden="true">{expanded ? "⌃" : "⌄"}</span>
 </button>
 

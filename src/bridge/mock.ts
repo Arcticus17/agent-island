@@ -1,4 +1,4 @@
-﻿import {
+import {
   assertSupportedSnapshot,
   type AgentCommand,
   type AgentIslandBridge,
@@ -24,6 +24,8 @@ export interface MockBridgeOptions {
   loadedSession?: SessionView | null;
   /** searchSessions 返回的假数据 */
   searchHits?: Array<{ agent: string; session: string; role: string; snippet: string; at_ms: number; path: string }>;
+  /** 收件箱初始数据（浏览器测试用） */
+  inbox?: import("./types").InboxItem[];
 }
 
 export interface MockAgentIslandBridge extends AgentIslandBridge {
@@ -37,6 +39,8 @@ export interface MockAgentIslandBridge extends AgentIslandBridge {
   emitIslandHotkey(): void;
   terminalCalls(): readonly { kind: string; [key: string]: unknown }[];
   emitTerminal(event: TerminalEvent): void;
+  emitInboxChanged(): void;
+  inbox(): Array<import("./types").InboxItem>;
 }
 
 function clone<T>(value: T): T {
@@ -66,6 +70,8 @@ export function createMockBridge(
   const searchHits: Array<{ agent: string; session: string; role: string; snippet: string; at_ms: number; path: string }> = options.searchHits ?? [];
   const approvalRules: Array<{ id: string; tool: string; pattern: string }> = [];
   const approvalAudit: Array<{ at_ms: number; id: string; tool: string; command: string; rule: string; decision: string }> = [];
+  let inboxItems = clone(options.inbox ?? []);
+  const inboxHandlers = new Set<() => void>();
 
   const bridge: MockAgentIslandBridge = {
     async getSnapshot() {
@@ -183,6 +189,27 @@ export function createMockBridge(
     async listApprovalAudit(limit) {
       return approvalAudit.slice(0, limit ?? 20).map((entry) => ({ ...entry }));
     },
+    async listInbox() {
+      return clone(inboxItems);
+    },
+    async resolveInboxItem(id) {
+      inboxItems = inboxItems.map((item) => item.id === id
+        ? { ...item, state: "resolved" as const, resolved_at_ms: Date.now(), snooze_until_ms: null }
+        : item);
+      for (const handler of inboxHandlers) handler();
+      return clone(inboxItems);
+    },
+    async snoozeInboxItem(id, minutes) {
+      inboxItems = inboxItems.map((item) => item.id === id
+        ? { ...item, state: "snoozed" as const, snooze_until_ms: Date.now() + minutes * 60_000 }
+        : item);
+      for (const handler of inboxHandlers) handler();
+      return clone(inboxItems);
+    },
+    async listenInboxChanges(handler) {
+      inboxHandlers.add(handler);
+      return () => inboxHandlers.delete(handler);
+    },
     async terminalOpen(request) {
       terminalSequence += 1;
       const id = `mock-term-${terminalSequence}`;
@@ -212,6 +239,12 @@ export function createMockBridge(
     },
     emitTerminal(event) {
       for (const handler of [...terminalHandlers]) handler({ ...event });
+    },
+    emitInboxChanged() {
+      for (const handler of inboxHandlers) handler();
+    },
+    inbox() {
+      return clone(inboxItems);
     },
     commands() {
       return commandLog.map(clone);

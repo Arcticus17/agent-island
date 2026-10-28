@@ -1,4 +1,4 @@
-﻿//! 审批允许清单 + 审计。
+//! 审批允许清单 + 审计。
 //!
 //! 内置 `classify_command` 只认得极少数安全命令，其余都要人工点一次——同一条
 //! `npm test` 一天点十次就会变成无脑点「允许」。这里让用户自己维护少量规则：
@@ -94,6 +94,23 @@ pub(crate) fn match_rule<'a>(
         let tool_ok = rule.tool.trim().is_empty() || rule.tool.eq_ignore_ascii_case(tool.trim());
         tool_ok && pattern_matches(&rule.pattern, command)
     })
+}
+
+/// 与前端 `suggestRulePattern` 保持同一语义：取前两段加通配。
+/// 只用于临时授权（10 分钟 / 本会话），不会写进持久规则。
+pub(crate) fn suggest_rule_pattern(command: &str) -> String {
+    let trimmed = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let tokens: Vec<&str> = trimmed.split(' ').collect();
+    if tokens.len() <= 2 {
+        // A two-token command is usually already precise (`git status`,
+        // `npm test`); adding a wildcard would over-grant.
+        return trimmed;
+    }
+    let head = tokens[..2].join(" ");
+    format!("{head} *")
 }
 
 pub(crate) fn load_rules(path: &Path) -> Vec<ApprovalRule> {
@@ -286,6 +303,14 @@ mod tests {
         assert_eq!(latest.len(), 3);
         assert_eq!(latest[0].id, format!("id-{}", MAX_AUDIT_ENTRIES + 19));
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn suggests_a_prefix_pattern_for_temporary_grants() {
+        assert_eq!(suggest_rule_pattern("npm test -- --watch"), "npm test *");
+        assert_eq!(suggest_rule_pattern("git status"), "git status");
+        assert_eq!(suggest_rule_pattern("  npm   install  left-pad "), "npm install *");
+        assert_eq!(suggest_rule_pattern(""), "");
     }
 
     #[test]

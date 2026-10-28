@@ -25,10 +25,11 @@
   import DiagnosticsPanel from "../components/diagnostics/DiagnosticsPanel.svelte";
   import LayoutEditor from "../components/layout/LayoutEditor.svelte";
   import NotificationStack from "../components/notifications/NotificationStack.svelte";
+  import InboxPanel from "../components/inbox/InboxPanel.svelte";
   import type { ApprovalItem, CommandFailure, CommandUiState, NotificationItem } from "../components/events/types";
   import { tauriBridge } from "../bridge/tauri";
   import { tauriDiagnosticsBridge, type DiagnosticsBridge } from "../bridge/diagnostics";
-  import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent, SessionView, SourceHealth } from "../bridge/types";
+  import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent, InboxItem, SessionView, SourceHealth } from "../bridge/types";
   import { loadLayout, saveLayout } from "../layout/persistence";
   import type { CardId, CardPlacement, LayoutConfigV1 } from "../layout/schema";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
@@ -103,6 +104,34 @@
   /** 有审批在等：隐藏热区要脉冲、且不要自动收起 */
   const hasPendingApprovals = $derived(approvals.length > 0);
   let notifications = $state<NotificationItem[]>([]);
+  /** 收件箱：后端持久化的审批/通知/完成队列。 */
+  let inboxItems = $state<InboxItem[]>([]);
+  let inboxInitialized = $state(false);
+  const inboxCount = $derived(inboxItems.filter((item) => item.state !== "resolved").length);
+  const INBOX_SEEN_KEY = "agent-island-inbox-seen";
+  let inboxSeenAt = $state((() => {
+    try {
+      const stored = Number(localStorage.getItem(INBOX_SEEN_KEY));
+      return Number.isFinite(stored) && stored > 0 ? stored : Date.now();
+    } catch {
+      return Date.now();
+    }
+  })());
+  let digestDismissed = $state(false);
+  const inboxDigest = $derived.by(() => {
+    if (digestDismissed) return null;
+    const open = inboxItems.filter((item) => item.state !== "resolved");
+    if (open.length < 2) return null;
+    const awayMs = Date.now() - inboxSeenAt;
+    if (awayMs < 10 * 60_000) return null;
+    return {
+      minutes: Math.floor(awayMs / 60_000),
+      total: open.length,
+      approvals: open.filter((item) => item.kind === "approval").length,
+      done: open.filter((item) => item.kind === "done").length,
+      notifications: open.filter((item) => item.kind === "notification").length,
+    };
+  });
   let privacy = $state(localStorage.getItem("agent-island-privacy") === "1");
   /** 今日花费（岛在线期间累计）与每日预算，预算 0 表示关闭 */
   let spend = $state<SpendState>(loadStoredSpend());
@@ -975,6 +1004,66 @@
     }
   }
 
+  async function loadInbox(): Promise<void> {
+    if (!bridge.listInbox) return;
+    try {
+      const next = await bridge.listInbox();
+      const open = (items: readonly InboxItem[]) => items.filter((item) => item.state !== "resolved").length;
+      const previous = open(inboxItems);
+      inboxItems = next;
+      // A new item arriving while the island is fully hidden should at least
+      // peek the capsule; otherwise an unmatched notification would be stored
+      // but never visible until the user happens to hover.
+      if (inboxInitialized && open(next) > previous && idleHidden) {
+        peeked = true;
+        void syncWindowSize();
+      }
+      inboxInitialized = true;
+    } catch {
+      // 收件箱读失败不影响主流程；下一次事件会再试。
+    }
+  }
+
+  function markInboxSeen(): void {
+    inboxSeenAt = Date.now();
+    try {
+      localStorage.setItem(INBOX_SEEN_KEY, String(inboxSeenAt));
+    } catch {
+      // localStorage 不可用时只影响摘要判断。
+    }
+  }
+
+  function dismissInboxDigest(): void {
+    digestDismissed = true;
+    markInboxSeen();
+  }
+
+  async function resolveInbox(id: string): Promise<void> {
+    if (!bridge.resolveInboxItem) return;
+    try {
+      inboxItems = await bridge.resolveInboxItem(id);
+      markInboxSeen();
+    } catch {
+      // 保持现状，让用户重试。
+    }
+  }
+
+  async function snoozeInbox(id: string, minutes: number): Promise<void> {
+    if (!bridge.snoozeInboxItem) return;
+    try {
+      inboxItems = await bridge.snoozeInboxItem(id, minutes);
+      markInboxSeen();
+    } catch {
+      // 保持现状，让用户重试。
+    }
+  }
+
+  function focusApproval(id: string): void {
+    const selector = `[data-approval-id="${id.replace(/"/g, '\\"')}"]`;
+    const node = document.querySelector<HTMLElement>(selector);
+    node?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
   function pushApproval(event: Extract<HookEvent, { kind: "approval" }>): void {
     if (approvals.some((item) => item.approval.id === event.approval.id)) return;
     // 审批只带 session，不带上是谁；这里按会话反查一次，卡片上就能说清"哪个 Agent 在请求"。
@@ -998,6 +1087,10 @@
       void refreshAll();
     } else if (event.kind === "notification") {
       pushNotification(event);
+    } else if (event.kind === "approval_expired") {
+      approvals = approvals.filter((item) => !event.ids.includes(item.approval.id));
+      void loadInbox();
+      void syncWindowSize();
     } else {
       pushApproval(event);
     }
@@ -1020,7 +1113,12 @@
     }
   }
 
-  async function respondToApproval(id: string, allow: boolean): Promise<void> {
+  async function respondToApproval(
+    id: string,
+    allow: boolean,
+    scope?: "once" | "ten_minutes" | "session",
+    reason?: string,
+  ): Promise<void> {
     const current = approvals.find((item) => item.approval.id === id);
     if (!current || current.state === "pending") return;
     approvals = approvals.map((item) => item.approval.id === id
@@ -1029,7 +1127,13 @@
     const release = store.beginInteraction("approval");
     let result: CommandResult;
     try {
-      result = await bridge.runCommand({ name: "respond_hook_approval", id, allow });
+      result = await bridge.runCommand({
+        name: "respond_hook_approval",
+        id,
+        allow,
+        ...(scope && scope !== "once" ? { scope } : {}),
+        ...(reason && reason.trim() ? { reason: reason.trim() } : {}),
+      });
     } catch (error) {
       result = {
         ok: false,
@@ -1046,8 +1150,22 @@
         : item);
     }
     release();
-    if (result.ok) void refreshAll();
+    if (result.ok) {
+      void refreshAll();
+      void loadInbox();
+    }
     void syncWindowSize();
+  }
+
+  async function allowLowRiskApprovals(): Promise<void> {
+    const lows = approvals.filter(
+      (item) => item.approval.risk === "low" && item.state !== "pending",
+    );
+    for (const item of lows) {
+      // 逐条发送，避免一次失败后前端状态与后端不一致。
+      if (!approvals.some((current) => current.approval.id === item.approval.id)) continue;
+      await respondToApproval(item.approval.id, true);
+    }
   }
 
   /** 岛内任务模式的输出：key 是任务 id（`codex exec --json` 的事件流累积） */
@@ -1209,6 +1327,13 @@
   }
 
   onMount(() => {
+    try {
+      if (!localStorage.getItem(INBOX_SEEN_KEY)) {
+        localStorage.setItem(INBOX_SEEN_KEY, String(inboxSeenAt));
+      }
+    } catch {
+      // localStorage 不可用时只影响摘要判断。
+    }
     // 版本号来自 Tauri；拿不到就保持"未知"，不阻塞任何功能
     if (bridge.getAppVersion) {
       void bridge.getAppVersion().then((version) => {
@@ -1217,6 +1342,7 @@
       }).catch(() => undefined);
     }
     let stopListening: (() => void) | undefined;
+    let stopInbox: (() => void) | undefined;
     let stopPlacement: (() => void) | undefined;
     if (bridge.initializeWindowPlacement) {
       void bridge.initializeWindowPlacement(windowFailure).then((release) => {
@@ -1249,6 +1375,13 @@
       expanded = true;
       void syncWindowSize();
     });
+    void loadInbox();
+    if (bridge.listenInboxChanges) {
+      void bridge.listenInboxChanges(() => { if (!disposed) void loadInbox(); }).then((unlisten) => {
+        if (disposed) unlisten();
+        else stopInbox = unlisten;
+      }).catch(() => undefined);
+    }
     // 收起岛会卸载发送框：任务记录要能从后端补回来，否则一收一开就丢了
     if (bridge.listAgentTasks) {
       void bridge.listAgentTasks().then((tasks) => {
@@ -1343,6 +1476,7 @@
       diagnosticRefreshQueued = false;
       resizeRevision += 1;
       stopListening?.();
+      stopInbox?.();
       stopPlacement?.();
       stopTerminalEvents?.();
       stopWindowFocus?.();
@@ -1401,10 +1535,10 @@
   >
     <span class="sr-only" data-testid="selected-agent-id">{viewState.selectedAgentId ?? ""}</span>
     {#if idleHidden}
-      <div class="idle-notch" data-testid="idle-notch" data-pending={hasPendingApprovals ? "true" : "false"} aria-hidden="true"><span class="idle-notch-dot"></span></div>
+      <div class="idle-notch" data-testid="idle-notch" data-pending={hasPendingApprovals || inboxCount > 0 ? "true" : "false"} aria-hidden="true"><span class="idle-notch-dot"></span></div>
     {:else}
     <div class="compact-header">
-      <CompactIsland agent={selectedAgent} {expanded} onToggle={toggleExpanded} {iconStyle} pendingApprovals={hasPendingApprovals} binding={selectedAgent?.binding ?? "inferred"} />
+      <CompactIsland agent={selectedAgent} {expanded} onToggle={toggleExpanded} {iconStyle} pendingApprovals={hasPendingApprovals} inboxCount={inboxCount} binding={selectedAgent?.binding ?? "inferred"} />
       {#if bridge.startWindowDrag}<button class="window-handle" aria-label="拖动窗口" title="按住并拖动窗口" onpointerdown={(event) => { if (event.button === 0) { event.preventDefault(); void windowAction(() => bridge.startWindowDrag!()); } }}>⠿</button>{/if}
     </div>
     {/if}
@@ -1414,6 +1548,14 @@
         {#if showWelcome}
           <WelcomeCard onDismiss={dismissWelcome} />
         {/if}
+        <InboxPanel
+          items={inboxItems}
+          digest={inboxDigest}
+          onDismissDigest={dismissInboxDigest}
+          onResolve={(id) => void resolveInbox(id)}
+          onSnooze={(id, minutes) => void snoozeInbox(id, minutes)}
+          onOpenApproval={focusApproval}
+        />
         <nav class="agent-strip" data-testid="agent-strip" aria-label="切换 Agent">
           {#each visibleAgents as agent (agent.id)}
             <button
@@ -1661,7 +1803,8 @@
     >
       <ApprovalStack
         items={approvals}
-        onRespond={(id, allow) => void respondToApproval(id, allow)}
+        onRespond={(id, allow, scope, reason) => void respondToApproval(id, allow, scope, reason)}
+        onBatchAllowLowRisk={() => void allowLowRiskApprovals()}
         onRemember={bridge.addApprovalRule ? (tool, pattern) => void rememberApprovalRule(tool, pattern) : undefined}
       />
       {#if listenerError}<p class="listener-error" role="alert">事件监听连接失败，请重启灵动岛后重试。</p>{/if}

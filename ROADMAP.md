@@ -93,6 +93,14 @@
 - 待验收：混合 DPI、多显示器、安装/卸载与原生窗口层级仍需实机人工验收，未实测的系统与架构不列为已支持
 - 发布记录：`v1.9.0` 由 GitHub Actions 自动构建 EXE/MSI 并发布（`Agent.Island_1.9.0_x64-setup.exe` / `_en-US.msi`），安装包哈希与流水线明细见 [发布记录](docs/verification/2026-09-30-v1.9.0-release.md)；CI 的视觉比对改为报告而不阻塞发布，原因见 [视觉基线刷新记录](docs/verification/2026-09-30-visual-baseline-refresh.md)
 
+## v1.10：收件箱与审批 2.0（已完成，待发布）
+
+- 收件箱：审批/通知/完成事件持久化到 `~/.agent-island/inbox.json`，展开态「待你处理」、收起态数字徽标、离开摘要；新条目到达时从隐藏 peek 成胶囊
+- 审批 2.0：本地风险分级、仓库/分支、Edit/Write diff 预览、拒绝并说明、仅本次/10 分钟/本会话授权、低风险批量；审批 120 秒过期后自动移除
+- Hook 协议：新增 `PermissionRequest`（Edit/Write/MultiEdit），bridge 改为独立 `hook_bridge.mjs`；旧客户端只发顶层 command 时回填 `tool_input`
+- 验证：Rust 222、Node 29（含 3 条 bridge 协议测试）、浏览器 131、视觉 24；真机 CDP 验证 allow / 10 分钟 grant / deny reason / inbox peek
+- 记录：[docs/verification/2026-10-28-inbox-and-approval-2.md](docs/verification/2026-10-28-inbox-and-approval-2.md)
+
 ## 当前已完成
 
 - 常驻灵动岛：悬停展开、拖拽记忆、多显示器、托盘、开机自启

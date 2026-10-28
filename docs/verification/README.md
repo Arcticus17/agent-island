@@ -5,6 +5,7 @@
 
 | 日期 | 主题 | 标题 |
 | --- | --- | --- |
+| 2026-10-28 | [inbox-and-approval-2](2026-10-28-inbox-and-approval-2.md) | 收件箱 + 审批 2.0（v1.10） |
 | 2026-10-27 | [diagnostics-noise-and-hooked-identity](2026-10-27-diagnostics-noise-and-hooked-identity.md) | 诊断噪音与 Agent 自报身份（2026-10-27） |
 | 2026-10-22 | [app-update-check](2026-10-22-app-update-check.md) | 应用自更新：先做「看得见新版本」，自动安装留给发布链路 |
 | 2026-10-22 | [first-run-onboarding](2026-10-22-first-run-onboarding.md) | 首次引导卡片 |

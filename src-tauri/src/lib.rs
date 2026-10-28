@@ -1,5 +1,6 @@
 mod adapters;
 mod agent_tasks;
+mod approval_review;
 mod approval_rules;
 mod bindings;
 mod application;
@@ -9,6 +10,7 @@ mod external;
 mod hooks;
 mod hooked;
 mod hotkey;
+mod inbox_store;
 mod launcher;
 mod logging;
 mod opencode_events;
@@ -26,6 +28,7 @@ mod usage;
 
 use adapters::AgentAdapter;
 use agent_tasks::*;
+use approval_review::*;
 use approval_rules::*;
 use bindings::*;
 use commands::*;
@@ -33,6 +36,7 @@ use external::*;
 use hooks::*;
 use hooked::*;
 use hotkey::*;
+use inbox_store::*;
 use logging::*;
 use opencode_events::*;
 use process_scan::*;
@@ -370,6 +374,11 @@ struct AppState {
     hook_enabled: AtomicBool,
     hook_token: Mutex<String>,
     approvals: Mutex<HashMap<String, HookApproval>>,
+    /// 临时授权（允许 10 分钟 / 本会话），只存在内存，进程退出即失效。
+    approvals_grants: Mutex<Vec<TemporaryGrant>>,
+    /// 收件箱：审批 / 通知 / 完成事件的本地持久队列。
+    inbox_path: PathBuf,
+    inbox: Mutex<Vec<InboxItem>>,
     /// 手动会话绑定（agent_id → session），持久化在 ~/.agent-island/session-bindings.json
     bindings: Mutex<HashMap<String, BoundSession>>,
     /// Agent 通过 hooks 自报的会话身份（agent_id → 最近一次上报）
@@ -385,7 +394,17 @@ struct HookApproval {
     tool: String,
     command: String,
     cwd: String,
+    /// 用于临时授权 / 记住这条的匹配键：Bash 是命令，Edit/Write 是文件路径。
+    rule_key: String,
     decision: Option<String>,
+    /// 拒绝理由：会回传给 Agent，让它按理由改道。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    /// 本地规则评估结果（风险、仓库、分支、diff 预览）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review: Option<ApprovalReview>,
+    created_at_ms: u64,
+    expires_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -453,6 +472,7 @@ pub fn run() {
     };
     let stats_path = stats_path();
     let daily_path = daily_path();
+    let inbox_path = inbox_path();
     let hook_cfg = load_hook_config();
     let hook_enabled = hook_cfg.as_ref().map(|c| c.enabled).unwrap_or(false);
     let hook_token = hook_cfg.map(|c| c.token).unwrap_or_default();
@@ -478,6 +498,9 @@ pub fn run() {
             hook_enabled: AtomicBool::new(hook_enabled),
             hook_token: Mutex::new(hook_token),
             approvals: Mutex::new(HashMap::new()),
+            approvals_grants: Mutex::new(Vec::new()),
+            inbox_path: inbox_path.clone(),
+            inbox: Mutex::new(load_inbox(&inbox_path)),
             bindings: Mutex::new(load_bindings(&bindings_path())),
             hooked: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
@@ -521,6 +544,9 @@ pub fn run() {
             add_approval_rule,
             remove_approval_rule,
             list_approval_audit,
+            list_inbox,
+            resolve_inbox_item,
+            snooze_inbox_item,
             save_app_settings,
             get_autostart,
             set_autostart,
@@ -637,6 +663,12 @@ pub fn run() {
                 .build(app)?;
 
             start_hook_server(app.handle().clone());
+            // Existing installs may still have the old bridge script (no
+            // PermissionRequest support). Refresh script + hook entries at
+            // startup without rotating the token or touching user hooks.
+            if app.state::<AppState>().hook_enabled.load(Ordering::SeqCst) {
+                refresh_installed_hooks();
+            }
             #[cfg(target_os = "windows")]
             start_global_hotkeys(app.handle().clone());
             Ok(())
@@ -651,6 +683,8 @@ pub fn run() {
                     let _ = save_stats(&session.stats, &state.stats_path);
                     let _ = save_daily(&session.daily, &state.daily_path);
                 }
+                let inbox = state.inbox.lock_recover();
+                let _ = save_inbox(&state.inbox_path, &inbox);
             }
         }
     });

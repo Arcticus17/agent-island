@@ -275,7 +275,8 @@ export function assertSupportedSnapshot(snapshot: unknown): AgentViewSnapshot {
 export type HookEvent =
   | { kind: "stop"; session: string }
   | { kind: "notification"; message: string; session: string }
-  | { kind: "approval"; approval: HookApproval };
+  | { kind: "approval"; approval: HookApproval }
+  | { kind: "approval_expired"; ids: string[] };
 
 export interface HookApproval {
   id: string;
@@ -283,6 +284,52 @@ export interface HookApproval {
   tool: string;
   command: string;
   cwd: string;
+  /** 用于“记住这条”的匹配键：Bash 是命令，Edit/Write 是文件路径。 */
+  rule_key?: string;
+  /** 本地规则评估出的风险等级（缺省表示旧宿主没有评估） */
+  risk?: "low" | "medium" | "high";
+  risk_reason?: string;
+  repo?: string;
+  branch?: string;
+  diff?: ApprovalDiff;
+  created_at_ms?: number;
+  expires_at_ms?: number;
+}
+
+export interface ApprovalDiff {
+  file: string;
+  added: number;
+  removed: number;
+  lines: ApprovalDiffLine[];
+  truncated: boolean;
+}
+
+export interface ApprovalDiffLine {
+  kind: "ctx" | "add" | "del";
+  text: string;
+}
+
+export type ApprovalScope = "once" | "ten_minutes" | "session";
+
+export type InboxKind = "approval" | "notification" | "done" | "question" | "system";
+export type InboxSeverity = "low" | "normal" | "high" | "critical";
+export type InboxState = "open" | "snoozed" | "resolved";
+
+export interface InboxItem {
+  id: string;
+  kind: InboxKind;
+  severity: InboxSeverity;
+  agent_id: string;
+  agent_name: string;
+  session_id: string;
+  title: string;
+  body: string;
+  state: InboxState;
+  created_at_ms: number;
+  snooze_until_ms: number | null;
+  resolved_at_ms: number | null;
+  dedupe_key: string;
+  approval_id: string | null;
 }
 
 export type AgentCommand =
@@ -302,7 +349,15 @@ export type AgentCommand =
   | { name: "get_send_output"; taskId: string }
   | { name: "get_hook_status" }
   | { name: "set_hook_enabled"; enabled: boolean }
-  | { name: "respond_hook_approval"; id: string; allow: boolean }
+  | {
+      name: "respond_hook_approval";
+      id: string;
+      allow: boolean;
+      /** 缺省/once 表示只允许这一次；ten_minutes/session 创建内存授权 */
+      scope?: ApprovalScope;
+      /** 拒绝理由，会回传给 Agent */
+      reason?: string;
+    }
   | { name: "dismiss_hook_approval"; id: string }
   | { name: "get_autostart" }
   | { name: "set_autostart"; enabled: boolean }
@@ -410,6 +465,11 @@ export interface AgentIslandBridge {
   addApprovalRule?(tool: string, pattern: string): Promise<ApprovalRule[]>;
   removeApprovalRule?(id: string): Promise<ApprovalRule[]>;
   listApprovalAudit?(limit?: number): Promise<ApprovalAuditEntry[]>;
+  /** 收件箱：审批 / 通知 / 完成事件的本地持久队列。 */
+  listInbox?(): Promise<InboxItem[]>;
+  resolveInboxItem?(id: string): Promise<InboxItem[]>;
+  snoozeInboxItem?(id: string, minutes: number): Promise<InboxItem[]>;
+  listenInboxChanges?(handler: () => void): Promise<() => void>;
 }
 
 export interface AppUpdateInfo {

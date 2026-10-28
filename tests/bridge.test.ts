@@ -427,15 +427,21 @@ describe("Agent Island bridge contract", () => {
   it("filters both production hook channels and calls raw cleanup only once", async () => {
     const unlistenEvents = vi.fn();
     const unlistenApprovals = vi.fn();
+    const unlistenExpired = vi.fn();
     let eventListener: ((event: { payload: unknown }) => void) | undefined;
     let approvalListener: ((event: { payload: unknown }) => void) | undefined;
+    let expiredListener: ((event: { payload: unknown }) => void) | undefined;
     tauri.listen.mockImplementation(async (name, handler) => {
       if (name === "hook-event") {
         eventListener = handler;
         return unlistenEvents;
       }
-      approvalListener = handler;
-      return unlistenApprovals;
+      if (name === "hook-approval") {
+        approvalListener = handler;
+        return unlistenApprovals;
+      }
+      expiredListener = handler;
+      return unlistenExpired;
     });
     const handler = vi.fn<(event: HookEvent) => void>();
     const unlisten = await createTauriBridge().listenHookEvents(handler);
@@ -453,7 +459,9 @@ describe("Agent Island bridge contract", () => {
       },
     });
     approvalListener?.({ payload: { id: "approval-invalid", command: 7 } });
-    expect(handler).toHaveBeenCalledTimes(2);
+    expiredListener?.({ payload: { kind: "approval_expired", ids: ["approval-1"] } });
+    expiredListener?.({ payload: { kind: "approval_expired", ids: [7] } });
+    expect(handler).toHaveBeenCalledTimes(3);
     expect(handler).toHaveBeenNthCalledWith(1, event);
     expect(handler).toHaveBeenNthCalledWith(2, {
       kind: "approval",
@@ -465,11 +473,16 @@ describe("Agent Island bridge contract", () => {
         cwd: "D:\\work",
       },
     });
+    expect(handler).toHaveBeenNthCalledWith(3, {
+      kind: "approval_expired",
+      ids: ["approval-1"],
+    });
 
     unlisten();
     unlisten();
     expect(unlistenEvents).toHaveBeenCalledOnce();
     expect(unlistenApprovals).toHaveBeenCalledOnce();
+    expect(unlistenExpired).toHaveBeenCalledOnce();
   });
 
   it("cleans the event listener when approval listener registration fails", async () => {

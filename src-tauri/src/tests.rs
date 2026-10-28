@@ -1718,14 +1718,40 @@ fn hooks_merge_preserves_user_settings_and_secrets() {
     let text = fs::read_to_string(&settings).unwrap();
     assert!(text.contains("sk-secret"));
     assert!(text.contains("PreToolUse"));
+    assert!(text.contains("PermissionRequest"));
     assert!(text.contains("hook-bridge.mjs"));
 
     remove_hooks_settings(&settings).unwrap();
     let text = fs::read_to_string(&settings).unwrap();
     assert!(text.contains("sk-secret"));
     assert!(!text.contains("PreToolUse"));
+    assert!(!text.contains("PermissionRequest"));
     assert!(!text.contains("hook-bridge.mjs"));
     fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn temporary_grants_expire_and_respect_the_session() {
+    let now = 1_000;
+    let mut grants = vec![TemporaryGrant {
+        tool: "Bash".into(),
+        pattern: "npm test *".into(),
+        session: Some("s-1".into()),
+        expires_at_ms: now + 60_000,
+    }];
+    assert!(grant_matches(&mut grants, "Bash", "npm test -- --watch", "s-1", now));
+    assert!(!grant_matches(&mut grants, "Bash", "npm test -- --watch", "s-2", now));
+    assert!(!grant_matches(&mut grants, "Bash", "npm run build", "s-1", now));
+    assert!(!grant_matches(&mut grants, "Bash", "npm test", "s-1", now + 60_000));
+    assert!(grants.is_empty(), "expired grants should be pruned");
+
+    let mut global = vec![TemporaryGrant {
+        tool: "Bash".into(),
+        pattern: "npm test *".into(),
+        session: None,
+        expires_at_ms: now + 60_000,
+    }];
+    assert!(grant_matches(&mut global, "Bash", "npm test -- --watch", "any-session", now));
 }
 
 /// HTTP 头名大小写不敏感：Node/undici 发小写，curl 等客户端发 `Content-Length`。

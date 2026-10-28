@@ -78,7 +78,12 @@ function commandInvocation(command: AgentCommand): {
     case "respond_hook_approval":
       return {
         commandName: command.name,
-        args: { id: command.id, allow: command.allow },
+        args: {
+          id: command.id,
+          allow: command.allow,
+          ...(command.scope && command.scope !== "once" ? { scope: command.scope } : {}),
+          ...(command.reason ? { reason: command.reason } : {}),
+        },
       };
     case "dismiss_hook_approval":
       return { commandName: command.name, args: { id: command.id } };
@@ -112,6 +117,9 @@ function commandError(error: unknown): Exclude<CommandResult, { ok: true }> {
 function isHookEvent(payload: unknown): payload is HookEvent {
   if (!payload || typeof payload !== "object") return false;
   const value = payload as Record<string, unknown>;
+  if (value.kind === "approval_expired") {
+    return Array.isArray(value.ids) && value.ids.every((id) => typeof id === "string");
+  }
   if (typeof value.session !== "string") return false;
   return (
     value.kind === "stop" ||
@@ -122,13 +130,35 @@ function isHookEvent(payload: unknown): payload is HookEvent {
 function isHookApproval(payload: unknown): payload is HookApproval {
   if (!payload || typeof payload !== "object") return false;
   const value = payload as Record<string, unknown>;
-  return (
-    typeof value.id === "string" && value.id.length > 0 &&
-    typeof value.session === "string" &&
-    typeof value.tool === "string" &&
-    typeof value.command === "string" &&
-    typeof value.cwd === "string"
-  );
+  if (
+    !(typeof value.id === "string" && value.id.length > 0 &&
+      typeof value.session === "string" &&
+      typeof value.tool === "string" &&
+      typeof value.command === "string" &&
+      typeof value.cwd === "string")
+  ) return false;
+  if (value.risk !== undefined && value.risk !== "low" && value.risk !== "medium" && value.risk !== "high") {
+    return false;
+  }
+  if (value.rule_key !== undefined && typeof value.rule_key !== "string") return false;
+  if (value.risk_reason !== undefined && typeof value.risk_reason !== "string") return false;
+  if (value.repo !== undefined && typeof value.repo !== "string") return false;
+  if (value.branch !== undefined && typeof value.branch !== "string") return false;
+  if (value.diff !== undefined) {
+    const diff = value.diff;
+    if (!diff || typeof diff !== "object") return false;
+    const candidate = diff as Record<string, unknown>;
+    if (typeof candidate.file !== "string" || typeof candidate.added !== "number" ||
+      typeof candidate.removed !== "number" || typeof candidate.truncated !== "boolean" ||
+      !Array.isArray(candidate.lines)) return false;
+    for (const line of candidate.lines) {
+      if (!line || typeof line !== "object") return false;
+      const entry = line as Record<string, unknown>;
+      if (typeof entry.text !== "string" ||
+        (entry.kind !== "ctx" && entry.kind !== "add" && entry.kind !== "del")) return false;
+    }
+  }
+  return true;
 }
 
 function isTerminalData(payload: unknown): payload is { id: string; data: string } {
@@ -208,13 +238,18 @@ export function createTauriBridge(): AgentIslandBridge {
       const unlistenEvents = await listen<unknown>("hook-event", ({ payload }) => {
         if (isHookEvent(payload)) handler(payload);
       });
-      let unlistenApprovals: () => void;
+      let unlistenApprovals: (() => void) | undefined;
+      let unlistenExpired: (() => void) | undefined;
       try {
         unlistenApprovals = await listen<unknown>("hook-approval", ({ payload }) => {
           if (isHookApproval(payload)) handler({ kind: "approval", approval: payload });
         });
+        unlistenExpired = await listen<unknown>("hook-approval-expired", ({ payload }) => {
+          if (isHookEvent(payload)) handler(payload);
+        });
       } catch (error) {
         unlistenEvents();
+        unlistenApprovals?.();
         throw error;
       }
       let listening = true;
@@ -222,7 +257,8 @@ export function createTauriBridge(): AgentIslandBridge {
         if (!listening) return;
         listening = false;
         try {
-          unlistenApprovals();
+          unlistenApprovals?.();
+          unlistenExpired?.();
         } finally {
           unlistenEvents();
         }
@@ -329,6 +365,18 @@ export function createTauriBridge(): AgentIslandBridge {
     },
     async listApprovalAudit(limit) {
       return await invoke<ApprovalAuditEntry[]>("list_approval_audit", { limit: limit ?? null });
+    },
+    async listInbox() {
+      return await invoke<import("./types").InboxItem[]>("list_inbox");
+    },
+    async resolveInboxItem(id) {
+      return await invoke<import("./types").InboxItem[]>("resolve_inbox_item", { id });
+    },
+    async snoozeInboxItem(id, minutes) {
+      return await invoke<import("./types").InboxItem[]>("snooze_inbox_item", { id, minutes });
+    },
+    async listenInboxChanges(handler) {
+      return await listen("inbox-changed", () => handler());
     },
     async terminalOpen(request) {
       return await invoke<string>("terminal_open", {
