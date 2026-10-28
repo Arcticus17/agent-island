@@ -26,6 +26,8 @@ export interface MockBridgeOptions {
   searchHits?: Array<{ agent: string; session: string; role: string; snippet: string; at_ms: number; path: string }>;
   /** 收件箱初始数据（浏览器测试用） */
   inbox?: import("./types").InboxItem[];
+  /** Agent 检测诊断数据 */
+  agentDetections?: import("./types").AgentDetection[];
 }
 
 export interface MockAgentIslandBridge extends AgentIslandBridge {
@@ -71,6 +73,7 @@ export function createMockBridge(
   const approvalRules: Array<{ id: string; tool: string; pattern: string }> = [];
   const approvalAudit: Array<{ at_ms: number; id: string; tool: string; command: string; rule: string; decision: string }> = [];
   let inboxItems = clone(options.inbox ?? []);
+  const agentDetections = clone(options.agentDetections ?? []);
   const inboxHandlers = new Set<() => void>();
 
   const bridge: MockAgentIslandBridge = {
@@ -209,6 +212,12 @@ export function createMockBridge(
     async listenInboxChanges(handler) {
       inboxHandlers.add(handler);
       return () => inboxHandlers.delete(handler);
+    },
+    async detectAgents() {
+      return clone(agentDetections);
+    },
+    async refreshAgentDetection() {
+      return clone(agentDetections);
     },
     async terminalOpen(request) {
       terminalSequence += 1;

@@ -25,16 +25,20 @@ pub(crate) fn matching_processes<'a>(sys: &'a System, keyword: &str) -> Vec<&'a 
 }
 
 pub(crate) fn matches_agent_process(name: &str, args: &[String], keyword: &str) -> bool {
+    let keyword = keyword.trim().to_ascii_lowercase();
+    if keyword.is_empty() {
+        return false;
+    }
     // A Codex desktop app-server owns many tasks, not a single CLI session.
     // Never infer CLI ownership from arbitrary prompt text or a parent shell.
-    if keyword.eq_ignore_ascii_case("codex") {
+    if keyword == "codex" {
         if args.iter().skip(1).any(|arg| arg == "app-server") {
             return false;
         }
         if name.eq_ignore_ascii_case("codex.exe") || name.eq_ignore_ascii_case("codex") {
             return true;
         }
-        if !matches!(name, "node" | "node.exe") {
+        if !matches!(name.to_ascii_lowercase().as_str(), "node" | "node.exe") {
             return false;
         }
         return args.get(1).is_some_and(|entrypoint| {
@@ -42,13 +46,77 @@ pub(crate) fn matches_agent_process(name: &str, args: &[String], keyword: &str) 
             normalized.ends_with("/@openai/codex/bin/codex.js")
         });
     }
-    // Preserve configured keyword matching for other/custom providers.
-    name.contains(keyword) || args.join(" ").contains(keyword)
+
+    // Match the executable itself, never a word that merely appears in a
+    // prompt, a grep pattern, or another process's command line. This was the
+    // source of phantom "opencode"/"hermes" agents when a shell happened to
+    // contain those words in its arguments.
+    if executable_name_matches(name, &keyword) {
+        return true;
+    }
+
+    if matches!(name.to_ascii_lowercase().as_str(), "node" | "node.exe") {
+        return node_entrypoint_matches(args, &keyword);
+    }
+
+    // npm creates .cmd/.ps1 shims; a shim is launched through cmd.exe and the
+    // real program name is the token after /C. Only inspect that token.
+    if matches!(name.to_ascii_lowercase().as_str(), "cmd" | "cmd.exe") {
+        let command = args.get(1).map(String::as_str).unwrap_or("");
+        if command.eq_ignore_ascii_case("/c") {
+            return args
+                .get(2)
+                .map(|arg| executable_name_matches(arg, &keyword))
+                .unwrap_or(false);
+        }
+    }
+
+    false
+}
+
+fn executable_name_matches(name: &str, keyword: &str) -> bool {
+    let candidate = name
+        .trim()
+        .trim_matches('"')
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase();
+    let candidate = candidate
+        .strip_suffix(".exe")
+        .or_else(|| candidate.strip_suffix(".cmd"))
+        .or_else(|| candidate.strip_suffix(".bat"))
+        .or_else(|| candidate.strip_suffix(".ps1"))
+        .unwrap_or(&candidate);
+    candidate == keyword
+}
+
+fn node_entrypoint_matches(args: &[String], keyword: &str) -> bool {
+    let Some(entrypoint) = args.get(1) else {
+        return false;
+    };
+    let normalized = entrypoint
+        .to_ascii_lowercase()
+        .replace('\\', "/")
+        .trim_matches('"')
+        .to_string();
+    let file = normalized.rsplit('/').next().unwrap_or("");
+    let file_stem = file
+        .strip_suffix(".js")
+        .or_else(|| file.strip_suffix(".mjs"))
+        .or_else(|| file.strip_suffix(".cjs"))
+        .unwrap_or(file);
+    // Only the script path is inspected. Prompt text and later arguments are
+    // never evidence that this process is the agent.
+    file_stem == keyword
+        || normalized.contains(&format!("/{keyword}/"))
+        || normalized.contains(&format!("/{keyword}-"))
+        || normalized.contains(&format!("/@{keyword}/"))
 }
 
 #[cfg(test)]
 mod process_classifier_tests {
-    use super::{known_program_paths, matches_agent_process, program_available};
+    use super::{known_program_paths, known_program_paths_from, matches_agent_process, program_available};
 
     fn matches(name: &str, args: &[&str], keyword: &str) -> bool {
         matches_agent_process(
@@ -113,11 +181,66 @@ mod process_classifier_tests {
     }
 
     #[test]
-    fn preserves_custom_keyword_matching() {
+    fn preserves_custom_keyword_matching_by_executable_or_entrypoint() {
         assert!(matches(
+            "custom-agent.exe",
+            &["custom-agent.exe", "--serve"],
+            "custom-agent"
+        ));
+        assert!(matches(
+            "node.exe",
+            &["node.exe", r"C:\tools\custom-agent\bin\index.js"],
+            "custom-agent"
+        ));
+        // The old implementation matched any argument containing the keyword;
+        // that turns prompts and shell commands into phantom agents.
+        assert!(!matches(
             "powershell.exe",
-            &["powershell.exe", "custom-agent-probe"],
-            "custom-agent-probe"
+            &["powershell.exe", "-Command", "custom-agent-probe"],
+            "custom-agent"
+        ));
+        assert!(!matches(
+            "node.exe",
+            &["node.exe", "server.js", "custom-agent"],
+            "custom-agent"
+        ));
+    }
+
+    #[test]
+    fn never_turns_prompt_text_into_open_code_or_hermes_processes() {
+        assert!(!matches(
+            "powershell.exe",
+            &["powershell.exe", "-Command", "Get-Process opencode"],
+            "opencode"
+        ));
+        assert!(!matches(
+            "node.exe",
+            &["node.exe", "server.js", "--prompt", "talk to hermes"],
+            "hermes"
+        ));
+        assert!(matches(
+            "opencode.exe",
+            &["opencode.exe", "--port", "4096"],
+            "opencode"
+        ));
+        assert!(matches(
+            "node.exe",
+            &["node.exe", r"D:\tools\opencode\bin\opencode.js"],
+            "opencode"
+        ));
+    }
+
+    #[test]
+    fn accepts_cmd_shims_only_when_the_command_token_is_the_agent() {
+        assert!(matches(
+            "cmd.exe",
+            &["cmd.exe", "/C", r"D:\node_global\claude.cmd", "--version"],
+            "claude"
+        ));
+        assert!(!matches(
+            "cmd.exe",
+            &["cmd.exe", "/C", "echo", "claude"],
+            "claude"
         ));
     }
 
@@ -133,85 +256,300 @@ mod process_classifier_tests {
                 .unwrap_or(false)
         }));
     }
+
+    #[test]
+    fn finds_the_npm_prefix_from_the_user_npmrc() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-island-npmrc-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".npmrc"), "prefix=D:\\node_global\n").unwrap();
+        let paths = known_program_paths_from("claude", Some(root.clone()), |_| None);
+        assert!(
+            paths.iter().any(|path| {
+                path.to_string_lossy()
+                    .eq_ignore_ascii_case("D:\\node_global\\claude.cmd")
+            }),
+            "custom npm prefix should be a candidate: {paths:?}"
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn includes_scoop_and_volta_prefixes_from_the_environment() {
+        let paths = known_program_paths_from("codex", None, |name| match name {
+            "SCOOP" => Some(std::ffi::OsString::from("C:\\scoop")),
+            "VOLTA_HOME" => Some(std::ffi::OsString::from("C:\\volta")),
+            _ => None,
+        });
+        assert!(paths.iter().any(|path| {
+            path.to_string_lossy()
+                .eq_ignore_ascii_case("C:\\scoop\\shims\\codex.cmd")
+        }));
+        assert!(paths.iter().any(|path| {
+            path.to_string_lossy()
+                .eq_ignore_ascii_case("C:\\volta\\bin\\codex.cmd")
+        }));
+    }
 }
 
 /// CLI 是否仍装在系统上：先查 PATH（Windows 用 `where.exe`），再兜底常见安装目录。
 ///
 /// 只认可执行文件——卸载后残留的日志/会话记录**不算**存在，所以"下载过又卸载"
 /// 的 Agent 不会再出现在岛上。
-pub(crate) fn program_available(program: &str) -> bool {
+static PROGRAM_CACHE: OnceLock<Mutex<HashMap<String, (Instant, Option<PathBuf>)>>> =
+    OnceLock::new();
+
+pub(crate) fn resolve_agent_program(program: &str) -> Option<PathBuf> {
     let program = program.trim();
     if program.is_empty() {
-        return false;
+        return None;
     }
-    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, bool)>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = PROGRAM_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let key = program.to_lowercase();
     if let Ok(guard) = cache.lock() {
         if let Some((checked_at, value)) = guard.get(&key) {
             if checked_at.elapsed().as_secs() < 60 {
-                return *value;
+                return value.clone();
             }
         }
     }
-    let value = resolve_program(program);
+    let value = resolve_program_path(program);
     if let Ok(mut guard) = cache.lock() {
-        guard.insert(key, (Instant::now(), value));
+        guard.insert(key, (Instant::now(), value.clone()));
     }
     value
 }
 
-#[cfg(target_os = "windows")]
-fn resolve_program(program: &str) -> bool {
-    // 显式路径与 PATH 都交给 where.exe 之外的同一套解析；`where.exe` 只认 PATH，所以再兜一次常见安装目录。
-    if matches!(
-        crate::commands::restart_program_available(program, None),
-        Ok(true)
-    ) {
-        return true;
+pub(crate) fn program_available(program: &str) -> bool {
+    resolve_agent_program(program).is_some()
+}
+
+/// User-triggered "re-detect" must not wait for the 60s cache.
+pub(crate) fn clear_program_cache() {
+    if let Some(cache) = PROGRAM_CACHE.get() {
+        if let Ok(mut guard) = cache.lock() {
+            guard.clear();
+        }
     }
-    known_program_paths(program).iter().any(|path| path.is_file())
+}
+
+fn resolve_program_path(program: &str) -> Option<PathBuf> {
+    // Explicit paths are returned as-is, matching restart_program_available.
+    if program.contains(['\\', '/']) || std::path::Path::new(program).is_absolute() {
+        let path = PathBuf::from(program);
+        return path.is_file().then_some(path);
+    }
+    if let Some(path) = known_program_paths(program)
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+    {
+        return Some(path);
+    }
+    where_program_path(program)
+}
+
+#[cfg(target_os = "windows")]
+fn where_program_path(program: &str) -> Option<PathBuf> {
+    let output = crate::commands::quiet_command("where.exe")
+        .arg(program)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
 }
 
 #[cfg(not(target_os = "windows"))]
-fn resolve_program(program: &str) -> bool {
-    if known_program_paths(program).iter().any(|path| path.is_file()) {
-        return true;
-    }
-    std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths)
-                .any(|directory| directory.join(program).is_file())
-        })
-        .unwrap_or(false)
+fn where_program_path(_program: &str) -> Option<PathBuf> {
+    None
 }
 
 /// `where.exe` 只看 PATH；这里补上各包管理器/安装器的常见落点。
+///
+/// 关键点：npm 的全局 prefix 可以由 `~/.npmrc` 改成任意目录（本机就是
+/// `D:\node_global`）。只查 `%APPDATA%\npm` 会在自定义 prefix 的机器上
+/// 把已安装的 Claude/Codex 误判为"不存在"，所以这里显式读取 `.npmrc`
+/// 的 `prefix=`，并覆盖 Scoop/Chocolatey/Volta/Bun/pnpm 等常见位置。
 fn known_program_paths(program: &str) -> Vec<PathBuf> {
+    known_program_paths_from(program, home_dir(), |name| std::env::var_os(name))
+}
+
+fn known_program_paths_from<F>(
+    program: &str,
+    home: Option<PathBuf>,
+    env: F,
+) -> Vec<PathBuf>
+where
+    F: Fn(&str) -> Option<std::ffi::OsString>,
+{
+    let program = program.trim();
+    if program.is_empty() {
+        return Vec::new();
+    }
     let mut bases: Vec<PathBuf> = Vec::new();
-    if let Some(home) = home_dir() {
+    if let Some(home) = home.as_deref() {
         for relative in [
             ".local/bin",
             ".cargo/bin",
             ".bun/bin",
             ".opencode/bin",
             ".claude/local",
+            ".npm-global/bin",
+            ".hermes/bin",
+            ".volta/bin",
+            ".local/share/pnpm",
+            "scoop/shims",
         ] {
             bases.push(home.join(relative));
         }
-    }
-    for variable in ["APPDATA", "LOCALAPPDATA"] {
-        if let Some(base) = std::env::var_os(variable) {
-            bases.push(PathBuf::from(base).join("npm"));
+        if let Some(prefix) = npmrc_prefix(home) {
+            bases.push(prefix);
         }
     }
+    for (variable, subdir) in [
+        ("NPM_CONFIG_PREFIX", ""),
+        ("npm_config_prefix", ""),
+        ("PNPM_HOME", ""),
+        ("SCOOP", "shims"),
+        ("SCOOP_GLOBAL", "shims"),
+        ("ChocolateyInstall", "bin"),
+        ("VOLTA_HOME", "bin"),
+        ("BUN_INSTALL", "bin"),
+    ] {
+        if let Some(value) = env(variable) {
+            if !value.is_empty() {
+                let base = PathBuf::from(value);
+                bases.push(if subdir.is_empty() {
+                    base
+                } else {
+                    base.join(subdir)
+                });
+            }
+        }
+    }
+    for variable in ["APPDATA", "LOCALAPPDATA"] {
+        if let Some(base) = env(variable) {
+            if !base.is_empty() {
+                bases.push(PathBuf::from(base).join("npm"));
+            }
+        }
+    }
+    for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(base) = env(variable) {
+            if !base.is_empty() {
+                bases.push(PathBuf::from(base).join("nodejs"));
+            }
+        }
+    }
+    if let Some(paths) = env("PATH") {
+        bases.extend(std::env::split_paths(&paths));
+    }
+
     let mut candidates = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    // On Windows prefer a real launcher over npm's extensionless POSIX shim;
+    // CreateProcess cannot run the extensionless script.
+    let extensions: &[&str] = if cfg!(target_os = "windows") {
+        &[".exe", ".cmd", ".bat", ".ps1", ""]
+    } else {
+        &[""]
+    };
     for base in bases {
-        for extension in ["", ".exe", ".cmd", ".bat", ".ps1"] {
-            candidates.push(base.join(format!("{program}{extension}")));
+        for directory in [base.clone(), base.join("node_modules").join(".bin")] {
+            for extension in extensions {
+                let candidate = directory.join(format!("{program}{extension}"));
+                let key = candidate.to_string_lossy().to_lowercase();
+                if seen.insert(key) {
+                    candidates.push(candidate);
+                }
+            }
         }
     }
     candidates
+}
+
+/// 读取 npm 用户配置里的 `prefix=`（本机是 `D:\node_global`）。
+fn npmrc_prefix(home: &Path) -> Option<PathBuf> {
+    let text = fs::read_to_string(home.join(".npmrc")).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        let Some(value) = line.strip_prefix("prefix=") else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        if value.is_empty() {
+            return None;
+        }
+        let path = PathBuf::from(value);
+        return Some(if path.is_absolute() { path } else { home.join(path) });
+    }
+    None
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct AgentDetection {
+    pub id: String,
+    pub name: String,
+    pub keyword: String,
+    pub installed: bool,
+    pub running: bool,
+    pub process_count: usize,
+    /// 实际解析到的可执行文件；不存在时为 null。
+    pub path: Option<String>,
+    /// process | path | missing
+    pub source: String,
+}
+
+/// Diagnostics: explain exactly why each configured agent is shown or hidden.
+#[tauri::command]
+pub(crate) fn detect_agents(state: tauri::State<AppState>) -> Vec<AgentDetection> {
+    let mut sys = state.sys.lock_recover();
+    refresh_agent_processes(&mut sys);
+    agent_defs()
+        .into_iter()
+        .map(|def| {
+            let processes = matching_processes(&sys, &def.keyword);
+            let path = resolve_agent_program(&def.keyword);
+            let running = !processes.is_empty();
+            let installed = path.is_some() || running;
+            let source = if running {
+                "process"
+            } else if path.is_some() {
+                "path"
+            } else {
+                "missing"
+            };
+            AgentDetection {
+                id: if def.log_kind.is_empty() {
+                    def.keyword.clone()
+                } else {
+                    def.log_kind.clone()
+                },
+                name: def.name.clone(),
+                keyword: def.keyword.clone(),
+                installed,
+                running,
+                process_count: processes.len(),
+                path: path.map(|value| value.to_string_lossy().into_owned()),
+                source: source.to_string(),
+            }
+        })
+        .collect()
+}
+
+/// Same as `detect_agents`, but bypasses the 60s program cache.
+#[tauri::command]
+pub(crate) fn refresh_agent_detection(state: tauri::State<AppState>) -> Vec<AgentDetection> {
+    clear_program_cache();
+    detect_agents(state)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -4,7 +4,7 @@ import { page } from "vitest/browser";
 
 import App from "../../src/app/App.svelte";
 import { createMockBridge, type MockAgentIslandBridge } from "../../src/bridge/mock";
-import type { AgentViewSnapshot, HookApproval, InboxItem } from "../../src/bridge/types";
+import type { AgentViewSnapshot, HookApproval, InboxItem, AgentDetection } from "../../src/bridge/types";
 import { resetUpdateCache } from "../../src/agent/updates";
 
 const mounted: Array<ReturnType<typeof mount>> = [];
@@ -276,6 +276,49 @@ describe("approval 2.0", () => {
     const ids = bridge.commands().map((command) => command.name === "respond_hook_approval" ? command.id : "");
     expect(ids.sort()).toEqual(["low-1", "low-2"]);
     expect(target.querySelector('[data-approval-id="high-1"]')).not.toBeNull();
+  });
+
+  it("shows exactly which configured agents were found on this machine", async () => {
+    const detections: AgentDetection[] = [
+      {
+        id: "claude",
+        name: "Claude Code",
+        keyword: "claude",
+        installed: true,
+        running: true,
+        process_count: 1,
+        path: "D:\\node_global\\claude.cmd",
+        source: "process",
+      },
+      {
+        id: "hermes",
+        name: "Hermes",
+        keyword: "hermes",
+        installed: false,
+        running: false,
+        process_count: 0,
+        path: null,
+        source: "missing",
+      },
+    ];
+    const bridge = createMockBridge([snapshot()], { agentDetections: detections });
+    const target = await render(bridge, {
+      diagnosticsBridge: {
+        getDiagnostics: async () => ({ issues: [], sources: [] }),
+        exportDiagnostics: async () => undefined,
+      },
+    });
+    const drawer = target.querySelector<HTMLDetailsElement>('[data-testid="diagnostics-drawer"]')!;
+    drawer.open = true;
+    drawer.dispatchEvent(new Event("toggle"));
+    await waitFor(() => target.querySelectorAll('[data-testid="agent-detection-row"]').length === 2);
+
+    const claude = target.querySelector('[data-testid="agent-detection-row"][data-agent-id="claude"]')!;
+    const hermes = target.querySelector('[data-testid="agent-detection-row"][data-agent-id="hermes"]')!;
+    expect(claude.getAttribute("data-installed")).toBe("true");
+    expect(claude.textContent).toContain("D:\\node_global\\claude.cmd");
+    expect(hermes.getAttribute("data-installed")).toBe("false");
+    expect(hermes.textContent).toContain("未找到可执行文件");
   });
 });
 

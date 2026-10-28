@@ -5,6 +5,7 @@
 
 | 日期 | 主题 | 标题 |
 | --- | --- | --- |
+| 2026-10-28 | [agent-detection-exactness](2026-10-28-agent-detection-exactness.md) | Agent 检测与系统一致性：只显示本机真实存在的 Agent |
 | 2026-10-28 | [agent-update-guard](2026-10-28-agent-update-guard.md) | Agent 更新保护：运行中拒绝 + 更新后校验 + 失败回滚 |
 | 2026-10-28 | [inbox-and-approval-2](2026-10-28-inbox-and-approval-2.md) | 收件箱 + 审批 2.0（v1.10） |
 | 2026-10-27 | [diagnostics-noise-and-hooked-identity](2026-10-27-diagnostics-noise-and-hooked-identity.md) | 诊断噪音与 Agent 自报身份（2026-10-27） |

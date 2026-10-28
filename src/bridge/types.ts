@@ -332,6 +332,18 @@ export interface InboxItem {
   approval_id: string | null;
 }
 
+export interface AgentDetection {
+  id: string;
+  name: string;
+  keyword: string;
+  installed: boolean;
+  running: boolean;
+  process_count: number;
+  /** 实际解析到的可执行文件；未安装时为 null */
+  path: string | null;
+  source: "process" | "path" | "missing";
+}
+
 export type AgentCommand =
   | { name: "reload_agent_defs" }
   | { name: "stop_agent"; agentName: string }
@@ -470,6 +482,10 @@ export interface AgentIslandBridge {
   resolveInboxItem?(id: string): Promise<InboxItem[]>;
   snoozeInboxItem?(id: string, minutes: number): Promise<InboxItem[]>;
   listenInboxChanges?(handler: () => void): Promise<() => void>;
+  /** 诊断：说明每个配置的 Agent 为什么显示/隐藏，以及解析到的可执行文件。 */
+  detectAgents?(): Promise<AgentDetection[]>;
+  /** 同上，但绕过 60 秒可执行文件缓存。 */
+  refreshAgentDetection?(): Promise<AgentDetection[]>;
 }
 
 export interface AppUpdateInfo {

@@ -547,6 +547,8 @@ pub fn run() {
             list_inbox,
             resolve_inbox_item,
             snooze_inbox_item,
+            detect_agents,
+            refresh_agent_detection,
             save_app_settings,
             get_autostart,
             set_autostart,

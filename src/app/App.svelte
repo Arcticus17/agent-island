@@ -29,7 +29,7 @@
   import type { ApprovalItem, CommandFailure, CommandUiState, NotificationItem } from "../components/events/types";
   import { tauriBridge } from "../bridge/tauri";
   import { tauriDiagnosticsBridge, type DiagnosticsBridge } from "../bridge/diagnostics";
-  import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent, InboxItem, SessionView, SourceHealth } from "../bridge/types";
+  import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent, InboxItem, SessionView, SourceHealth, AgentDetection } from "../bridge/types";
   import { loadLayout, saveLayout } from "../layout/persistence";
   import type { CardId, CardPlacement, LayoutConfigV1 } from "../layout/schema";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
@@ -159,6 +159,10 @@
   /** 诊断抽屉是否展开：只有展开时才每次轮询都去取诊断 */
   let diagnosticsOpen = $state(false);
   let diagnosticsLoadedOnce = false;
+  /** Agent 检测诊断：每个配置的 Agent 是否真的能在本机找到。 */
+  let agentDetections = $state<AgentDetection[]>([]);
+  let detectionStatus = $state<"idle" | "loading" | "ready" | "failed">("idle");
+  let detectionLoadedOnce = false;
   /** 首次引导：看过一次就不再出现，命令面板里可以重看 */
   let showWelcome = $state(shouldShowOnboarding((key) => localStorage.getItem(key)));
   /** 关于/更新：只提示新版本，自动安装留给发布链路 */
@@ -384,6 +388,27 @@
     updateAwaitingExit = false;
     untrack(() => { void finishAgentUpdate(); });
   });
+
+  async function loadAgentDetections(force = false): Promise<void> {
+    if (!bridge.detectAgents && !bridge.refreshAgentDetection) return;
+    if (detectionStatus === "loading") return;
+    if (!force && detectionLoadedOnce && detectionStatus === "ready") return;
+    detectionStatus = "loading";
+    try {
+      const next = force && bridge.refreshAgentDetection
+        ? await bridge.refreshAgentDetection()
+        : bridge.detectAgents
+          ? await bridge.detectAgents()
+          : [];
+      agentDetections = next;
+      detectionStatus = "ready";
+      detectionLoadedOnce = true;
+    } catch {
+      detectionStatus = "failed";
+      agentDetections = [];
+    }
+    void syncWindowSize();
+  }
 
   async function loadDiagnostics(): Promise<void> {
     if (disposed) return;
@@ -1666,7 +1691,7 @@
             ><span class={`mini-dot status-${agent.display_status}`} aria-hidden="true"></span><span class="sensitive">{agent.name}</span></button>
           {/each}
         </nav>
-        <details class="diagnostics-drawer" data-testid="diagnostics-drawer" ontoggle={(event) => { diagnosticsOpen = event.currentTarget.open; if (diagnosticsOpen) void loadDiagnostics(); }}>
+        <details class="diagnostics-drawer" data-testid="diagnostics-drawer" ontoggle={(event) => { diagnosticsOpen = event.currentTarget.open; if (diagnosticsOpen) { void loadDiagnostics(); void loadAgentDetections(); } }}>
           <summary>
             <span>诊断信息</span>
             {#if agentDiagnosticIssues.length > 0}<span class="drawer-badge" data-testid="diagnostics-count">{agentDiagnosticIssues.length} 项提示</span>{:else}<span class="drawer-muted">无异常</span>{/if}
@@ -1678,6 +1703,34 @@
             exportDiagnostics={(destination) => diagnosticsBridge.exportDiagnostics(destination)}
             onLayoutChange={() => void syncWindowSize()}
           />
+          {#if bridge.detectAgents || bridge.refreshAgentDetection}
+            <div class="agent-detection" data-testid="agent-detection">
+              <div class="detection-head">
+                <span>Agent 检测 <small>（只显示本机找得到的）</small></span>
+                <button type="button" data-testid="agent-detection-refresh" onclick={() => void loadAgentDetections(true)}>重新检测</button>
+              </div>
+              {#if detectionStatus === "failed"}
+                <p class="detection-empty" role="alert">检测失败，请稍后重试</p>
+              {:else if agentDetections.length === 0}
+                <p class="detection-empty">{detectionStatus === "loading" ? "正在检测…" : "暂无检测结果"}</p>
+              {:else}
+                {#each agentDetections as detection (detection.id)}
+                  <div
+                    class="detection-row"
+                    data-testid="agent-detection-row"
+                    data-agent-id={detection.id}
+                    data-installed={detection.installed}
+                    data-running={detection.running}
+                  >
+                    <span class="detection-dot" class:on={detection.installed} aria-hidden="true"></span>
+                    <strong>{detection.name}</strong>
+                    <span class="detection-path sensitive" title={detection.path ?? ""}>{detection.path ?? "未找到可执行文件"}</span>
+                    <span class="detection-tag">{detection.running ? "运行中" : detection.installed ? "已安装" : "未检测到"}</span>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          {/if}
         </details>
         <section class="about-row" data-testid="about-row" aria-label="版本与更新">
           <span>版本 <strong data-testid="app-version">{appVersion ? `v${appVersion}` : "未知"}</strong></span>
@@ -1948,6 +2001,17 @@
   .diagnostics-drawer[open] > summary::after { content: "⌃"; }
   .drawer-badge { padding: 1px 7px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--island-status-waiting) 45%, transparent); background: color-mix(in srgb, var(--island-status-waiting) 16%, transparent); color: var(--island-status-waiting); font-size: 10px; font-weight: 700; }
   .drawer-muted { color: var(--island-text-tertiary); font-size: 10px; }
+  .agent-detection { display: grid; gap: 5px; margin: 2px 12px 10px; padding: 8px; border: 1px solid var(--island-border-subtle); border-radius: 9px; background: var(--island-surface-card); }
+  .detection-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--island-text-secondary); font-size: 10px; }
+  .detection-head small { color: var(--island-text-tertiary); font-size: 9px; }
+  .detection-head button { min-height: 22px; padding: 1px 7px; border: 1px solid var(--island-border-subtle); border-radius: 6px; color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 9px; cursor: pointer; }
+  .detection-row { display: grid; grid-template-columns: 7px 74px minmax(0, 1fr) auto; align-items: center; gap: 6px; min-width: 0; color: var(--island-text-secondary); font-size: 9.5px; }
+  .detection-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--island-text-primary); font-weight: 600; }
+  .detection-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--island-status-stopped); }
+  .detection-dot.on { background: var(--island-status-done); box-shadow: 0 0 6px color-mix(in srgb, var(--island-status-done) 55%, transparent); }
+  .detection-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--island-text-tertiary); font-family: ui-monospace, "Cascadia Code", monospace; font-size: 9px; }
+  .detection-tag { padding: 1px 5px; border-radius: 4px; color: var(--island-text-tertiary); background: var(--island-control-surface); font-size: 8.5px; white-space: nowrap; }
+  .detection-empty { margin: 0; color: var(--island-text-tertiary); font-size: 9.5px; }
   .session-picker { display: grid; gap: 5px; margin-bottom: 10px; color: var(--island-text-secondary); font-size: 11px; }
   .session-picker select { width: 100%; min-width: 0; padding: 8px; border-radius: 8px; color-scheme: dark; color: var(--island-text-primary); background: var(--island-control-surface); border: 1px solid var(--island-border-subtle); }
   .agent-island, .island-loading {

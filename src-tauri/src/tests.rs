@@ -747,21 +747,25 @@ fn acquisition_process_launched_after_system_has_matching_command_and_cwd() {
         .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(250));
     refresh_agent_processes(&mut system);
-    let discovered = matching_processes(&system, "agent-island-refresh-probe")
-        .into_iter()
-        .find(|process| process.pid().as_u32() == child.id());
-    let cwd = discovered
-        .and_then(|process| process.cwd())
-        .map(Path::to_path_buf);
-    let exe = discovered
-        .and_then(|process| process.exe())
-        .map(Path::to_path_buf);
+    // Look the child up by pid. Using a keyword from the command line would
+    // depend on the very prompt-text matching that must never decide which
+    // agent a process belongs to.
+    let discovered = system
+        .process(sysinfo::Pid::from_u32(child.id()))
+        .map(|process| {
+            (
+                process.cwd().map(Path::to_path_buf),
+                process.exe().map(Path::to_path_buf),
+            )
+        });
+    let cwd = discovered.as_ref().and_then(|(cwd, _)| cwd.clone());
+    let exe = discovered.as_ref().and_then(|(_, exe)| exe.clone());
     let _ = child.kill();
     let _ = child.wait();
     fs::remove_dir_all(&root).unwrap();
     assert!(
         discovered.is_some(),
-        "new process command line missing from production refresh"
+        "new process missing from production refresh"
     );
     assert_eq!(cwd, Some(root));
     assert!(exe.is_some());
