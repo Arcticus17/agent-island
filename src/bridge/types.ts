@@ -344,6 +344,16 @@ export interface AgentDetection {
   source: "process" | "path" | "missing";
 }
 
+export interface AgentCandidate {
+  name: string;
+  program: string;
+  description: string;
+  installed: boolean;
+  configured: boolean;
+  path: string | null;
+  keyword: string;
+}
+
 export type AgentCommand =
   | { name: "reload_agent_defs" }
   | { name: "stop_agent"; agentName: string }
@@ -486,6 +496,10 @@ export interface AgentIslandBridge {
   detectAgents?(): Promise<AgentDetection[]>;
   /** 同上，但绕过 60 秒可执行文件缓存。 */
   refreshAgentDetection?(): Promise<AgentDetection[]>;
+  /** “+” 面板：配置内 Agent + 本机找到的候选 CLI。 */
+  detectAgentCandidates?(): Promise<AgentCandidate[]>;
+  /** 把本机检测到的候选写进 ~/.agent-island/agents.json。 */
+  addAgentDefinition?(name: string, program: string): Promise<void>;
 }
 
 export interface AppUpdateInfo {

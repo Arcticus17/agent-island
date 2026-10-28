@@ -1,4 +1,5 @@
 mod adapters;
+mod agent_catalog;
 mod agent_tasks;
 mod approval_review;
 mod approval_rules;
@@ -200,10 +201,31 @@ struct AgentDef {
     keyword: String,
     #[serde(default)]
     log_kind: String,
+    /// 实际可执行文件/命令；留空时退回 keyword（兼容旧 agents.json）。
+    #[serde(default)]
+    program: String,
     #[serde(default)]
     resume_args: Vec<String>,
     #[serde(default)]
     send_args: Vec<String>,
+}
+
+impl AgentDef {
+    fn program(&self) -> &str {
+        let program = self.program.trim();
+        if program.is_empty() {
+            self.keyword.as_str()
+        } else {
+            program
+        }
+    }
+}
+
+fn agents_path() -> PathBuf {
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".agent-island")
+        .join("agents.json")
 }
 
 static AGENT_DEFS: OnceLock<Mutex<Option<(Instant, Vec<AgentDef>)>>> = OnceLock::new();
@@ -214,6 +236,7 @@ fn default_agent_defs() -> Vec<AgentDef> {
             name: "Claude Code".into(),
             keyword: "claude".into(),
             log_kind: "claude".into(),
+            program: String::new(),
             resume_args: vec![
                 "{exe}".into(),
                 "--resume".into(),
@@ -232,6 +255,7 @@ fn default_agent_defs() -> Vec<AgentDef> {
             name: "Codex CLI".into(),
             keyword: "codex".into(),
             log_kind: "codex".into(),
+            program: String::new(),
             resume_args: vec![
                 "{exe}".into(),
                 "exec".into(),
@@ -250,6 +274,7 @@ fn default_agent_defs() -> Vec<AgentDef> {
             name: "OpenCode".into(),
             keyword: "opencode".into(),
             log_kind: "opencode".into(),
+            program: String::new(),
             resume_args: vec![
                 "{exe}".into(),
                 "run".into(),
@@ -268,6 +293,7 @@ fn default_agent_defs() -> Vec<AgentDef> {
             name: "Hermes".into(),
             keyword: "hermes".into(),
             log_kind: "hermes".into(),
+            program: String::new(),
             resume_args: vec!["{exe}".into(), "--resume".into(), "{session}".into()],
             send_args: vec![
                 "{exe}".into(),
@@ -281,10 +307,7 @@ fn default_agent_defs() -> Vec<AgentDef> {
 }
 
 fn load_agent_defs() -> Vec<AgentDef> {
-    let path = home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".agent-island")
-        .join("agents.json");
+    let path = agents_path();
     if let Ok(text) = fs::read_to_string(&path) {
         if let Ok(defs) = serde_json::from_str::<Vec<AgentDef>>(&text) {
             if !defs.is_empty() {
@@ -293,6 +316,24 @@ fn load_agent_defs() -> Vec<AgentDef> {
         }
     }
     default_agent_defs()
+}
+
+fn save_agent_defs(defs: &[AgentDef]) -> Result<(), String> {
+    let path = agents_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建 Agent 配置目录失败：{error}"))?;
+    }
+    if path.is_file() {
+        let backup = path.with_extension("json.bak");
+        if !backup.is_file() {
+            fs::copy(&path, &backup).map_err(|error| format!("备份 Agent 配置失败：{error}"))?;
+        }
+    }
+    let body = serde_json::to_string_pretty(defs).map_err(|error| error.to_string())?;
+    let temp = path.with_extension("json.tmp");
+    fs::write(&temp, body).map_err(|error| format!("写入 Agent 配置失败：{error}"))?;
+    fs::rename(&temp, &path).map_err(|error| format!("替换 Agent 配置失败：{error}"))?;
+    Ok(())
 }
 
 fn agent_defs() -> Vec<AgentDef> {
@@ -549,6 +590,8 @@ pub fn run() {
             snooze_inbox_item,
             detect_agents,
             refresh_agent_detection,
+            detect_agent_candidates,
+            add_agent_definition,
             save_app_settings,
             get_autostart,
             set_autostart,

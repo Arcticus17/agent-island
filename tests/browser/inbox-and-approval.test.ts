@@ -4,7 +4,7 @@ import { page } from "vitest/browser";
 
 import App from "../../src/app/App.svelte";
 import { createMockBridge, type MockAgentIslandBridge } from "../../src/bridge/mock";
-import type { AgentViewSnapshot, HookApproval, InboxItem, AgentDetection } from "../../src/bridge/types";
+import type { AgentViewSnapshot, HookApproval, InboxItem, AgentDetection, AgentCandidate } from "../../src/bridge/types";
 import { resetUpdateCache } from "../../src/agent/updates";
 
 const mounted: Array<ReturnType<typeof mount>> = [];
@@ -319,6 +319,64 @@ describe("approval 2.0", () => {
     expect(claude.textContent).toContain("D:\\node_global\\claude.cmd");
     expect(hermes.getAttribute("data-installed")).toBe("false");
     expect(hermes.textContent).toContain("未找到可执行文件");
+  });
+});
+
+describe("agent add panel", () => {
+  const candidates: AgentCandidate[] = [
+    {
+      name: "Claude Code",
+      program: "claude",
+      description: "已在岛内配置",
+      installed: true,
+      configured: true,
+      path: "D:\\node_global\\claude.cmd",
+      keyword: "claude",
+    },
+    {
+      name: "Gemini CLI",
+      program: "gemini",
+      description: "Google Gemini CLI",
+      installed: true,
+      configured: false,
+      path: "D:\\tools\\gemini.cmd",
+      keyword: "gemini",
+    },
+  ];
+
+  it("opens with + and adds a locally detected agent", async () => {
+    const bridge = createMockBridge(
+      Array.from({ length: 6 }, () => snapshot()),
+      { agentCandidates: candidates },
+    );
+    const target = await render(bridge);
+    target.querySelector<HTMLButtonElement>('[data-testid="agent-add"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="agent-add-panel"]') !== null);
+    expect(target.querySelectorAll('[data-testid="agent-candidate"]').length).toBe(2);
+    expect(target.querySelector('[data-configured="false"]')?.textContent).toContain("Gemini CLI");
+
+    target.querySelector<HTMLButtonElement>('[data-configured="false"] [data-testid="agent-candidate-add"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="agent-add-panel"]') === null);
+  });
+
+  it("supports adding an agent manually when detection has nothing new", async () => {
+    const bridge = createMockBridge(
+      Array.from({ length: 6 }, () => snapshot()),
+      { agentCandidates: candidates.filter((candidate) => candidate.configured) },
+    );
+    const target = await render(bridge);
+    target.querySelector<HTMLButtonElement>('[data-testid="agent-add"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="agent-add-panel"]') !== null);
+
+    const name = target.querySelector<HTMLInputElement>('[data-testid="agent-manual-name"]')!;
+    const program = target.querySelector<HTMLInputElement>('[data-testid="agent-manual-program"]')!;
+    name.value = "My Agent";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    program.value = "my-agent";
+    program.dispatchEvent(new Event("input", { bubbles: true }));
+    target.querySelector<HTMLButtonElement>('[data-testid="agent-manual-add"]')!.click();
+
+    await waitFor(() => target.querySelector('[data-testid="agent-add-panel"]') === null);
   });
 });
 

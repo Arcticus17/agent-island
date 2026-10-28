@@ -28,6 +28,8 @@ export interface MockBridgeOptions {
   inbox?: import("./types").InboxItem[];
   /** Agent 检测诊断数据 */
   agentDetections?: import("./types").AgentDetection[];
+  /** “+” 面板候选 */
+  agentCandidates?: import("./types").AgentCandidate[];
 }
 
 export interface MockAgentIslandBridge extends AgentIslandBridge {
@@ -74,6 +76,7 @@ export function createMockBridge(
   const approvalAudit: Array<{ at_ms: number; id: string; tool: string; command: string; rule: string; decision: string }> = [];
   let inboxItems = clone(options.inbox ?? []);
   const agentDetections = clone(options.agentDetections ?? []);
+  const agentCandidates = clone(options.agentCandidates ?? []);
   const inboxHandlers = new Set<() => void>();
 
   const bridge: MockAgentIslandBridge = {
@@ -218,6 +221,24 @@ export function createMockBridge(
     },
     async refreshAgentDetection() {
       return clone(agentDetections);
+    },
+    async detectAgentCandidates() {
+      return clone(agentCandidates);
+    },
+    async addAgentDefinition(name, program) {
+      const existing = agentCandidates.find((candidate) => candidate.name === name);
+      if (existing) existing.configured = true;
+      else {
+        agentCandidates.push({
+          name,
+          program,
+          description: "自定义",
+          installed: true,
+          configured: true,
+          path: program,
+          keyword: program,
+        });
+      }
     },
     async terminalOpen(request) {
       terminalSequence += 1;

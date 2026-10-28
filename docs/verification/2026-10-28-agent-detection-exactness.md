@@ -74,7 +74,7 @@ Hermes        未找到可执行文件                           未检测到
 | 层 | 结果 |
 | --- | --- |
 | Rust | **226 passed**：新增/更新 9 条 process_scan 用例（提示词不匹配、opencode/hermes 幽灵、cmd shim、`.npmrc` prefix、Scoop/Volta） |
-| 浏览器 | **134 passed**：新增「Agent 检测只显示本机找到的」用例 |
+| 浏览器 | **136 passed**：新增「Agent 检测只显示本机找到的」与「+ 检测/添加面板」2 条用例 |
 | 视觉 | 24 passed |
 | `svelte-check` | 0 errors / 0 warnings |
 
@@ -100,7 +100,23 @@ Hermes        未找到可执行文件                           未检测到
 
 截图：`mac-island-analysis/agent-detection-live.png`。
 
-## 四、边界
+## 四、Agent 条上的「+」：检测本机 + 自己添加
+
+Agent 条末尾新增虚线「+」按钮（`data-testid="agent-add"`），点开：
+
+- **检测本机**：`detect_agent_candidates` 返回配置内 Agent + 内置候选目录里**实际解析到可执行文件**的 Agent；未安装的目录项不会出现。
+- 已配置的显示「已添加」，未配置的显示「添加」；点添加会写入 `~/.agent-island/agents.json`（旧文件先备份为 `agents.json.bak`，临时文件 + rename 原子写），随后 `reload_agent_defs` 并刷新快照。
+- **如没有想要的，可自己添加**：名称 + 命令/完整路径；后端会先 `resolve_agent_program`，找不到就拒绝（`program_not_found`），不会把未安装的东西加进岛。
+- 自定义 Agent 没有日志适配器，只有进程/状态；`resume_args`/`send_args` 留空，避免凭空构造命令。
+- 候选目录当前包含 Gemini CLI、Aider、Cursor Agent、GitHub Copilot CLI、Qwen Code、Crush、Goose、Amp、Droid、Kilo Code、Auggie、Plandex、OpenHands、Cline、Warp Agent；只有本机装了的才会出现。
+
+真机：
+
+- 打开面板显示 Claude Code / Codex CLI / OpenCode 三条「已添加」，与诊断检测一致；
+- 用 `add_agent_definition("Notepad Test", "notepad")` 验证：写入成功、检测出现 `C:\WINDOWS\system32\notepad.exe`；删除 `agents.json` + `reload_agent_defs` 后恢复为 3 个。
+- 截图：`mac-island-analysis/agent-add-panel-live.png`。
+
+## 五、边界
 
 1. **只检测配置里的 Agent**：内置 Claude/Codex/OpenCode/Hermes + `~/.agent-island/agents.json` 自定义项；不在配置里的 CLI 不会显示（这是产品范围，不是漏检）。
 2. **桌面 App 不等于 CLI**：如果某个 Agent 只有桌面 App、没有 CLI shim，且不在已知路径里，仍可能检测不到；可在 `agents.json` 里补 `keyword`/路径，或把它加入 `known_program_paths`。

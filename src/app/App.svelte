@@ -29,7 +29,7 @@
   import type { ApprovalItem, CommandFailure, CommandUiState, NotificationItem } from "../components/events/types";
   import { tauriBridge } from "../bridge/tauri";
   import { tauriDiagnosticsBridge, type DiagnosticsBridge } from "../bridge/diagnostics";
-  import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent, InboxItem, SessionView, SourceHealth, AgentDetection } from "../bridge/types";
+  import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent, InboxItem, SessionView, SourceHealth, AgentDetection, AgentCandidate } from "../bridge/types";
   import { loadLayout, saveLayout } from "../layout/persistence";
   import type { CardId, CardPlacement, LayoutConfigV1 } from "../layout/schema";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
@@ -163,6 +163,14 @@
   let agentDetections = $state<AgentDetection[]>([]);
   let detectionStatus = $state<"idle" | "loading" | "ready" | "failed">("idle");
   let detectionLoadedOnce = false;
+  /** “+” 面板：检测本机并添加 Agent */
+  let addAgentOpen = $state(false);
+  let addAgentCandidates = $state<AgentCandidate[]>([]);
+  let addAgentStatus = $state<"idle" | "loading" | "ready" | "failed">("idle");
+  let addAgentName = $state("");
+  let addAgentProgram = $state("");
+  let addAgentError = $state<string | null>(null);
+  let addAgentSaving = $state(false);
   /** 首次引导：看过一次就不再出现，命令面板里可以重看 */
   let showWelcome = $state(shouldShowOnboarding((key) => localStorage.getItem(key)));
   /** 关于/更新：只提示新版本，自动安装留给发布链路 */
@@ -388,6 +396,87 @@
     updateAwaitingExit = false;
     untrack(() => { void finishAgentUpdate(); });
   });
+
+  function addAgentErrorMessage(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("program_not_found")) return "没找到这个命令，请确认已安装，或填写完整路径。";
+    if (message.includes("agent_already_exists")) return "这个 Agent 已经在列表里了。";
+    if (message.includes("agent_name_empty")) return "请填写 Agent 名称。";
+    if (message.includes("program_empty")) return "请填写命令或可执行文件路径。";
+    if (message.includes("program_contains_unsafe_characters")) return "路径里包含不支持的字符。";
+    return `添加失败：${message}`;
+  }
+
+  async function toggleAddAgent(): Promise<void> {
+    addAgentOpen = !addAgentOpen;
+    addAgentError = null;
+    if (addAgentOpen) {
+      await loadAddAgentCandidates();
+    }
+    void syncWindowSize();
+  }
+
+  async function loadAddAgentCandidates(): Promise<void> {
+    if (!bridge.detectAgentCandidates) {
+      addAgentStatus = "failed";
+      addAgentError = "当前宿主不支持 Agent 检测";
+      return;
+    }
+    addAgentStatus = "loading";
+    try {
+      addAgentCandidates = await bridge.detectAgentCandidates();
+      addAgentStatus = "ready";
+    } catch (error) {
+      addAgentStatus = "failed";
+      addAgentError = addAgentErrorMessage(error);
+    }
+    void syncWindowSize();
+  }
+
+  async function addDetectedAgent(candidate: AgentCandidate): Promise<void> {
+    if (!bridge.addAgentDefinition || addAgentSaving) return;
+    addAgentSaving = true;
+    addAgentError = null;
+    try {
+      await bridge.addAgentDefinition(candidate.name, candidate.program);
+      addAgentOpen = false;
+      await refreshAll();
+      const added = store.current().snapshot?.agents.find((agent) => agent.name === candidate.name);
+      if (added) store.selectAgent(added.id);
+    } catch (error) {
+      addAgentError = addAgentErrorMessage(error);
+      await loadAddAgentCandidates();
+    } finally {
+      addAgentSaving = false;
+      void syncWindowSize();
+    }
+  }
+
+  async function addManualAgent(): Promise<void> {
+    if (!bridge.addAgentDefinition || addAgentSaving) return;
+    const name = addAgentName.trim();
+    const program = addAgentProgram.trim();
+    if (!name || !program) {
+      addAgentError = !name ? "请填写 Agent 名称。" : "请填写命令或可执行文件路径。";
+      return;
+    }
+    addAgentSaving = true;
+    addAgentError = null;
+    try {
+      await bridge.addAgentDefinition(name, program);
+      addAgentName = "";
+      addAgentProgram = "";
+      addAgentOpen = false;
+      await refreshAll();
+      const added = store.current().snapshot?.agents.find((agent) => agent.name === name);
+      if (added) store.selectAgent(added.id);
+    } catch (error) {
+      addAgentError = addAgentErrorMessage(error);
+    } finally {
+      addAgentSaving = false;
+      void syncWindowSize();
+    }
+  }
 
   async function loadAgentDetections(force = false): Promise<void> {
     if (!bridge.detectAgents && !bridge.refreshAgentDetection) return;
@@ -1690,7 +1779,65 @@
               onkeydown={(event) => navigateAgentStrip(event)}
             ><span class={`mini-dot status-${agent.display_status}`} aria-hidden="true"></span><span class="sensitive">{agent.name}</span></button>
           {/each}
+          <button
+            type="button"
+            class="agent-add"
+            data-testid="agent-add"
+            aria-label="检测本机或添加 Agent"
+            title="检测本机 Agent；没有想要的可以自己添加"
+            aria-expanded={addAgentOpen}
+            onclick={() => void toggleAddAgent()}
+          >+</button>
         </nav>
+        {#if addAgentOpen}
+          <section class="agent-add-panel" data-testid="agent-add-panel" aria-label="检测或添加 Agent">
+            <div class="add-head">
+              <strong>检测 / 添加 Agent</strong>
+              <button type="button" class="add-close" aria-label="关闭" onclick={() => { addAgentOpen = false; void syncWindowSize(); }}>×</button>
+            </div>
+            <p class="add-hint">已检测本机已安装的 Agent；下面是结果。</p>
+            {#if addAgentStatus === "loading"}
+              <p class="add-empty">正在检测本机…</p>
+            {:else if addAgentCandidates.filter((candidate) => candidate.installed).length === 0}
+              <p class="add-empty">本机没有检测到新的 Agent。</p>
+            {:else}
+              <div class="candidate-list">
+                {#each addAgentCandidates.filter((candidate) => candidate.installed) as candidate (candidate.name)}
+                  <div class="candidate" data-testid="agent-candidate" data-configured={candidate.configured}>
+                    <span class="candidate-main">
+                      <strong>{candidate.name}</strong>
+                      <span class="candidate-path sensitive" title={candidate.path ?? ""}>{candidate.path ?? "未找到可执行文件"}</span>
+                    </span>
+                    {#if candidate.configured}
+                      <span class="candidate-tag">已添加</span>
+                    {:else}
+                      <button type="button" data-testid="agent-candidate-add" disabled={addAgentSaving} onclick={() => void addDetectedAgent(candidate)}>添加</button>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+            <form class="manual-add" onsubmit={(event) => { event.preventDefault(); void addManualAgent(); }}>
+              <strong>如没有想要的，可自己添加</strong>
+              <input
+                data-testid="agent-manual-name"
+                aria-label="Agent 名称"
+                placeholder="名称，例如 Gemini CLI"
+                value={addAgentName}
+                oninput={(event) => { addAgentName = event.currentTarget.value; }}
+              />
+              <input
+                data-testid="agent-manual-program"
+                aria-label="命令或可执行文件路径"
+                placeholder="命令或完整路径，例如 gemini"
+                value={addAgentProgram}
+                oninput={(event) => { addAgentProgram = event.currentTarget.value; }}
+              />
+              <button type="submit" data-testid="agent-manual-add" disabled={addAgentSaving}>{addAgentSaving ? "添加中…" : "添加"}</button>
+            </form>
+            {#if addAgentError}<p class="add-error" role="alert" data-testid="agent-add-error">{addAgentError}</p>{/if}
+          </section>
+        {/if}
         <details class="diagnostics-drawer" data-testid="diagnostics-drawer" ontoggle={(event) => { diagnosticsOpen = event.currentTarget.open; if (diagnosticsOpen) { void loadDiagnostics(); void loadAgentDetections(); } }}>
           <summary>
             <span>诊断信息</span>
@@ -2109,6 +2256,27 @@
   .agent-strip button { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid transparent; border-radius: 999px; color: var(--island-text-secondary); background: transparent; cursor: pointer; }
   .agent-strip button.active { color: var(--island-text-primary); border-color: var(--island-border-subtle); background: var(--island-surface-raised); }
   .agent-strip button:focus-visible { outline: 2px solid var(--island-accent-primary); }
+  .agent-strip .agent-add { flex: 0 0 auto; width: 28px; height: 28px; margin-left: 2px; padding: 0; justify-content: center; border: 1px dashed var(--island-border-subtle); border-radius: 999px; color: var(--island-text-secondary); font-size: 16px; line-height: 1; }
+  .agent-strip .agent-add:hover { border-color: var(--island-accent-primary); color: var(--island-accent-primary); background: var(--island-control-surface); }
+  .agent-add-panel { display: grid; gap: 7px; margin: 0 0 10px; padding: 10px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-card); background: var(--island-surface-card); }
+  .add-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .add-head strong { font-size: 11px; color: var(--island-text-primary); }
+  .add-close { width: 24px; height: 24px; padding: 0; border: 1px solid var(--island-border-subtle); border-radius: 7px; color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 14px; cursor: pointer; }
+  .add-hint { margin: 0; color: var(--island-text-tertiary); font-size: 9.5px; line-height: 1.5; }
+  .add-empty { margin: 0; padding: 6px 0; color: var(--island-text-tertiary); font-size: 9.5px; }
+  .candidate-list { display: grid; gap: 4px; max-height: 150px; overflow-y: auto; }
+  .candidate { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 7px; border-radius: 7px; background: var(--island-log-surface); }
+  .candidate-main { min-width: 0; display: grid; gap: 1px; }
+  .candidate-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--island-text-primary); font-size: 10px; }
+  .candidate-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--island-text-tertiary); font-family: ui-monospace, "Cascadia Code", monospace; font-size: 8.5px; }
+  .candidate-tag { color: var(--island-status-done); font-size: 9px; }
+  .candidate button, .manual-add button { min-height: 25px; padding: 2px 8px; border: 1px solid var(--island-border-subtle); border-radius: 6px; color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 9.5px; cursor: pointer; }
+  .candidate button:hover, .manual-add button:hover { color: var(--island-text-primary); border-color: var(--island-accent-primary); }
+  .manual-add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) auto; gap: 5px; align-items: center; padding-top: 4px; border-top: 1px solid var(--island-border-subtle); }
+  .manual-add strong { grid-column: 1 / -1; color: var(--island-text-secondary); font-size: 9.5px; font-weight: 600; }
+  .manual-add input { min-width: 0; height: 27px; padding: 3px 7px; border: 1px solid var(--island-border-subtle); border-radius: 6px; color: var(--island-text-primary); background: var(--island-control-surface); font-size: 9.5px; }
+  .manual-add input:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 1px; }
+  .add-error { margin: 0; color: var(--island-status-error); font-size: 9.5px; }
   .mini-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--island-status-idle); }
   .mini-dot.status-working { background: var(--island-status-working); }
   .mini-dot.status-error { background: var(--island-status-error); }

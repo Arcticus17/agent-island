@@ -517,7 +517,7 @@ pub(crate) fn detect_agents(state: tauri::State<AppState>) -> Vec<AgentDetection
         .into_iter()
         .map(|def| {
             let processes = matching_processes(&sys, &def.keyword);
-            let path = resolve_agent_program(&def.keyword);
+            let path = resolve_agent_program(def.program());
             let running = !processes.is_empty();
             let installed = path.is_some() || running;
             let source = if running {
@@ -550,6 +550,105 @@ pub(crate) fn detect_agents(state: tauri::State<AppState>) -> Vec<AgentDetection
 pub(crate) fn refresh_agent_detection(state: tauri::State<AppState>) -> Vec<AgentDetection> {
     clear_program_cache();
     detect_agents(state)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct AgentCandidate {
+    pub name: String,
+    pub program: String,
+    pub description: String,
+    pub installed: bool,
+    pub configured: bool,
+    pub path: Option<String>,
+    pub keyword: String,
+}
+
+/// "检测本机" candidates: configured agents plus curated CLI agents whose
+/// executable actually resolves. Nothing is auto-added; the user chooses.
+#[tauri::command]
+pub(crate) fn detect_agent_candidates() -> Vec<AgentCandidate> {
+    let defs = agent_defs();
+    let mut candidates = Vec::new();
+    for def in &defs {
+        let path = resolve_agent_program(def.program());
+        candidates.push(AgentCandidate {
+            name: def.name.clone(),
+            program: def.program().to_string(),
+            description: "已在岛内配置".to_string(),
+            installed: path.is_some(),
+            configured: true,
+            path: path.map(|value| value.to_string_lossy().into_owned()),
+            keyword: def.keyword.clone(),
+        });
+    }
+    for entry in crate::agent_catalog::CATALOG {
+        let already = defs.iter().any(|def| {
+            def.name.eq_ignore_ascii_case(entry.name)
+                || def.program().eq_ignore_ascii_case(entry.program)
+                || def.keyword.eq_ignore_ascii_case(entry.program)
+        });
+        if already {
+            continue;
+        }
+        let Some(path) = resolve_agent_program(entry.program) else {
+            continue;
+        };
+        candidates.push(AgentCandidate {
+            name: entry.name.to_string(),
+            program: entry.program.to_string(),
+            description: entry.description.to_string(),
+            installed: true,
+            configured: false,
+            path: Some(path.to_string_lossy().into_owned()),
+            keyword: entry.program.to_string(),
+        });
+    }
+    candidates
+}
+
+#[tauri::command]
+pub(crate) fn add_agent_definition(name: String, program: String) -> Result<(), String> {
+    let name = name.trim();
+    let program = program.trim();
+    if name.is_empty() {
+        return Err("agent_name_empty".to_string());
+    }
+    if program.is_empty() {
+        return Err("program_empty".to_string());
+    }
+    if name.chars().any(char::is_control) || program.chars().any(char::is_control) {
+        return Err("invalid_agent_definition".to_string());
+    }
+    if program.contains(['&', '|', '<', '>', '^', '%', '!', '\r', '\n', '"']) {
+        return Err("program_contains_unsafe_characters".to_string());
+    }
+    let resolved = resolve_agent_program(program).ok_or_else(|| "program_not_found".to_string())?;
+    let program_text = resolved.to_string_lossy().into_owned();
+    let keyword = resolved
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "program_not_found".to_string())?;
+
+    let mut defs = load_agent_defs();
+    if defs.iter().any(|def| {
+        def.name.eq_ignore_ascii_case(name)
+            || def.keyword.eq_ignore_ascii_case(&keyword)
+            || def.program().eq_ignore_ascii_case(&program_text)
+    }) {
+        return Err("agent_already_exists".to_string());
+    }
+    defs.push(AgentDef {
+        name: name.to_string(),
+        keyword,
+        log_kind: String::new(),
+        program: program_text,
+        resume_args: Vec::new(),
+        send_args: Vec::new(),
+    });
+    save_agent_defs(&defs)?;
+    reload_agent_defs();
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -670,7 +769,7 @@ pub(crate) fn scan_agents(
             def.log_kind.as_str()
         };
         let processes = matching_processes(sys, &def.keyword);
-        if processes.is_empty() && !program_available(&def.keyword) {
+        if processes.is_empty() && !program_available(def.program()) {
             // 系统上已经找不到这个 CLI（可能是装了又卸载）：不再出现在岛上，
             // 也不再扫它残留的会话日志——残留日志不能证明 Agent 还在。
             session.activity.remove(agent_name);

@@ -25,6 +25,7 @@ import {
   type AppUpdateInfo,
   type ApprovalRule,
   type AgentDetection,
+  type AgentCandidate,
   type SessionSearchHit,
   type SessionView,
   type CliVersionProbe,
@@ -384,6 +385,12 @@ export function createTauriBridge(): AgentIslandBridge {
     },
     async refreshAgentDetection() {
       return await invoke<AgentDetection[]>("refresh_agent_detection");
+    },
+    async detectAgentCandidates() {
+      return await invoke<AgentCandidate[]>("detect_agent_candidates");
+    },
+    async addAgentDefinition(name, program) {
+      return await invoke<void>("add_agent_definition", { name, program });
     },
     async terminalOpen(request) {
       return await invoke<string>("terminal_open", {
