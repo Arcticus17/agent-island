@@ -116,7 +116,7 @@ fn node_entrypoint_matches(args: &[String], keyword: &str) -> bool {
 
 #[cfg(test)]
 mod process_classifier_tests {
-    use super::{environment_program_paths_from, known_program_paths, known_program_paths_from, matches_agent_process, program_available};
+    use super::{environment_agent_candidates_from, environment_program_paths_from, known_program_paths, known_program_paths_from, matches_agent_process, program_available};
 
     fn matches(name: &str, args: &[&str], keyword: &str) -> bool {
         matches_agent_process(
@@ -339,6 +339,46 @@ mod process_classifier_tests {
 
         std::fs::remove_dir_all(root).ok();
     }
+
+    #[test]
+    fn finds_unknown_agents_referenced_by_environment_directories() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-island-env-candidate-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("my-agent").join("bin")).unwrap();
+        let executable = root.join("my-agent").join("bin").join("my-agent.exe");
+        std::fs::write(&executable, b"stub").unwrap();
+        // Non-executable files must never be offered just because of the name.
+        std::fs::write(root.join("my-agent").join("bin").join("agent-notes.json"), b"{}").unwrap();
+
+        let found = environment_agent_candidates_from(vec![(
+            std::ffi::OsString::from("MY_AGENT_HOME"),
+            std::ffi::OsString::from(root.join("my-agent").to_string_lossy().as_ref()),
+        )]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "MY_AGENT_HOME");
+        assert_eq!(found[0].1, executable);
+
+        // Generic runtimes are not offered just because a variable points at them.
+        std::fs::create_dir_all(root.join("java")).unwrap();
+        std::fs::write(root.join("java").join("java.exe"), b"stub").unwrap();
+        let found = environment_agent_candidates_from(vec![(
+            std::ffi::OsString::from("JAVA_HOME"),
+            std::ffi::OsString::from(root.join("java").to_string_lossy().as_ref()),
+        )]);
+        assert!(found.is_empty());
+
+        // Temporary directories contain agent-island-*.err files; they are not agents.
+        std::fs::write(root.join("agent-island-1.err"), b"stub").unwrap();
+        let found = environment_agent_candidates_from(vec![(
+            std::ffi::OsString::from("TEMP"),
+            std::ffi::OsString::from(root.to_string_lossy().as_ref()),
+        )]);
+        assert!(found.is_empty());
+
+        std::fs::remove_dir_all(root).ok();
+    }
 }
 
 /// CLI 是否仍装在系统上：先查 PATH（Windows 用 `where.exe`），再兜底常见安装目录。
@@ -444,6 +484,122 @@ fn program_extensions() -> &'static [&'static str] {
 /// other arbitrary values cannot become an agent.
 fn environment_program_paths(program: &str) -> Vec<(String, PathBuf)> {
     environment_program_paths_from(program, std::env::vars_os())
+}
+
+/// Environment variables can also point at an agent we have never heard of
+/// (for example `MY_AGENT_HOME=C:\tools\my-agent`). This scans only entries
+/// with agent-like executable names and leaves them as **candidates** for the
+/// "+" panel; it never adds or displays them automatically.
+fn environment_agent_candidates() -> Vec<(String, PathBuf)> {
+    environment_agent_candidates_from(std::env::vars_os())
+}
+
+fn environment_agent_candidates_from<I>(vars: I) -> Vec<(String, PathBuf)>
+where
+    I: IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+{
+    const HINTS: &[&str] = &[
+        "agent",
+        "claude",
+        "codex",
+        "opencode",
+        "hermes",
+        "gemini",
+        "aider",
+        "cursor",
+        "copilot",
+        "qwen",
+        "crush",
+        "goose",
+        "amp",
+        "droid",
+        "kilo",
+        "auggie",
+        "plandex",
+        "openhands",
+        "cline",
+        "warp",
+    ];
+    fn has_hint(text: &str, hints: &[&str]) -> bool {
+        hints.iter().any(|hint| text.contains(hint))
+    }
+    fn is_agent_executable(path: &std::path::Path, hints: &[&str]) -> bool {
+        let extension = path
+            .extension()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        // A directory scan is full of .json/.err/.dll files; never offer those
+        // as agents just because their name contains "agent" or "claude".
+        if !matches!(extension.as_str(), "exe" | "cmd" | "bat" | "ps1" | "com") {
+            return false;
+        }
+        let stem = path
+            .file_stem()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if stem.is_empty() || stem.len() > 64 {
+            return false;
+        }
+        stem.split(['-', '_', '.', ' '])
+            .any(|token| hints.contains(&token))
+            || hints.iter().any(|hint| stem == *hint)
+    }
+
+    let mut found = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (name, value) in vars {
+        let name = name.to_string_lossy().into_owned();
+        let value_text = value.to_string_lossy().trim().trim_matches('"').to_string();
+        if value_text.is_empty() || value_text.len() > 4096 {
+            continue;
+        }
+        // Generic variables such as JAVA_HOME/TEMP/HOME point at directories
+        // full of unrelated files. Only names (or values) mentioning an agent
+        // are eligible; the executable filter above still applies.
+        let name_lower = name.to_ascii_lowercase();
+        let value_lower = value_text.to_ascii_lowercase();
+        if !has_hint(&name_lower, HINTS) && !has_hint(&value_lower, HINTS) {
+            continue;
+        }
+        let candidate = PathBuf::from(&value_text);
+        if candidate.is_file() {
+            if is_agent_executable(&candidate, HINTS)
+                && seen.insert(candidate.to_string_lossy().to_lowercase())
+            {
+                found.push((name, candidate));
+                if found.len() >= 20 {
+                    break;
+                }
+            }
+            continue;
+        }
+        if !candidate.is_dir() {
+            continue;
+        }
+        for subdir in ["", "bin"] {
+            let directory = if subdir.is_empty() {
+                candidate.clone()
+            } else {
+                candidate.join(subdir)
+            };
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.flatten().take(200) {
+                let path = entry.path();
+                if !path.is_file() || !is_agent_executable(&path, HINTS) {
+                    continue;
+                }
+                if seen.insert(path.to_string_lossy().to_lowercase()) {
+                    found.push((name.clone(), path));
+                    if found.len() >= 20 {
+                        return found;
+                    }
+                }
+            }
+        }
+    }
+    found
 }
 
 fn environment_program_paths_from<I>(program: &str, vars: I) -> Vec<(String, PathBuf)>
@@ -754,6 +910,34 @@ pub(crate) fn detect_agent_candidates() -> Vec<AgentCandidate> {
             configured: false,
             path: Some(path.to_string_lossy().into_owned()),
             keyword: entry.program.to_string(),
+        });
+    }
+    for (env_name, path) in environment_agent_candidates() {
+        let keyword = path
+            .file_stem()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if keyword.is_empty() {
+            continue;
+        }
+        let already = candidates.iter().any(|candidate| {
+            candidate.keyword.eq_ignore_ascii_case(&keyword)
+                || candidate
+                    .path
+                    .as_deref()
+                    .is_some_and(|value| Path::new(value) == path)
+        });
+        if already {
+            continue;
+        }
+        candidates.push(AgentCandidate {
+            name: keyword.clone(),
+            program: path.to_string_lossy().into_owned(),
+            description: format!("环境变量 {env_name}"),
+            installed: true,
+            configured: false,
+            path: Some(path.to_string_lossy().into_owned()),
+            keyword,
         });
     }
     candidates

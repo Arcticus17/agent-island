@@ -99,9 +99,9 @@
 - 审批 2.0：本地风险分级、仓库/分支、Edit/Write diff 预览、拒绝并说明、仅本次/10 分钟/本会话授权、低风险批量；审批 120 秒过期后自动移除
 - Hook 协议：新增 `PermissionRequest`（Edit/Write/MultiEdit），bridge 改为独立 `hook_bridge.mjs`；旧客户端只发顶层 command 时回填 `tool_input`
 - Agent 更新保护：运行中拒绝更新；命令带 `--include=optional --foreground-scripts`；更新后强制校验 `<cli> --version`，失败自动回滚到更新前版本
-- Agent 检测：进程匹配只看可执行文件/入口，不再把提示词里的 `opencode`/`hermes` 当成 Agent；可执行文件探测覆盖 `.npmrc` 自定义 prefix、环境变量（如 `CLAUDE_CODE_PATH`/`CODEX_HOME`/`OPENCODE_HOME`）、Scoop/Chocolatey/Volta/Bun/pnpm 与 PATH；诊断抽屉显示每个 Agent 的实际路径与来源，未安装的明确标「未检测到」
+- Agent 检测：进程匹配只看可执行文件/入口，不再把提示词里的 `opencode`/`hermes` 当成 Agent；可执行文件探测覆盖 `.npmrc` 自定义 prefix、环境变量（如 `CLAUDE_CODE_PATH`/`CODEX_HOME`/`OPENCODE_HOME`，含自定义 `*_AGENT_HOME` 候选）、Scoop/Chocolatey/Volta/Bun/pnpm 与 PATH；诊断抽屉显示每个 Agent 的实际路径与来源，未安装的明确标「未检测到」
 - Agent 添加：Agent 条末尾「+」打开检测面板；列出本机已安装的配置 Agent + 内置候选目录，一键添加；「如没有想要的，可自己添加」支持名称 + 命令/路径，写入 `agents.json` 前校验可执行文件真实存在
-- 验证：Rust 227、Node 29（含 3 条 bridge 协议测试）、浏览器 136、视觉 24；真机 CDP 验证 allow / 10 分钟 grant / deny reason / inbox peek，并核对 Agent 检测路径与本机文件一致
+- 验证：Rust 228、Node 29（含 3 条 bridge 协议测试）、浏览器 136、视觉 24；真机 CDP 验证 allow / 10 分钟 grant / deny reason / inbox peek，并核对 Agent 检测路径与本机文件一致
 - 记录：[docs/verification/2026-10-28-inbox-and-approval-2.md](docs/verification/2026-10-28-inbox-and-approval-2.md)、[docs/verification/2026-10-28-agent-update-guard.md](docs/verification/2026-10-28-agent-update-guard.md)、[docs/verification/2026-10-28-agent-detection-exactness.md](docs/verification/2026-10-28-agent-detection-exactness.md)
 
 ## 当前已完成
