@@ -1720,10 +1720,12 @@ fn hooks_merge_preserves_user_settings_and_secrets() {
     assert!(text.contains("PreToolUse"));
     assert!(text.contains("PermissionRequest"));
     assert!(text.contains("hook-bridge.mjs"));
+    assert!(text.contains("\"model\": \"sonnet\""), "merge must preserve unrelated top-level settings");
 
     remove_hooks_settings(&settings).unwrap();
     let text = fs::read_to_string(&settings).unwrap();
     assert!(text.contains("sk-secret"));
+    assert!(text.contains("\"model\": \"sonnet\""), "uninstall must preserve unrelated top-level settings");
     assert!(!text.contains("PreToolUse"));
     assert!(!text.contains("PermissionRequest"));
     assert!(!text.contains("hook-bridge.mjs"));
