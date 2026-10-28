@@ -60,7 +60,7 @@ name.contains(keyword) || args.join(" ").contains(keyword)
 
 环境变量命中的路径优先于常见安装目录，诊断里显示为「环境变量」，tooltip 带变量名。纯函数 `environment_program_paths_from` 有单测覆盖直接文件、目录 + `bin`、提示词误值三种情况。
 
-「+」面板还会扫描环境变量指向的目录（含 `bin/`），把文件名带 `agent`/`claude`/`codex`/`opencode`/`hermes`/`gemini`/`aider`/`cursor`/`copilot` 等关键字的可执行文件列为**候选**，例如 `MY_AGENT_HOME=C:\tools\my-agent` → 候选 `my-agent.exe`；只接受 `.exe/.cmd/.bat/.ps1/.com`，`.json/.err/.dll` 不会出现；变量名或值不含 Agent 关键字的通用目录（`JAVA_HOME`/`TEMP`/`HOME`）不扫。仍然需要用户点「添加」。
+「+」面板还会扫描环境变量指向的目录（含 `bin/`、`local/`、`node_modules/.bin/`），把文件名带 `agent`/`claude`/`codex`/`opencode`/`hermes`/`gemini`/`aider`/`cursor`/`copilot` 等关键字的可执行文件列为**候选**，例如 `MY_AGENT_HOME=C:\tools\my-agent` → 候选 `my-agent.exe`；只接受 `.exe/.cmd/.bat/.ps1/.com`，`.json/.err/.dll` 不会出现；变量名或值不含 Agent 关键字的通用目录（`JAVA_HOME`/`TEMP`/`HOME`）不扫。仍然需要用户点「添加」。
 
 支持示例：
 

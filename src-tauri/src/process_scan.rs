@@ -576,7 +576,7 @@ where
         if !candidate.is_dir() {
             continue;
         }
-        for subdir in ["", "bin"] {
+        for subdir in ["", "bin", "local", "node_modules/.bin"] {
             let directory = if subdir.is_empty() {
                 candidate.clone()
             } else {
