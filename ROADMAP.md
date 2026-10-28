@@ -98,8 +98,9 @@
 - 收件箱：审批/通知/完成事件持久化到 `~/.agent-island/inbox.json`，展开态「待你处理」、收起态数字徽标、离开摘要；新条目到达时从隐藏 peek 成胶囊
 - 审批 2.0：本地风险分级、仓库/分支、Edit/Write diff 预览、拒绝并说明、仅本次/10 分钟/本会话授权、低风险批量；审批 120 秒过期后自动移除
 - Hook 协议：新增 `PermissionRequest`（Edit/Write/MultiEdit），bridge 改为独立 `hook_bridge.mjs`；旧客户端只发顶层 command 时回填 `tool_input`
-- 验证：Rust 222、Node 29（含 3 条 bridge 协议测试）、浏览器 131、视觉 24；真机 CDP 验证 allow / 10 分钟 grant / deny reason / inbox peek
-- 记录：[docs/verification/2026-10-28-inbox-and-approval-2.md](docs/verification/2026-10-28-inbox-and-approval-2.md)
+- Agent 更新保护：运行中拒绝更新；命令带 `--include=optional --foreground-scripts`；更新后强制校验 `<cli> --version`，失败自动回滚到更新前版本
+- 验证：Rust 222、Node 29（含 3 条 bridge 协议测试）、浏览器 133、视觉 24；真机 CDP 验证 allow / 10 分钟 grant / deny reason / inbox peek
+- 记录：[docs/verification/2026-10-28-inbox-and-approval-2.md](docs/verification/2026-10-28-inbox-and-approval-2.md)、[docs/verification/2026-10-28-agent-update-guard.md](docs/verification/2026-10-28-agent-update-guard.md)
 
 ## 当前已完成
 

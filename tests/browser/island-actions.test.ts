@@ -1,4 +1,4 @@
-﻿import { mount, unmount } from "svelte";
+import { mount, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 
@@ -15,6 +15,7 @@ import type {
   HookEvent,
   TerminalEvent,
   AgentTaskSnapshot,
+  CliVersionProbe,
 } from "../../src/bridge/types";
 
 const mounted: Array<ReturnType<typeof mount>> = [];
@@ -104,6 +105,7 @@ interface BridgeHarness {
 function createBridgeHarness(
   snapshots: Array<AgentViewSnapshot | Error>,
   commandOutcomes: CommandOutcome[] = [],
+  options: { probeResults?: CliVersionProbe[] } = {},
 ): BridgeHarness {
   const snapshotQueue = snapshots.map((value) => structuredClone(value));
   const firstSnapshot = snapshotQueue[0];
@@ -119,6 +121,7 @@ function createBridgeHarness(
   const approvalRules: Array<{ id: string; tool: string; pattern: string }> = [];
   const approvalAudit: Array<{ at_ms: number; id: string; tool: string; command: string; rule: string; decision: string }> = [];
   const cliVersion = "0.1.0";
+  const probeQueue = [...(options.probeResults ?? [])];
   const terminalLog: Array<{ kind: string; [key: string]: unknown }> = [];
   const taskLog: Array<{ id: string; prompt: string }> = [];
   const taskHandlers = new Set<(task: AgentTaskSnapshot) => void>();
@@ -204,6 +207,8 @@ function createBridgeHarness(
       return () => taskHandlers.delete(handler);
     },
     async probeCliVersion(program) {
+      const queued = probeQueue.shift();
+      if (queued) return { ...queued, program };
       return { program, version: cliVersion, raw: `mock ${cliVersion}`, ok: true };
     },
   };
@@ -1107,7 +1112,7 @@ describe("agent update button", () => {
 
   it("checks the registry and offers an update when a newer version exists", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ version: "9.9.9" }), { status: 200 })));
-    const harness = createBridgeHarness([snapshot(100)]);
+    const harness = createBridgeHarness([snapshot(100, "stopped")]);
     const target = await renderIsland(harness);
     const button = () => target.querySelector<HTMLButtonElement>('[data-testid="agent-update"]')!;
 
@@ -1119,7 +1124,57 @@ describe("agent update button", () => {
     await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
     const opened = harness.terminalCalls().find((call) => call.kind === "open")!;
     expect(opened.program).toBe("cmd.exe");
-    expect(opened.args).toEqual(["/C", "npm install -g @anthropic-ai/claude-code@latest"]);
+    expect(opened.args).toEqual([
+      "/C",
+      "npm install -g @anthropic-ai/claude-code@latest --include=optional --foreground-scripts",
+    ]);
+  });
+
+  it("refuses to update while the agent is still running", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ version: "9.9.9" }), { status: 200 })));
+    const harness = createBridgeHarness([snapshot(100, "working")]);
+    const target = await renderIsland(harness);
+    const button = () => target.querySelector<HTMLButtonElement>('[data-testid="agent-update"]')!;
+
+    await waitFor(() => button().getAttribute("data-update-state") === "ready");
+    button().click();
+    await waitFor(() => target.querySelector('[data-testid="agent-update-message"]') !== null);
+    expect(target.querySelector('[data-testid="agent-update-message"]')?.textContent)
+      .toContain("请先关闭 Claude Code");
+    expect(harness.terminalCalls().some((call) => call.kind === "open")).toBe(false);
+  });
+
+  it("rolls back to the previous version when the updated CLI cannot run", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ version: "9.9.9" }), { status: 200 })));
+    const harness = createBridgeHarness(
+      [snapshot(100, "stopped")],
+      [],
+      {
+        probeResults: [
+          { program: "claude", version: "0.1.0", raw: "0.1.0", ok: true },
+          { program: "claude", version: null, raw: "not found", ok: false },
+          { program: "claude", version: "0.1.0", raw: "0.1.0", ok: true },
+        ],
+      },
+    );
+    const target = await renderIsland(harness);
+    const button = () => target.querySelector<HTMLButtonElement>('[data-testid="agent-update"]')!;
+    await waitFor(() => button().getAttribute("data-update-state") === "ready");
+
+    button().click();
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
+    harness.emitTerminal({ kind: "exit", id: "term-1" });
+
+    await waitFor(() => harness.terminalCalls().filter((call) => call.kind === "open").length === 2);
+    const rollback = harness.terminalCalls().filter((call) => call.kind === "open")[1];
+    expect(rollback.args).toEqual([
+      "/C",
+      "npm install -g @anthropic-ai/claude-code@0.1.0 --include=optional --foreground-scripts",
+    ]);
+
+    harness.emitTerminal({ kind: "exit", id: "term-2" });
+    await waitFor(() => target.querySelector('[data-testid="agent-update-message"]')?.textContent?.includes("已回滚到 v0.1.0") === true);
+    expect(button().getAttribute("data-update-state")).toBe("ready");
   });
 
   it("says up to date when the registry matches the local version", async () => {

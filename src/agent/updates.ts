@@ -75,7 +75,13 @@ export async function fetchLatestVersion(packageName: string): Promise<string> {
   return parsed;
 }
 
-/** 安装命令（在岛内终端里执行，输出直接可看）。 */
-export function updateCommand(packageName: string): string {
-  return `npm install -g ${packageName}@latest`;
+/** 安装命令（在岛内终端里执行，输出直接可看）。
+ *
+ * `--include=optional` 是 Claude Code 的原生二进制所在；省略它 npm 只装
+ * JS 壳，`bin/claude.exe` 会留下 "native binary not installed" 的占位脚本。
+ * `--foreground-scripts` 让 postinstall 的输出进入终端，而不是被 npm 吞掉。
+ */
+export function updateCommand(packageName: string, version = "latest"): string {
+  const safeVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) ? version : "latest";
+  return `npm install -g ${packageName}@${safeVersion} --include=optional --foreground-scripts`;
 }

@@ -62,7 +62,7 @@ v1.10 的目标不是「更多提示」，而是：
 | --- | --- |
 | Rust | **222 passed**（新增 inbox 7、approval_review 10、hooks 合并/临时授权等） |
 | Node（`test:frontend`） | **29 passed**，含 3 条 bridge 协议集成测试（PreToolUse allow、PermissionRequest deny/allow 的 JSON 形状 + reason） |
-| 浏览器 | **131 passed**，新增 8 条：收件箱渲染/解决、胶囊计数、离开摘要、风险+diff+范围、拒绝理由、只批量低风险、过期移除、长列表截断 |
+| 浏览器 | **133 passed**，该功能新增 8 条（收件箱渲染/解决、胶囊计数、离开摘要、风险+diff+范围、拒绝理由、只批量低风险、过期移除、长列表截断）；另 2 条更新保护用例见 [agent-update-guard](2026-10-28-agent-update-guard.md) |
 | 视觉 | **24 passed**，审批卡 3 张基线因新布局更新（已人工查看实际图后更新） |
 | `svelte-check` | 0 errors / 0 warnings |
 

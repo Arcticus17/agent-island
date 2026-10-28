@@ -50,7 +50,14 @@ describe("agent update helpers", () => {
     vi.unstubAllGlobals();
   });
 
-  it("builds the install command", () => {
-    expect(updateCommand("@openai/codex")).toBe("npm install -g @openai/codex@latest");
+  it("builds the install command with native optional deps and visible scripts", () => {
+    expect(updateCommand("@openai/codex")).toBe(
+      "npm install -g @openai/codex@latest --include=optional --foreground-scripts",
+    );
+    expect(updateCommand("@anthropic-ai/claude-code", "2.1.312")).toBe(
+      "npm install -g @anthropic-ai/claude-code@2.1.312 --include=optional --foreground-scripts",
+    );
+    // A malformed rollback version must never become part of a shell command.
+    expect(updateCommand("@anthropic-ai/claude-code", "2.1.312 & calc.exe")).toContain("@latest");
   });
 });

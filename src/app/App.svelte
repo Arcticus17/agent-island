@@ -187,12 +187,18 @@
   let targetWindowWidth = 0;
   /** Agent CLI 更新检查：本地版本走 Rust，最新版本走 npm registry（WebView fetch）。 */
   type UpdateStatus = "idle" | "checking" | "ready" | "error";
+  type UpdatePhase = "idle" | "installing" | "verifying" | "rolling_back" | "done" | "failed";
   let updateStatus = $state<UpdateStatus>("idle");
   let updateInstalled = $state<string | null>(null);
   let updateLatest = $state<string | null>(null);
   let updateMessage = $state<string | null>(null);
   let updateCheckedFor = "";
   let updateRunning = $state(false);
+  let updatePhase = $state<UpdatePhase>("idle");
+  let updateRollbackVersion = $state<string | null>(null);
+  let updateAwaitingExit = $state(false);
+  /** 冻结本次更新的目标：更新期间切换 Agent 不能把校验命令换成另一个 CLI。 */
+  let updateTarget = $state<{ name: string; package: string; cli: string } | null>(null);
   let peekTimer: number | undefined;
   let hideTimer: number | undefined;
 
@@ -372,11 +378,11 @@
     if (!name || !agentPackage || updateCheckedFor === name) return;
     untrack(() => { void checkAgentUpdate(); });
   });
-  // 更新命令跑完（PTY 退出）后重新探测版本
+  // 更新命令跑完（PTY 退出）后：先校验 CLI 是否真的能运行；不能运行就回滚。
   $effect(() => {
-    if (!updateRunning || !terminalExited || terminalId) return;
-    updateRunning = false;
-    untrack(() => { void checkAgentUpdate(true); });
+    if (!updateRunning || !updateAwaitingExit || !terminalExited || terminalId) return;
+    updateAwaitingExit = false;
+    untrack(() => { void finishAgentUpdate(); });
   });
 
   async function loadDiagnostics(): Promise<void> {
@@ -511,7 +517,11 @@
   );
   const updateLabel = $derived.by(() => {
     if (!agentPackage) return "不支持更新";
-    if (updateRunning) return "更新中…";
+    if (updateRunning) {
+      if (updatePhase === "verifying") return "校验中…";
+      if (updatePhase === "rolling_back") return "回滚中…";
+      return "更新中…";
+    }
     if (updateStatus === "checking") return "检查中…";
     if (updateStatus === "error") return "重试检查";
     if (updateStatus === "ready") {
@@ -522,6 +532,7 @@
   });
 
   async function checkAgentUpdate(force = false): Promise<void> {
+    if (updateRunning) return;
     const pkg = agentPackage;
     const name = selectedAgent?.name ?? "";
     if (!pkg || !bridge.probeCliVersion) {
@@ -547,18 +558,105 @@
     }
   }
 
-  /** 更新：把 `npm install -g …@latest` 丢进岛内终端跑，过程直接可见。 */
+  /** 更新：把 `npm install -g …` 丢进岛内终端跑，过程直接可见。
+   *
+   * 两道保护：
+   * 1. Agent 还在跑时直接拒绝——Windows 会锁住 claude.exe，postinstall 复制
+   *    原生二进制会失败，留下 "native binary not installed" 的占位文件；
+   * 2. 命令结束后强制跑 `<cli> --version`；失败则用更新前的版本回滚一次。
+   */
   async function runAgentUpdate(): Promise<void> {
     const pkg = agentPackage;
+    const agent = selectedAgent;
     if (!pkg || updateRunning) return;
     if (!updateAvailable) {
       await checkAgentUpdate(true);
       return;
     }
+    if (agent?.state.process === "running") {
+      updateMessage = `请先关闭 ${agent.name} 再更新：Windows 会锁住 ${pkg.cli} 的可执行文件，更新可能只装一半。`;
+      void syncWindowSize();
+      return;
+    }
+    updateTarget = { name: agent?.name ?? pkg.package, package: pkg.package, cli: pkg.cli };
+    updateRollbackVersion = updateInstalled;
     updateRunning = true;
+    updatePhase = "installing";
+    updateAwaitingExit = false;
+    updateMessage = `正在更新 ${agent?.name ?? pkg.package}…`;
     terminalOpen = true;
     await syncWindowSize();
     await startTerminal("cmd.exe", ["/C", updateCommand(pkg.package)]);
+    if (terminalError) {
+      failAgentUpdate(`无法启动更新命令：${terminalError}`);
+      return;
+    }
+    updateAwaitingExit = true;
+  }
+
+  function failAgentUpdate(message: string): void {
+    updateRunning = false;
+    updateAwaitingExit = false;
+    updatePhase = "failed";
+    updateStatus = "error";
+    updateMessage = message;
+    void syncWindowSize();
+  }
+
+  async function finishAgentUpdate(): Promise<void> {
+    const target = updateTarget;
+    if (!target || !bridge.probeCliVersion) {
+      failAgentUpdate("当前宿主无法校验更新结果，请手动运行命令行检查");
+      return;
+    }
+    const phase = updatePhase;
+    updatePhase = "verifying";
+    updateMessage = phase === "rolling_back" ? "正在确认回滚结果…" : "正在确认新版本…";
+    void syncWindowSize();
+
+    let version: string | null = null;
+    try {
+      const probe = await bridge.probeCliVersion(target.cli);
+      version = probe.ok ? (probe.version ?? parseVersion(probe.raw)) : null;
+    } catch {
+      version = null;
+    }
+
+    if (version) {
+      updateInstalled = version;
+      updateStatus = "ready";
+      updateRunning = false;
+      updateAwaitingExit = false;
+      updatePhase = "done";
+      if (phase === "rolling_back") {
+        updateMessage = `已回滚到 v${version}`;
+      } else if (updateLatest && version !== updateLatest) {
+        updateMessage = `更新已结束，但仍是 v${version}（未到 v${updateLatest}）`;
+      } else {
+        updateMessage = `已更新到 v${version}`;
+      }
+      void syncWindowSize();
+      return;
+    }
+
+    if (phase !== "rolling_back" && updateRollbackVersion) {
+      updatePhase = "rolling_back";
+      updateMessage = `新版本无法运行 ${target.cli}，正在回滚到 v${updateRollbackVersion}…`;
+      updateAwaitingExit = false;
+      await startTerminal("cmd.exe", ["/C", updateCommand(target.package, updateRollbackVersion)]);
+      if (terminalError) {
+        failAgentUpdate(`回滚命令启动失败：${terminalError}`);
+        return;
+      }
+      updateAwaitingExit = true;
+      return;
+    }
+
+    failAgentUpdate(
+      phase === "rolling_back"
+        ? "回滚后仍无法运行，请手动重装"
+        : "更新后无法运行，请手动重装",
+    );
   }
 
   /**
@@ -1676,6 +1774,9 @@
               <span class="terminal-hint">在岛内直接跑 {agentCliName(selectedAgent)}</span>
             {/if}
           </div>
+          {#if updateMessage}
+            <p class="update-message" data-testid="agent-update-message" role="status">{updateMessage}</p>
+          {/if}
           {#if terminalOpen}
             <TerminalPanel
               agent={selectedAgent}
@@ -1931,6 +2032,7 @@
   .update-button.available { color: var(--island-accent-primary); border-color: var(--island-accent-primary); background: color-mix(in srgb, var(--island-accent-primary) 12%, transparent); font-weight: 700; }
   .update-button:disabled { opacity: .55; cursor: progress; }
   .update-button:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
+  .update-message { margin: -2px 0 6px; color: var(--island-text-tertiary); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
   .terminal-hint { color: var(--island-text-tertiary); font-size: 10px; }
   .cards-region.terminal-open { display: none; }
   /* 终端放大：把诊断、指令输入、会话选择、卡片都让位给终端 */
