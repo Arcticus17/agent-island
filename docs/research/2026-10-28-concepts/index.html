@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent Island · 下一阶段概念稿</title>
+<style>
+  :root {
+    --bg: #07080b;
+    --panel: rgba(18, 22, 28, 0.96);
+    --card: rgba(31, 37, 46, 0.92);
+    --raised: rgba(39, 45, 56, 0.76);
+    --log: rgba(4, 8, 14, 0.56);
+    --text: #f5f7fb;
+    --text-2: #aab4c3;
+    --text-3: #7f8a9a;
+    --border: rgba(255, 255, 255, 0.11);
+    --accent: #cba6f7;
+    --green: #4ade80;
+    --yellow: #fbbf24;
+    --red: #fb7185;
+    --blue: #7dd3fc;
+    --radius: 24px;
+    --card-radius: 16px;
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+    --sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 1240px;
+    min-height: 1500px;
+    font-family: var(--sans);
+    color: var(--text);
+    background:
+      radial-gradient(900px 600px at 8% 0%, rgba(203, 166, 247, 0.16), transparent 60%),
+      radial-gradient(800px 600px at 100% 20%, rgba(125, 211, 252, 0.10), transparent 60%),
+      radial-gradient(700px 500px at 50% 100%, rgba(74, 222, 128, 0.07), transparent 60%),
+      linear-gradient(160deg, #0a0c11 0%, #07080b 45%, #05060a 100%);
+    padding: 36px 40px 44px;
+  }
+  .board-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  .board-head h1 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 650;
+    letter-spacing: 0.2px;
+  }
+  .board-head p {
+    margin: 6px 0 0;
+    color: var(--text-3);
+    font-size: 12px;
+  }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 9px;
+    border-radius: 999px;
+    border: 1px solid rgba(203, 166, 247, 0.28);
+    color: var(--accent);
+    background: rgba(203, 166, 247, 0.08);
+    font-size: 11px;
+    letter-spacing: 0.3px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 560px 560px;
+    gap: 26px 28px;
+  }
+  .col { min-width: 0; }
+  .caption {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0 0 9px 4px;
+    color: var(--text-2);
+    font-size: 12px;
+  }
+  .caption b {
+    color: var(--accent);
+    font-weight: 650;
+    letter-spacing: 0.4px;
+  }
+  .caption span { color: var(--text-3); }
+
+  .island {
+    position: relative;
+    width: 560px;
+    min-height: 660px;
+    padding: 16px 16px 14px;
+    border-radius: var(--radius);
+    background:
+      radial-gradient(circle at 14% -20%, rgba(203, 166, 247, 0.20), transparent 42%),
+      var(--panel);
+    border: 1px solid var(--border);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55), inset 0 1px rgba(255, 255, 255, 0.07);
+    backdrop-filter: blur(24px) saturate(125%);
+    overflow: hidden;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 2px 4px 12px;
+  }
+  .title-row { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .logo {
+    width: 26px; height: 26px; border-radius: 9px;
+    display: grid; place-items: center;
+    background: linear-gradient(145deg, rgba(203,166,247,.32), rgba(203,166,247,.10));
+    border: 1px solid rgba(203,166,247,.28);
+    font-size: 12px;
+  }
+  .title { font-size: 14px; font-weight: 650; letter-spacing: .1px; }
+  .sub { margin-top: 2px; font-size: 10.5px; color: var(--text-3); }
+  .header-right { display: flex; align-items: center; gap: 7px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 7px; border-radius: 999px;
+    background: rgba(255,255,255,.055);
+    border: 1px solid rgba(255,255,255,.08);
+    color: var(--text-2); font-size: 10px; white-space: nowrap;
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.purple { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .dot.yellow { background: var(--yellow); box-shadow: 0 0 8px var(--yellow); }
+  .inbox-badge {
+    position: relative;
+    width: 26px; height: 26px; border-radius: 9px;
+    display: grid; place-items: center;
+    background: rgba(251, 191, 36, 0.12);
+    border: 1px solid rgba(251, 191, 36, 0.30);
+    color: var(--yellow); font-size: 11px; font-weight: 700;
+  }
+  .inbox-badge::after {
+    content: "";
+    position: absolute; top: -2px; right: -2px;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--red); box-shadow: 0 0 8px var(--red);
+  }
+  .icon-btn {
+    width: 26px; height: 26px; border-radius: 8px;
+    display: grid; place-items: center;
+    color: var(--text-3); background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.06);
+    font-size: 12px;
+  }
+  .strip {
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 2px 12px;
+  }
+  .agent {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 9px; border-radius: 999px;
+    color: var(--text-3); font-size: 11px;
+    background: rgba(255,255,255,.035);
+    border: 1px solid transparent;
+  }
+  .agent.active {
+    color: var(--text);
+    background: rgba(203,166,247,.13);
+    border-color: rgba(203,166,247,.28);
+  }
+  .agent .mini { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .8; }
+
+  .section-label {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 4px 8px;
+  }
+  .section-label .label {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 11px; font-weight: 650; letter-spacing: .3px; color: var(--text-2);
+  }
+  .section-label .count {
+    min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px;
+    display: grid; place-items: center;
+    background: rgba(251,191,36,.14); color: var(--yellow);
+    font-size: 9.5px; font-weight: 700;
+  }
+  .section-label .link { font-size: 10px; color: var(--text-3); }
+  .accent-line { width: 2px; height: 11px; border-radius: 2px; background: var(--accent); opacity: .9; }
+
+  .queue { display: grid; gap: 6px; margin-bottom: 14px; }
+  .item {
+    display: grid;
+    grid-template-columns: 26px 1fr auto;
+    gap: 9px;
+    align-items: center;
+    padding: 9px 10px;
+    border-radius: 12px;
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(255,255,255,.06);
+  }
+  .item.hot {
+    background: rgba(251, 191, 36, 0.075);
+    border-color: rgba(251, 191, 36, 0.22);
+  }
+  .item .q-icon {
+    width: 26px; height: 26px; border-radius: 8px;
+    display: grid; place-items: center;
+    font-size: 11px;
+    background: rgba(255,255,255,.05);
+    color: var(--text-2);
+  }
+  .item.hot .q-icon { background: rgba(251,191,36,.14); color: var(--yellow); }
+  .item .q-title { font-size: 11.5px; font-weight: 600; }
+  .item .q-sub { margin-top: 2px; font-size: 10px; color: var(--text-3); }
+  .item .q-meta { text-align: right; font-size: 9.5px; color: var(--text-3); }
+  .risk {
+    display: inline-flex; align-items: center;
+    margin-top: 3px; padding: 1px 5px; border-radius: 4px;
+    font-size: 9px; color: var(--red);
+    background: rgba(251,113,133,.10);
+    border: 1px solid rgba(251,113,133,.18);
+  }
+  .risk.warn { color: var(--yellow); background: rgba(251,191,36,.10); border-color: rgba(251,191,36,.18); }
+
+  .card {
+    padding: 12px;
+    border-radius: var(--card-radius);
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: inset 0 1px rgba(255,255,255,.045);
+  }
+  .card + .card { margin-top: 9px; }
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-bottom: 9px;
+  }
+  .card-title { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; }
+  .verdict {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 7px; border-radius: 999px; font-size: 9.5px; font-weight: 650;
+    color: var(--yellow); background: rgba(251,191,36,.12);
+    border: 1px solid rgba(251,191,36,.24);
+  }
+  .verdict.red { color: var(--red); background: rgba(251,113,133,.11); border-color: rgba(251,113,133,.24); }
+  .verdict.green { color: var(--green); background: rgba(74,222,128,.10); border-color: rgba(74,222,128,.22); }
+  .receipt-summary {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 9px; border-radius: 10px;
+    background: var(--log);
+    border: 1px solid rgba(255,255,255,.05);
+    margin-bottom: 9px;
+  }
+  .files { font-size: 18px; font-weight: 700; letter-spacing: -.2px; }
+  .files small { font-size: 10px; font-weight: 500; color: var(--text-3); margin-left: 4px; }
+  .add { color: var(--green); font-size: 10.5px; font-weight: 650; }
+  .del { color: var(--red); font-size: 10.5px; font-weight: 650; margin-left: 1px; }
+  .receipt-meta { margin-left: auto; text-align: right; font-size: 9.5px; color: var(--text-3); line-height: 1.5; }
+  .checks { display: grid; gap: 4px; }
+  .check {
+    display: grid; grid-template-columns: 14px 1fr auto; gap: 6px; align-items: center;
+    font-size: 10.5px; color: var(--text-2);
+  }
+  .check .ok { color: var(--green); }
+  .check .warn { color: var(--yellow); }
+  .check .bad { color: var(--red); }
+  .check .t { color: var(--text-3); font-size: 9.5px; font-variant-numeric: tabular-nums; }
+  .check code { font-family: var(--mono); font-size: 9.5px; color: var(--text-3); }
+  .flags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+  .flag {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 6px; border-radius: 5px;
+    font-size: 9px; color: var(--yellow);
+    background: rgba(251,191,36,.08);
+    border: 1px solid rgba(251,191,36,.16);
+  }
+  .flag.red { color: var(--red); background: rgba(251,113,133,.08); border-color: rgba(251,113,133,.16); }
+  .claim {
+    display: flex; gap: 7px; align-items: flex-start;
+    margin-top: 9px; padding: 7px 8px; border-radius: 8px;
+    background: rgba(251,113,133,.055);
+    border: 1px solid rgba(251,113,133,.14);
+    font-size: 9.5px; color: #fecdd3; line-height: 1.5;
+  }
+  .claim b { color: #fda4af; font-weight: 650; }
+  .actions { display: flex; gap: 6px; margin-top: 10px; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    height: 27px; padding: 0 10px; border-radius: 8px;
+    font-size: 10.5px; font-weight: 600;
+    color: var(--text-2);
+    background: rgba(255,255,255,.045);
+    border: 1px solid rgba(255,255,255,.08);
+  }
+  .btn.primary {
+    color: #160b26;
+    background: linear-gradient(180deg, #d9baff, #cba6f7);
+    border-color: rgba(203,166,247,.55);
+    box-shadow: 0 6px 18px rgba(203,166,247,.18);
+  }
+  .btn.danger { color: #fecdd3; background: rgba(251,113,133,.10); border-color: rgba(251,113,133,.20); }
+  .btn.ghost { color: var(--text-3); background: transparent; }
+  .btn.grow { flex: 1; }
+
+  .footer {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 6px; margin-top: 12px; padding: 10px 2px 0;
+    border-top: 1px solid rgba(255,255,255,.06);
+  }
+  .footer .left { display: flex; gap: 5px; }
+  .fbtn {
+    padding: 5px 8px; border-radius: 7px;
+    font-size: 9.5px; color: var(--text-3);
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(255,255,255,.05);
+  }
+  .fbtn.strong { color: var(--text-2); }
+
+  /* Receipt detail */
+  .detail-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    padding: 2px 4px 12px; gap: 10px;
+  }
+  .detail-head h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: .1px; }
+  .detail-head .meta { margin-top: 4px; font-size: 10px; color: var(--text-3); line-height: 1.6; }
+  .stats-row {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px;
+    margin-bottom: 10px;
+  }
+  .stat {
+    padding: 8px 9px; border-radius: 10px;
+    background: var(--raised);
+    border: 1px solid rgba(255,255,255,.055);
+  }
+  .stat .k { font-size: 9px; color: var(--text-3); }
+  .stat .v { margin-top: 3px; font-size: 14px; font-weight: 700; letter-spacing: -.2px; }
+  .stat .v small { font-size: 9px; font-weight: 500; color: var(--text-3); margin-left: 2px; }
+  .block-title {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 11px 2px 6px;
+    font-size: 10px; font-weight: 650; color: var(--text-3); letter-spacing: .4px;
+  }
+  .file-list { display: grid; gap: 3px; }
+  .file {
+    display: grid; grid-template-columns: 1fr auto; gap: 8px;
+    padding: 5px 7px; border-radius: 6px;
+    font-family: var(--mono); font-size: 9.5px;
+    color: var(--text-2);
+    background: rgba(255,255,255,.025);
+  }
+  .file .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file .nums { font-variant-numeric: tabular-nums; }
+  .file .nums .a { color: var(--green); }
+  .file .nums .d { color: var(--red); }
+  .diff {
+    margin-top: 3px;
+    border-radius: 9px;
+    background: var(--log);
+    border: 1px solid rgba(255,255,255,.05);
+    overflow: hidden;
+    font-family: var(--mono);
+    font-size: 9px;
+    line-height: 1.65;
+  }
+  .diff-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 5px 8px;
+    color: var(--text-3); font-size: 9px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+    background: rgba(255,255,255,.02);
+  }
+  .diff-body { padding: 6px 0; }
+  .dline { display: grid; grid-template-columns: 22px 1fr; gap: 0; padding: 0 8px; white-space: pre; }
+  .dline .n { color: #4b5563; text-align: right; padding-right: 8px; user-select: none; }
+  .dline.add { background: rgba(74,222,128,.055); color: #bbf7d0; }
+  .dline.del { background: rgba(251,113,133,.055); color: #fecdd3; }
+  .dline.ctx { color: #8b98a9; }
+  .legend { display: flex; align-items: center; gap: 8px; font-size: 9px; color: var(--text-3); }
+
+  /* Approval */
+  .approval-card {
+    padding: 13px;
+    border-radius: 16px;
+    background:
+      linear-gradient(180deg, rgba(251,113,133,.075), rgba(31,37,46,.94) 38%),
+      var(--card);
+    border: 1px solid rgba(251,113,133,.22);
+    box-shadow: 0 10px 28px rgba(0,0,0,.28), inset 0 1px rgba(255,255,255,.05);
+  }
+  .approval-top {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 9px;
+  }
+  .approval-top .who { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 650; }
+  .severity {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 6px; border-radius: 999px;
+    font-size: 9px; font-weight: 650;
+    color: #fecdd3; background: rgba(251,113,133,.13);
+    border: 1px solid rgba(251,113,133,.25);
+  }
+  .cmd {
+    padding: 9px 10px;
+    border-radius: 9px;
+    background: #05070b;
+    border: 1px solid rgba(255,255,255,.075);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: #e2e8f0;
+    line-height: 1.5;
+    word-break: break-all;
+  }
+  .cmd .prompt { color: var(--accent); }
+  .cmd .arg { color: #fda4af; }
+  .context {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-top: 7px; font-size: 9.5px; color: var(--text-3);
+  }
+  .context b { color: var(--text-2); font-weight: 550; }
+  .risk-box {
+    margin-top: 9px; padding: 8px 9px; border-radius: 8px;
+    background: rgba(251,113,133,.055);
+    border: 1px solid rgba(251,113,133,.14);
+    font-size: 10px; color: #fecdd3; line-height: 1.55;
+  }
+  .risk-box b { color: #fda4af; }
+  .reason {
+    margin-top: 9px;
+    padding: 8px 9px;
+    border-radius: 8px;
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(255,255,255,.07);
+    font-size: 10px;
+    color: var(--text-3);
+    line-height: 1.55;
+  }
+  .reason .caret { color: var(--accent); }
+  .approval-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .approval-actions .btn { height: 28px; }
+  .sla {
+    display: flex; align-items: center; gap: 5px;
+    margin-top: 9px; font-size: 9px; color: var(--text-3);
+  }
+  .sla .bar { flex: 1; height: 3px; border-radius: 2px; background: rgba(255,255,255,.07); overflow: hidden; }
+  .sla .bar i { display: block; width: 58%; height: 100%; background: linear-gradient(90deg, var(--yellow), var(--red)); }
+
+  /* Digest */
+  .digest {
+    padding: 13px;
+    border-radius: 16px;
+    background:
+      radial-gradient(circle at 0% 0%, rgba(203,166,247,.14), transparent 50%),
+      var(--card);
+    border: 1px solid rgba(203,166,247,.22);
+  }
+  .digest h3 { margin: 0; font-size: 14px; font-weight: 650; }
+  .digest .sub { margin-top: 3px; font-size: 10px; color: var(--text-3); }
+  .digest-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 10px; }
+  .digest-stat {
+    padding: 8px; border-radius: 9px;
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(255,255,255,.06);
+  }
+  .digest-stat .n { font-size: 17px; font-weight: 700; letter-spacing: -.3px; }
+  .digest-stat .n.green { color: var(--green); }
+  .digest-stat .n.yellow { color: var(--yellow); }
+  .digest-stat .n.red { color: var(--red); }
+  .digest-stat .l { margin-top: 2px; font-size: 9px; color: var(--text-3); line-height: 1.4; }
+  .digest-list { display: grid; gap: 5px; margin-top: 10px; }
+  .digest-item {
+    display: grid; grid-template-columns: 18px 1fr auto; gap: 7px; align-items: center;
+    padding: 7px 8px; border-radius: 8px;
+    background: rgba(255,255,255,.03);
+    font-size: 10px;
+  }
+  .digest-item .ic { text-align: center; }
+  .digest-item .t { color: var(--text-2); }
+  .digest-item .m { color: var(--text-3); font-size: 9px; }
+  .digest-actions { display: flex; gap: 6px; margin-top: 10px; }
+
+  /* Protocol */
+  .quota {
+    display: grid; gap: 8px;
+    padding: 12px; border-radius: 14px;
+    background: var(--card);
+    border: 1px solid var(--border);
+  }
+  .quota-row { display: grid; grid-template-columns: 56px 1fr auto; gap: 9px; align-items: center; }
+  .quota-row .name { font-size: 10.5px; font-weight: 600; }
+  .quota-row .track { height: 5px; border-radius: 999px; background: rgba(255,255,255,.07); overflow: hidden; }
+  .quota-row .track i { display: block; height: 100%; border-radius: 999px; }
+  .quota-row .pct { font-size: 10px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+  .quota-row .reset { grid-column: 2 / 4; margin-top: -4px; font-size: 8.5px; color: var(--text-3); }
+  .code-card {
+    margin-top: 9px;
+    border-radius: 12px;
+    background: #05070b;
+    border: 1px solid rgba(255,255,255,.07);
+    overflow: hidden;
+  }
+  .code-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 9px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+    font-size: 9px; color: var(--text-3);
+  }
+  .code-body {
+    padding: 9px 10px;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    line-height: 1.7;
+    color: #cbd5e1;
+    white-space: pre-wrap;
+  }
+  .code-body .c { color: #64748b; }
+  .code-body .s { color: #86efac; }
+  .code-body .k { color: var(--accent); }
+  .protocol-note {
+    margin-top: 9px;
+    padding: 9px 10px;
+    border-radius: 10px;
+    background: rgba(125,211,252,.055);
+    border: 1px solid rgba(125,211,252,.14);
+    font-size: 9.5px;
+    color: #bae6fd;
+    line-height: 1.55;
+  }
+  .protocol-note b { color: #7dd3fc; }
+
+  .footnote {
+    margin-top: 26px;
+    color: var(--text-3);
+    font-size: 10px;
+    line-height: 1.7;
+  }
+  .footnote b { color: var(--text-2); font-weight: 550; }
+</style>
+</head>
+<body>
+  <header class="board-head">
+    <div>
+      <h1>Agent Island · 下一阶段概念稿</h1>
+      <p>不是已实现功能，而是用于讨论的产品提案。对应文档：2026-10-28-next-feature-proposal.md</p>
+    </div>
+    <span class="tag">CONCEPT · 2026-10-28</span>
+  </header>
+
+  <main class="grid">
+    <!-- A -->
+    <section class="col">
+      <div class="caption"><b>A</b> 展开态 <span>· 待你处理 + 本轮回执（岛内主视图）</span></div>
+      <div class="island">
+        <div class="header">
+          <div class="title-row">
+            <div class="logo">✳</div>
+            <div>
+              <div class="title">Claude Code</div>
+              <div class="sub">会话 7f3a2c1e · 已确认 · feat/session-refresh</div>
+            </div>
+          </div>
+          <div class="header-right">
+            <span class="pill"><i class="dot purple"></i>4m12s</span>
+            <div class="inbox-badge" title="3 件待处理">3</div>
+            <div class="icon-btn">⌄</div>
+          </div>
+        </div>
+
+        <div class="strip">
+          <span class="agent active"><i class="mini"></i>Claude Code</span>
+          <span class="agent"><i class="mini"></i>Codex CLI</span>
+          <span class="agent"><i class="mini"></i>OpenCode</span>
+          <span class="agent"><i class="mini"></i>Hermes</span>
+        </div>
+
+        <div class="section-label">
+          <span class="label"><i class="accent-line"></i>待你处理 <span class="count">3</span></span>
+          <span class="link">只看高风险</span>
+        </div>
+        <div class="queue">
+          <div class="item hot">
+            <div class="q-icon">⚠</div>
+            <div>
+              <div class="q-title">需要审批 · Bash</div>
+              <div class="q-sub"><code>npm run migrate -- --production</code></div>
+            </div>
+            <div class="q-meta">12s<br /><span class="risk">高风险</span></div>
+          </div>
+          <div class="item">
+            <div class="q-icon">?</div>
+            <div>
+              <div class="q-title">Codex 在问你</div>
+              <div class="q-sub">用 Postgres 还是 SQLite？</div>
+            </div>
+            <div class="q-meta">1m<br /><span class="risk warn">等待</span></div>
+          </div>
+          <div class="item">
+            <div class="q-icon" style="color: var(--yellow)">!</div>
+            <div>
+              <div class="q-title">完成了，但 lint 有 1 个 warning</div>
+              <div class="q-sub">6 文件 · test 42 passed</div>
+            </div>
+            <div class="q-meta">3m</div>
+          </div>
+        </div>
+
+        <div class="section-label">
+          <span class="label"><i class="accent-line"></i>本轮回执</span>
+          <span class="link">全部回执 →</span>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">✓ 有证据，但有风险</div>
+            <span class="verdict">需人工确认</span>
+          </div>
+          <div class="receipt-summary">
+            <div>
+              <div class="files">6<small>文件</small></div>
+              <div><span class="add">+184</span> <span class="del">−32</span></div>
+            </div>
+            <div class="receipt-meta">
+              $0.42 · 18.2k tokens<br />
+              4m12s · 2 次审批
+            </div>
+          </div>
+          <div class="checks">
+            <div class="check"><span class="ok">✓</span><span>typecheck</span><span class="t">2.1s</span></div>
+            <div class="check"><span class="ok">✓</span><span>test · 42 passed</span><span class="t">8.4s</span></div>
+            <div class="check"><span class="warn">!</span><span>lint · 1 warning</span><span class="t">1.2s</span></div>
+          </div>
+          <div class="flags">
+            <span class="flag red">⚠ 删除 1 个测试文件</span>
+            <span class="flag">触碰 migrations/</span>
+          </div>
+          <div class="claim">
+            <span>⚑</span>
+            <span><b>声明不一致：</b>Agent 说「没有改数据库」，但发现新增 migration。需要人工确认这是不是有意为之。</span>
+          </div>
+          <div class="actions">
+            <button class="btn primary grow">通过</button>
+            <button class="btn grow">让 Agent 修</button>
+            <button class="btn ghost">回滚</button>
+          </div>
+        </div>
+
+        <div class="footer">
+          <div class="left">
+            <span class="fbtn strong">总览</span>
+            <span class="fbtn">目录</span>
+            <span class="fbtn">终端</span>
+            <span class="fbtn">跳回</span>
+          </div>
+          <div class="left">
+            <span class="fbtn">停止</span>
+            <span class="fbtn">设置</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- B -->
+    <section class="col">
+      <div class="caption"><b>B</b> 回执详情 <span>· 一眼看懂「改了什么、是否真的通过」</span></div>
+      <div class="island">
+        <div class="detail-head">
+          <div>
+            <h2>任务回执</h2>
+            <div class="meta">Claude Code · 7f3a2c1e · feat/session-refresh<br />2026-10-28 17:42:06 → 17:46:18 · 回合 #18</div>
+          </div>
+          <span class="verdict">需人工确认</span>
+        </div>
+
+        <div class="stats-row">
+          <div class="stat"><div class="k">改动</div><div class="v">6 <small>文件</small></div></div>
+          <div class="stat"><div class="k">检查</div><div class="v">2/3 <small>通过</small></div></div>
+          <div class="stat"><div class="k">花费</div><div class="v">$0.42</div></div>
+        </div>
+
+        <div class="block-title"><span>检查</span><span>2 通过 · 1 警告 · 0 失败</span></div>
+        <div class="card" style="padding: 9px 10px;">
+          <div class="checks">
+            <div class="check"><span class="ok">✓</span><span>typecheck <code>tsc --noEmit</code></span><span class="t">2.1s · exit 0</span></div>
+            <div class="check"><span class="ok">✓</span><span>test <code>vitest run</code></span><span class="t">8.4s · 42 passed</span></div>
+            <div class="check"><span class="warn">!</span><span>lint <code>eslint .</code></span><span class="t">1.2s · 1 warning</span></div>
+          </div>
+        </div>
+
+        <div class="block-title"><span>改动文件</span><span>+184 −32</span></div>
+        <div class="file-list">
+          <div class="file"><span class="path">src/auth/session.ts</span><span class="nums"><span class="a">+96</span> <span class="d">−12</span></span></div>
+          <div class="file"><span class="path">src/auth/refresh.ts</span><span class="nums"><span class="a">+54</span> <span class="d">−0</span></span></div>
+          <div class="file"><span class="path">migrations/20261028_add_refresh_token.sql</span><span class="nums"><span class="a">+18</span> <span class="d">−0</span></span></div>
+          <div class="file"><span class="path">tests/auth/session.test.ts</span><span class="nums"><span class="d">−14</span></span></div>
+          <div class="file"><span class="path">package.json</span><span class="nums"><span class="a">+4</span> <span class="d">−2</span></span></div>
+          <div class="file"><span class="path">pnpm-lock.yaml</span><span class="nums"><span class="a">+12</span> <span class="d">−4</span></span></div>
+        </div>
+
+        <div class="block-title"><span>关键 diff</span><span class="legend"><span style="color: var(--green)">+ 新增</span><span style="color: var(--red)">− 删除</span></span></div>
+        <div class="diff">
+          <div class="diff-head"><span>src/auth/session.ts</span><span>+96 −12</span></div>
+          <div class="diff-body">
+            <div class="dline ctx"><span class="n">41</span><span>  export async function currentSession(token: Token) {</span></div>
+            <div class="dline del"><span class="n">42</span><span>-   if (token.expired) return null;</span></div>
+            <div class="dline add"><span class="n">42</span><span>+   if (token.expired) {</span></div>
+            <div class="dline add"><span class="n">43</span><span>+     await refreshToken(token);</span></div>
+            <div class="dline add"><span class="n">44</span><span>+     return getSession(token);</span></div>
+            <div class="dline add"><span class="n">45</span><span>+   }</span></div>
+            <div class="dline ctx"><span class="n">46</span><span>    return decode(token);</span></div>
+          </div>
+        </div>
+
+        <div class="claims" style="margin-top: 9px; display: grid; gap: 5px;">
+          <div class="claim" style="margin-top: 0;"><span>⚠</span><span><b>“没有改数据库”</b> → 新增 migration，需确认。</span></div>
+          <div class="claim" style="margin-top: 0; background: rgba(251,191,36,.055); border-color: rgba(251,191,36,.14); color: #fde68a;"><span>!</span><span><b>“全部测试通过”</b> → 找到 42 passed 证据，但删除了 1 个测试文件，覆盖范围可能变小。</span></div>
+        </div>
+
+        <div class="actions">
+          <button class="btn primary grow">通过并标记已验证</button>
+          <button class="btn grow">让 Agent 修</button>
+          <button class="btn ghost">导出回执</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- C -->
+    <section class="col">
+      <div class="caption"><b>C</b> 例外控制台 <span>· 审批 2.0：风险、diff、拒绝并说明</span></div>
+      <div class="island">
+        <div class="header">
+          <div class="title-row">
+            <div class="logo" style="background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.28);">⚠</div>
+            <div>
+              <div class="title">需要审批</div>
+              <div class="sub">Claude Code · 会话 7f3a2c1e · 已等待 2m14s</div>
+            </div>
+          </div>
+          <span class="severity">● 高风险</span>
+        </div>
+
+        <div class="approval-card">
+          <div class="approval-top">
+            <div class="who"><span style="color: var(--accent)">Bash</span> · 生产环境迁移</div>
+            <span class="severity">不可逆</span>
+          </div>
+          <div class="cmd"><span class="prompt">$</span> npm run migrate <span class="arg">-- --production</span></div>
+          <div class="context">
+            <span>目录 <b>D:\work\acme-api</b></span>
+            <span>分支 <b>main</b></span>
+            <span>来源 <b>本轮 turn #18</b></span>
+          </div>
+          <div class="risk-box">
+            <b>为什么高风险：</b>命令包含 <b>--production</b>，会连接生产数据库并执行不可逆的 schema 变更。本轮 diff 里还新增了 <b>migrations/</b>，通常需要先在 staging 验证。
+          </div>
+          <div class="reason">
+            <span class="caret">拒绝理由（会回传给 Agent）</span><br />
+            不要直接动 production。先在 staging 跑一遍，把结果贴给我，再决定。
+          </div>
+          <div class="approval-actions">
+            <button class="btn danger">拒绝</button>
+            <button class="btn" style="flex: 1;">拒绝并说明…</button>
+            <button class="btn">允许一次</button>
+            <button class="btn">允许 10 分钟</button>
+          </div>
+          <div class="sla">
+            <span>等待 2m14s</span>
+            <span class="bar"><i></i></span>
+            <span>5m 后升级</span>
+          </div>
+        </div>
+
+        <div class="section-label" style="margin-top: 14px;">
+          <span class="label"><i class="accent-line"></i>同批还有 2 条</span>
+          <span class="link">批准全部低风险</span>
+        </div>
+        <div class="queue">
+          <div class="item">
+            <div class="q-icon">✓</div>
+            <div>
+              <div class="q-title">Bash · <code>npm test</code></div>
+              <div class="q-sub">只读测试 · 低风险</div>
+            </div>
+            <div class="q-meta">2m<br /><span class="risk warn">低风险</span></div>
+          </div>
+          <div class="item">
+            <div class="q-icon">✎</div>
+            <div>
+              <div class="q-title">Edit · <code>src/auth/session.ts</code></div>
+              <div class="q-sub">+18 −4 · 触碰认证逻辑</div>
+            </div>
+            <div class="q-meta">1m<br /><span class="risk warn">中风险</span></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top: 12px;">
+          <div class="card-head">
+            <div class="card-title">学到一条规则</div>
+            <span class="verdict green">建议</span>
+          </div>
+          <div style="font-size: 10px; color: var(--text-2); line-height: 1.6;">
+            过去 7 天你批准了 <b style="color: var(--text)">12 次</b> <code style="font-family: var(--mono)">npm test</code>，平均决策 1.8s。
+            要不要以后自动允许 <code style="font-family: var(--mono); color: var(--accent)">npm test *</code>？
+          </div>
+          <div class="actions">
+            <button class="btn primary grow">添加规则</button>
+            <button class="btn ghost">先不了</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- D -->
+    <section class="col">
+      <div class="caption"><b>D</b> 岛协议 + 配额钱包 <span>· 任何 Agent 都能「叫到人」</span></div>
+      <div class="island">
+        <div class="detail-head">
+          <div>
+            <h2>配额钱包</h2>
+            <div class="meta">跨 Agent 的额度、重置与花费 · 只读本地数据</div>
+          </div>
+          <span class="pill"><i class="dot"></i>实时</span>
+        </div>
+
+        <div class="quota">
+          <div class="quota-row">
+            <span class="name">Claude</span>
+            <span class="track"><i style="width: 82%; background: linear-gradient(90deg, #fbbf24, #fb7185);"></i></span>
+            <span class="pct">82%</span>
+            <span class="reset">5h 窗口 · 1h12m 后重置 · 预计 18 分钟后耗尽</span>
+          </div>
+          <div class="quota-row">
+            <span class="name">Codex</span>
+            <span class="track"><i style="width: 64%; background: linear-gradient(90deg, #cba6f7, #7dd3fc);"></i></span>
+            <span class="pct">64%</span>
+            <span class="reset">week 窗口 · 3d 后重置</span>
+          </div>
+          <div class="quota-row">
+            <span class="name">今日</span>
+            <span class="track"><i style="width: 34%; background: linear-gradient(90deg, #4ade80, #fbbf24);"></i></span>
+            <span class="pct">$6.80</span>
+            <span class="reset">预算 $20 · 剩余 $13.20</span>
+          </div>
+        </div>
+
+        <div class="block-title" style="margin-top: 14px;"><span>接力建议</span><span>可编辑，不自动发送</span></div>
+        <div class="card">
+          <div style="font-size: 11px; line-height: 1.6; color: var(--text-2);">
+            Claude 的 5 小时窗口预计 <b style="color: var(--yellow)">18 分钟后耗尽</b>。把这个任务交给 Codex？
+          </div>
+          <div style="margin-top: 7px; font-size: 9.5px; color: var(--text-3); line-height: 1.7;">
+            将带上：任务摘要 · 6 个改动文件 · 失败检查 · 3 条关键决定<br />
+            <span style="color: var(--green)">不包含</span>：完整对话 / 凭据 / .env
+          </div>
+          <div class="actions">
+            <button class="btn primary grow">预览交接包</button>
+            <button class="btn">交给 Codex</button>
+          </div>
+        </div>
+
+        <div class="block-title" style="margin-top: 14px;"><span>岛协议</span><span>localhost · token 鉴权</span></div>
+        <div class="code-card">
+          <div class="code-head"><span>任意脚本 / Agent</span><span>island CLI</span></div>
+          <div class="code-body"><span class="c"># 通知</span>
+<span class="k">island</span> notify <span class="s">"构建完成"</span> --level done
+
+<span class="c"># 问人（阻塞直到回答 / 超时）</span>
+<span class="k">island</span> ask <span class="s">"用 Postgres 还是 SQLite？"</span> \
+  --schema choice.json
+
+<span class="c"># 请求审批</span>
+<span class="k">island</span> approve <span class="s">"npm run deploy"</span> \
+  --cwd . --reason <span class="s">"发布到 staging"</span></div>
+        </div>
+        <div class="protocol-note">
+          <b>为什么这是护城河：</b>一旦第三方 Agent / 脚本把「问人」接到岛上，岛就从监控工具变成基础设施。协议公开，但人的注意力是独占的。
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <p class="footnote">
+    <b>读法：</b>四张图分别对应提案里的 P0-1（A、B）、P0-2（A）、P0-3（C）、P1-5 / P1-6（D）。<br />
+    <b>边界：</b>这些是概念稿，未接入真实数据；颜色、文案、布局都还会在实现时按现有 token 与视觉回归调整。
+  </p>
+</body>
+</html>
