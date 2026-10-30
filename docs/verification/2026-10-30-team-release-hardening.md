@@ -56,6 +56,15 @@
 
 即：NSIS/MSI 已产出，但 **updater 签名产物没有生成**。当前安装包也都没有 Authenticode 签名。发布自动更新前必须提供签名私钥并重新构建；这是发布 blocker，不是团队功能失败。
 
+补充核对：本机其实已有配对密钥：
+
+- 私钥：`C:\Users\LENOVO\.tauri\agent-island.key`
+- 公钥：`C:\Users\LENOVO\.tauri\agent-island.key.pub`
+- 公钥内容与 `tauri.conf.json` 的 `plugins.updater.pubkey` 完全一致（minisign key id `B48CEA496C22F38F`）
+- 构建失败的直接原因是**构建 shell 没有设置 `TAURI_SIGNING_PRIVATE_KEY` / 密码**，不是密钥丢失
+
+因此不要重新生成密钥；设置已有密钥和密码后重跑构建即可。若密码确实丢失，才需要轮换密钥并接受老客户端不能自动升级的迁移成本。
+
 ## 干净机器验收清单（未执行）
 
 以下项目需要一台干净的 Windows 11 x64 虚拟机；本次没有执行，不能标记为已通过：
@@ -85,5 +94,5 @@
 
 - 团队页/团队条的关键视觉状态已有可回归基线，21 个视觉用例通过。
 - 1.9.1 NSIS/MSI 可构建、MSI 可非破坏性展开、release exe 可启动。
-- 安装包未签名，updater 私钥缺失导致 `tauri build` 退出码 1；这是发布前必须解决的 blocker。
+- 安装包未签名；构建环境没有提供 updater 私钥/密码，导致 `tauri build` 退出码 1。本机已有与配置匹配的密钥，下一步是设置环境变量后重跑并确认 `.sig`，不需要生成新密钥。
 - 干净机器安装、混合 DPI、多显示器、原生 WebView2 均**未验证**，不能写成已通过。
