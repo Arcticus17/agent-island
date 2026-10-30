@@ -2,7 +2,7 @@
 
 一个常驻 Windows 桌面的“Agent 灵动岛”：一眼看到正在运行的 AI 编程 Agent，并直接在桌面上控制它们。
 
-**当前状态**：v1.9.2 测试版（更新签名密钥已轮换）。安装包已发布，但在完成干净环境、混合 DPI、多显示器与安装/卸载验收前不宣称正式支持，详见[公开发布适配门槛](docs/verification/public-release-compatibility.md)与[发布记录](docs/verification/2026-09-30-v1.9.0-release.md)。
+**当前状态**：v1.9.4 测试版（更新签名密钥已轮换）。安装包已发布，但在完成干净环境、混合 DPI、多显示器与安装/卸载验收前不宣称正式支持，详见[公开发布适配门槛](docs/verification/public-release-compatibility.md)与[发布记录](docs/verification/2026-09-30-v1.9.0-release.md)。
 
 ## 目录
 
@@ -57,11 +57,11 @@
 | `Agent.Island_<version>_x64-setup.exe` | Windows 安装器（NSIS） |
 | `Agent.Island_<version>_en-US.msi` | MSI 安装包 |
 
-`<version>` 指当前发布版本号，例如 `Agent.Island_1.9.2_x64-setup.exe`。安装后直接运行 `Agent Island` 即可。
+`<version>` 指当前发布版本号，例如 `Agent.Island_1.9.4_x64-setup.exe`。安装后直接运行 `Agent Island` 即可。
 
 ## 发布与验收
 
-仓库当前版本为 1.9.2（更新签名密钥轮换版本），已发布 [Release v1.9.2](https://github.com/Arcticus17/agent-island/releases/tag/v1.9.2)，安装包由 GitHub Actions 自动构建并发布。1.9.1 及更早版本使用旧更新密钥，不能自动升级到 1.9.2，需要手动重装；1.9.2 之后恢复自动更新。按[公开发布适配门槛](docs/verification/public-release-compatibility.md)口径，在完成干净环境、混合 DPI、多显示器与安装/卸载验收前仍属**测试版**。
+仓库当前版本为 1.9.4（修复展开态最小宽度与边界闪烁），已发布 [Release v1.9.4](https://github.com/Arcticus17/agent-island/releases/tag/v1.9.4)，安装包由 GitHub Actions 自动构建并发布。1.9.1 及更早版本使用旧更新密钥，不能自动升级，需要手动重装 1.9.2 或更新版本；1.9.2 之后恢复自动更新。按[公开发布适配门槛](docs/verification/public-release-compatibility.md)口径，在完成干净环境、混合 DPI、多显示器与安装/卸载验收前仍属**测试版**。
 
 本项目面向其他用户分发，不应依赖开发者本机环境。门槛清单覆盖干净系统、普通权限、中文/空格路径、CLI 安装方式、混合 DPI、多屏和升级卸载；未实测的系统与架构不列为已支持。实测记录见 [docs/verification/](docs/verification/)，索引在 [验证记录索引](docs/verification/README.md)。
 

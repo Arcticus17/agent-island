@@ -5,7 +5,7 @@
 
 | 日期 | 主题 | 标题 |
 | --- | --- | --- |
-| 2026-10-30 | [team-release-hardening](2026-10-30-team-release-hardening.md) | 团队编排发布前硬化：团队视觉基线、1.9.2 安装包/新更新密钥、干净机器/DPI 未验声明 |
+| 2026-10-30 | [team-release-hardening](2026-10-30-team-release-hardening.md) | 团队编排发布前硬化：视觉基线、1.9.2→1.9.4 密钥/缩放修复、VM DPI 验收 |
 | 2026-10-30 | [team-orchestration-spike](2026-10-30-team-orchestration-spike.md) | 团队编排第一步：Claude 规划 / 审批 / 重试 / 进程归属与真实端到端 |
 | 2026-10-29 | [notch-island-and-receipt](2026-10-29-notch-island-and-receipt.md) | 主岛「贴边刘海 + 工作回执」：纯图标折叠态与新窗口几何 |
 | 2026-10-30 | [detection-driven-agents](2026-10-30-detection-driven-agents.md) | 发现驱动：PATH 上已有的 Agent 自动参与快照，自动发现默认不进岛 |
