@@ -160,6 +160,12 @@ pub(crate) fn create(
     })
 }
 
+pub(crate) fn branch_tip(root: &Path, branch: &str) -> Result<String, String> {
+    let reference = format!("{branch}^{{commit}}");
+    git(root, &["rev-parse", "--verify", reference.as_str()])
+        .map_err(|error| format!("读取依赖分支失败：{error}"))
+}
+
 /// 把 worker 留下的改动提交到任务分支，并返回文件清单/统计。
 pub(crate) fn finalize(
     worktree: &TaskWorktree,
@@ -405,6 +411,37 @@ mod tests {
         assert_eq!(task_branch("team-1", "t1"), "agent-island/team-1/t1");
         assert!(task_branch("team 1", "任务/一").starts_with("agent-island/team-1/task-"));
         assert!(task_branch("run", "a".repeat(80).as_str()).chars().count() < 60);
+    }
+
+    #[test]
+    fn dependent_worktree_sees_the_dependency_and_merges_in_order() {
+        let repo_dir = temp_repo("chain");
+        let repo = detect(&repo_dir).unwrap();
+        let first = create(&repo, "run-chain", "task-a").unwrap();
+        fs::write(first.path.join("a.txt"), "a\n").unwrap();
+        let first_changes = finalize(&first, "add a").unwrap();
+        assert_eq!(first_changes.files, vec!["a.txt"]);
+
+        let tip = branch_tip(&repo.root, &first.branch).unwrap();
+        let mut repo_after = detect(&repo_dir).unwrap();
+        repo_after.head = tip.clone();
+        let second = create(&repo_after, "run-chain", "task-b").unwrap();
+        assert_eq!(second.base_commit, tip);
+        assert!(
+            second.path.join("a.txt").exists(),
+            "依赖任务应该看到前一个任务的改动"
+        );
+        fs::write(second.path.join("b.txt"), "b\n").unwrap();
+        let second_changes = finalize(&second, "add b").unwrap();
+        assert_eq!(second_changes.files, vec!["b.txt"]);
+
+        merge(&repo_after.root, &first.branch).unwrap();
+        merge(&repo_after.root, &second.branch).unwrap();
+        assert!(repo_dir.join("a.txt").exists());
+        assert!(repo_dir.join("b.txt").exists());
+        cleanup_after_merge(&repo_after.root, &first.path);
+        cleanup_after_merge(&repo_after.root, &second.path);
+        let _ = fs::remove_dir_all(&repo_dir);
     }
 
     #[test]

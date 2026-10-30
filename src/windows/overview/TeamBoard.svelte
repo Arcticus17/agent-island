@@ -226,6 +226,50 @@
     );
   }
 
+  function planTaskName(id: string): string {
+    return planTasks.find((task) => task.id === id)?.title || id;
+  }
+
+  function taskTitle(value: TeamRun | null, id: string): string {
+    return value?.tasks.find((task) => task.id === id)?.title || id;
+  }
+
+  function dependencyBlocker(task: TeamTask, value: TeamRun): string | null {
+    for (const dependencyId of task.dependsOn) {
+      const dependency = value.tasks.find((candidate) => candidate.id === dependencyId);
+      if (!dependency) return `依赖任务不存在：${dependencyId}`;
+      if (dependency.state !== "succeeded") return `依赖任务还没成功：${dependency.title}`;
+      if (dependency.mergeState === "discarded") {
+        return `依赖任务已丢弃，无法合并：${dependency.title}`;
+      }
+      if (dependency.changedFiles.length > 0 && dependency.mergeState !== "merged") {
+        return `先合并依赖任务：${dependency.title}`;
+      }
+    }
+    return null;
+  }
+
+  function dependentTasks(task: TeamTask, value: TeamRun): TeamTask[] {
+    const ids = new Set<string>([task.id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const candidate of value.tasks) {
+        if (ids.has(candidate.id)) continue;
+        if (candidate.dependsOn.some((dependency) => ids.has(dependency))) {
+          ids.add(candidate.id);
+          changed = true;
+        }
+      }
+    }
+    return value.tasks.filter((candidate) => candidate.id !== task.id && ids.has(candidate.id));
+  }
+
+  function discardLabel(task: TeamTask, value: TeamRun): string {
+    const count = dependentTasks(task, value).length;
+    return count > 0 ? `确认丢弃（含 ${count} 个后续任务）` : "确认丢弃改动";
+  }
+
   function openFollowup(): void {
     if (!run) return;
     followupInstruction = "";
@@ -560,7 +604,7 @@
               <input bind:value={task.acceptance} />
             </label>
             {#if task.depends_on.length > 0}
-              <p class="depends">依赖：{task.depends_on.join("、")}</p>
+              <p class="depends">依赖：{task.depends_on.map(planTaskName).join(" → ")}</p>
             {/if}
           </article>
         {/each}
@@ -582,6 +626,9 @@
               <span class="meta">{taskElapsed(task)}</span>
             </div>
             {#if task.error}<p class="task-error">{task.error}</p>{/if}
+            {#if task.dependsOn.length > 0}
+              <p class="depends">依赖：{task.dependsOn.map((id) => taskTitle(run, id)).join(" → ")}</p>
+            {/if}
             {#if task.state === "waiting_approval"}
               <p class="waiting" role="status">
                 等待在小岛上确认：<code>{task.pendingApproval ?? "危险命令"}</code>
@@ -609,7 +656,9 @@
             {#if task.mergeError}<p class="task-error">{task.mergeError}</p>{/if}
             {#if task.mergeState === "pending" && task.changedFiles.length > 0}
               <div class="merge-actions">
-                {#if task.state === "succeeded" && !activePhases.includes(run.phase)}
+                {#if task.state === "succeeded" && !activePhases.includes(run.phase) && dependencyBlocker(task, run)}
+                  <span class="hint">{dependencyBlocker(task, run)}</span>
+                {:else if task.state === "succeeded" && !activePhases.includes(run.phase)}
                   <button class="primary" type="button" disabled={taskBusy === task.id} onclick={() => void mergeTask(task)}>
                     {mergeArmed === task.id ? "确认合并到主工作区" : "合并"}
                   </button>
@@ -618,21 +667,30 @@
                 {:else}
                   <span class="hint">任务未成功；改动保留在分支，可查看或丢弃。</span>
                 {/if}
+                {#if dependentTasks(task, run).length > 0}
+                  <span class="hint">丢弃会级联 {dependentTasks(task, run).length} 个后续任务</span>
+                {/if}
                 <button class="ghost" type="button" disabled={taskBusy === task.id} onclick={() => void discardTask(task)}>
-                  {discardArmed === task.id ? "确认丢弃改动" : "丢弃改动"}
+                  {discardArmed === task.id ? discardLabel(task, run) : "丢弃改动"}
                 </button>
               </div>
             {:else if task.worktreePath && task.mergeState === "none" && task.state !== "running" && task.state !== "waiting_approval"}
               <div class="merge-actions">
                 <span class="hint">这个任务没有可合并的改动；可以清理 worktree。</span>
                 <button class="ghost" type="button" disabled={taskBusy === task.id} onclick={() => void discardTask(task)}>
-                  {discardArmed === task.id ? "确认清理 worktree" : "清理 worktree"}
+                  {discardArmed === task.id
+                    ? (dependentTasks(task, run).length > 0
+                      ? `确认清理（含 ${dependentTasks(task, run).length} 个后续任务）`
+                      : "确认清理 worktree")
+                    : "清理 worktree"}
                 </button>
               </div>
             {:else if task.mergeState === "conflict"}
               <div class="merge-actions">
                 <span class="hint">合并冲突已 abort；分支和 worktree 保留，可手动处理或丢弃。</span>
-                <button class="ghost" type="button" disabled={taskBusy === task.id} onclick={() => void discardTask(task)}>丢弃改动</button>
+                <button class="ghost" type="button" disabled={taskBusy === task.id} onclick={() => void discardTask(task)}>
+                  {discardArmed === task.id ? discardLabel(task, run) : "丢弃改动"}
+                </button>
               </div>
             {/if}
             {#if task.log.length > 0}

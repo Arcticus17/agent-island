@@ -187,7 +187,7 @@ Bash  od -c ".../E2E_OK.txt"
 
 主岛团队条与 `open_team` 已在真实 WebView2 里验证：运行中显示进度/待审批，点击后总览切到团队页。
 
-回归：Rust 258 通过（4 个 live 默认忽略）、浏览器 152 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
+回归：Rust 262 通过（4 个 live 默认忽略）、浏览器 155 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
 
 ## 13. worktree 隔离（第三步）
 
@@ -201,7 +201,7 @@ Bash  od -c ".../E2E_OK.txt"
 6. 文件路径边界：worker 的 Edit/Write 走 PreToolUse 校验，只允许落在自己的 worktree 内；绝对路径、`..` 逃逸会被 deny。单测覆盖 inside / `../outside` / 绝对 outside。
 7. 冲突：两个同基任务改同一文件时，第二个 merge 失败并 abort，主工作区分支保留；单测覆盖。
 
-worktree 合并是手动的，不自动合并。任务必须互不依赖（worktree 都从同一个 HEAD 创建，依赖任务会基于旧代码，已在生成/确认两处明确拒绝）。
+worktree 合并是手动的，不自动合并。第三步时任务必须互不依赖；第六步已支持单依赖线性链，见第 16 节。
 
 ## 14. 独立任务并行（第四步）
 
@@ -223,9 +223,22 @@ worktree 合并是手动的，不自动合并。任务必须互不依赖（workt
 4. 上一轮还有 `pending/conflict` 合并时，「再来一轮」被禁用并提示先合并或丢弃；浏览器测试覆盖。
 5. 新计划仍然要先预览、确认；不会直接派发。
 
-## 16. 下一步
+## 16. 线性依赖链（第六步）
+
+真实 git 仓库，一轮两个任务：A（创建 A.txt）→ B（读取 A.txt 后创建 B.txt，`depends_on: ["a"]`），并发 2：
+
+1. A 先执行；A 成功后 B 才启动，B 的 `baseCommit` **正好等于 A 分支 tip**（`git rev-parse` 对比相等）。
+2. B 的 worktree 能看到 A.txt；B 的 `changedFiles` 只有 B.txt，diff 不包含 A 的改动。
+3. B 先合并被拒绝：`先合并依赖任务：Create A`；A 合并后 B 才能合并。
+4. 最终主工作区 A、B 内容分别为 `A`、`B`，`git status` 干净；团队页显示「依赖：Create A」。
+5. 计划校验单测覆盖：线性链/并行根通过；分叉（一个任务被两个任务依赖）和多依赖被拒绝；worktree 单测覆盖链式基点、B 能看到 A、按 A→B 合并。
+6. 丢弃级联由单测/浏览器测试覆盖：丢弃 A 会级联丢弃 B，并提示确认；依赖执行中的任务时拒绝丢弃。
+
+当前只支持**单依赖、线性链**，不支持一个任务依赖多个任务或分叉；通用 DAG 留到以后。
+
+## 17. 下一步
 
 1. Codex 适配器（等后端可达后再验收）、自定义 Agent 的 dispatch 模板。
 2. 视觉回归基线、混合 DPI、多显示器与安装包验收。
-3. 可选：自动合并策略、失败任务改派、依赖任务（需要链式 worktree）。
+3. 可选：自动合并策略、失败任务改派、通用 DAG。
 

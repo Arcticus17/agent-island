@@ -403,4 +403,89 @@ describe("team board", () => {
     await waitFor(() => target.textContent?.includes("先合并或丢弃") === true);
     expect(target.querySelector('[data-testid="team-followup"]')).toBeNull();
   });
+
+  it("shows a dependency and blocks the dependent merge until it is merged", async () => {
+    const initial = run({
+      phase: "succeeded",
+      tasks: [
+        task({
+          id: "a",
+          title: "A",
+          state: "succeeded",
+          branch: "agent-island/team-1/a",
+          changedFiles: ["a.txt"],
+          mergeState: "pending",
+        }),
+        task({
+          id: "b",
+          title: "B",
+          dependsOn: ["a"],
+          state: "succeeded",
+          branch: "agent-island/team-1/b",
+          changedFiles: ["b.txt"],
+          mergeState: "pending",
+        }),
+      ],
+    });
+    const target = await render(harness(initial).bridge);
+    await waitFor(() => target.textContent?.includes("先合并依赖任务：A") === true);
+    const articles = [...target.querySelectorAll<HTMLElement>("article.task")];
+    const dependent = articles.find(
+      (article) => article.querySelector(".task-line strong")?.textContent?.trim() === "B",
+    )!;
+    expect(dependent.textContent).toContain("依赖：A");
+    const mergeButtons = [...dependent.querySelectorAll<HTMLButtonElement>("button")].filter(
+      (button) => button.textContent?.trim() === "合并",
+    );
+    expect(mergeButtons).toHaveLength(0);
+  });
+
+  it("shows chain dependencies in the plan preview", async () => {
+    const initial = run({
+      phase: "awaiting_plan",
+      tasks: [
+        task({ id: "a", title: "任务 A", state: "queued" }),
+        task({ id: "b", title: "任务 B", state: "queued", dependsOn: ["a"] }),
+      ],
+    });
+    const target = await render(harness(initial).bridge);
+    await waitFor(() => target.textContent?.includes("依赖：任务 A") === true);
+  });
+
+  it("warns that discarding a dependency cascades to its chain", async () => {
+    const initial = run({
+      phase: "failed",
+      tasks: [
+        task({
+          id: "a",
+          title: "A",
+          state: "succeeded",
+          branch: "agent-island/team-1/a",
+          worktreePath: "C:\\worktrees\\a",
+          changedFiles: ["a.txt"],
+          mergeState: "pending",
+        }),
+        task({
+          id: "b",
+          title: "B",
+          dependsOn: ["a"],
+          state: "failed",
+          branch: "agent-island/team-1/b",
+          worktreePath: "C:\\worktrees\\b",
+          changedFiles: ["b.txt"],
+          mergeState: "pending",
+        }),
+      ],
+    });
+    const target = await render(harness(initial).bridge);
+    await waitFor(() => target.textContent?.includes("丢弃会级联 1 个后续任务") === true);
+    const articles = [...target.querySelectorAll<HTMLElement>("article.task")];
+    const root = articles.find(
+      (article) => article.querySelector(".task-line strong")?.textContent?.trim() === "A",
+    )!;
+    [...root.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "丢弃改动")!
+      .click();
+    await waitFor(() => target.textContent?.includes("确认丢弃（含 1 个后续任务）") === true);
+  });
 });

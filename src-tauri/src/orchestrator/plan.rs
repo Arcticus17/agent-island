@@ -99,9 +99,10 @@ pub(crate) fn planner_prompt(goal: &str, workspace: &Path, agents: &[String]) ->
          规则：\n\
          - 返回 1–{max} 个任务；任务越少越好，能一次做完就不要拆。\n\
          - 每个任务会交给一个**看不到本次对话**的 Agent，所以任务 prompt 必须自包含：背景、要改的文件或目录、验收标准、不要做什么。\n\
-         - 每个任务必须能**独立完成**：所有 depends_on 都填空数组。当前 worktree 模式下还没支持任务间依赖，不要安排需要看到其他任务改动的任务。\n\
+         - 可以用 depends_on 表示先后顺序：每个任务最多一个依赖，且一个任务最多被一个后续任务依赖（线性链）；不允许多依赖或分叉。\n\
+         - 彼此独立的步骤不要加依赖，能并行就并行；依赖任务会从依赖任务的分支创建 worktree，能看到依赖的改动，但 prompt 仍要写清楚背景。\n\
          - 不要安排必须等用户确认才能开始的任务；不要编造目标里没有的文件或需求。\n\
-         - 优先小步、可验证；每个任务都要能在同一个工作区内独立完成。\n",
+         - 优先小步、可验证；每个任务都要能独立验收。\n",
         workspace = workspace.display(),
         listing = listing,
         goal = goal.trim(),
@@ -193,25 +194,6 @@ pub(crate) fn synthesis_prompt(goal: &str, workspace: &Path, tasks: &[PlanTask],
     )
 }
 
-/// worktree 模式下每个任务从同一个 HEAD 创建，看不到其他任务的改动；
-/// 有依赖的任务会基于旧代码执行，必须明确拒绝而不是静默算成功。
-pub(crate) fn ensure_independent(plan: &TeamPlan) -> Result<(), String> {
-    let dependent: Vec<String> = plan
-        .tasks
-        .iter()
-        .filter(|task| !task.depends_on.is_empty())
-        .map(|task| format!("{} 依赖 {}", task.id, task.depends_on.join("、")))
-        .collect();
-    if dependent.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "worktree 模式下任务必须互不依赖；请重新生成计划或去掉依赖：{}",
-            dependent.join("；")
-        ))
-    }
-}
-
 /// 下一轮规划：把上一轮的目标、汇总和任务结果带给主 Agent，避免它从零开始。
 pub(crate) fn followup_planner_prompt(
     instruction: &str,
@@ -235,7 +217,8 @@ pub(crate) fn followup_planner_prompt(
          规则：\n\
          - 返回 1–{max} 个任务；任务越少越好，能一次做完就不要拆。\n\
          - 每个任务会交给一个**看不到本次对话**的 Agent，prompt 必须自包含：背景、要改的文件、验收标准、不要做什么。\n\
-         - 每个任务必须能**独立完成**：所有 depends_on 都填空数组；当前 worktree 模式下不支持任务间依赖。\n\
+         - 可以用 depends_on 表示先后顺序：每个任务最多一个依赖，且一个任务最多被一个后续任务依赖（线性链）；彼此独立的步骤不要加依赖。\n\
+         - 依赖任务会从依赖任务的分支创建 worktree，能看到依赖的改动。\n\
          - 基于上一轮的实际结果规划；上一轮没验证的东西可以安排验证，但不要把推断写成已验证。\n\
          - 不要重复上一轮已经成功且用户已合并的改动。\n\
          - 不要安排必须等用户确认才能开始的任务。\n",
@@ -279,13 +262,29 @@ pub(crate) fn validate_plan(plan: &TeamPlan, allowed_agents: &[String]) -> Resul
             ));
         }
     }
+    let mut dependents: HashMap<&str, usize> = HashMap::new();
     for task in &plan.tasks {
+        if task.depends_on.len() > 1 {
+            errors.push(format!(
+                "任务 {} 有多个依赖；当前只支持单个依赖的线性链",
+                task.id
+            ));
+        }
         for dependency in &task.depends_on {
             if dependency == &task.id {
                 errors.push(format!("任务 {} 依赖了自己", task.id));
             } else if !ids.contains(dependency) {
                 errors.push(format!("任务 {} 依赖了不存在的 {}", task.id, dependency));
+            } else {
+                *dependents.entry(dependency.as_str()).or_insert(0) += 1;
             }
+        }
+    }
+    for (id, count) in dependents {
+        if count > 1 {
+            errors.push(format!(
+                "任务 {id} 被多个任务依赖；当前只支持一条线性链，不允许分叉"
+            ));
         }
     }
     if has_cycle(&plan.tasks) {
@@ -347,12 +346,54 @@ mod tests {
     }
 
     #[test]
-    fn accepts_a_simple_dag() {
+    fn accepts_a_linear_chain() {
         let plan = TeamPlan {
             summary: "拆成两步".into(),
-            tasks: vec![task("a", "claude", &[]), task("b", "claude", &["a"])],
+            tasks: vec![
+                task("a", "claude", &[]),
+                task("b", "claude", &["a"]),
+                task("c", "claude", &["b"]),
+            ],
         };
         assert_eq!(validate_plan(&plan, &allowed()), Ok(()));
+    }
+
+    #[test]
+    fn accepts_parallel_roots() {
+        let plan = TeamPlan {
+            summary: "两条独立链".into(),
+            tasks: vec![
+                task("a", "claude", &[]),
+                task("b", "claude", &["a"]),
+                task("c", "claude", &[]),
+            ],
+        };
+        assert_eq!(validate_plan(&plan, &allowed()), Ok(()));
+    }
+
+    #[test]
+    fn rejects_fan_out_and_multiple_dependencies() {
+        let fan_out = TeamPlan {
+            summary: String::new(),
+            tasks: vec![
+                task("a", "claude", &[]),
+                task("b", "claude", &["a"]),
+                task("c", "claude", &["a"]),
+            ],
+        };
+        let errors = validate_plan(&fan_out, &allowed()).unwrap_err();
+        assert!(errors.iter().any(|error| error.contains("分叉")));
+
+        let multi_parent = TeamPlan {
+            summary: String::new(),
+            tasks: vec![
+                task("a", "claude", &[]),
+                task("b", "claude", &[]),
+                task("c", "claude", &["a", "b"]),
+            ],
+        };
+        let errors = validate_plan(&multi_parent, &allowed()).unwrap_err();
+        assert!(errors.iter().any(|error| error.contains("多个依赖")));
     }
 
     #[test]
@@ -384,21 +425,6 @@ mod tests {
     }
 
     #[test]
-    fn worktree_plan_must_be_independent() {
-        let independent = TeamPlan {
-            summary: String::new(),
-            tasks: vec![task("a", "claude", &[]), task("b", "claude", &[])],
-        };
-        assert!(ensure_independent(&independent).is_ok());
-        let dependent = TeamPlan {
-            summary: String::new(),
-            tasks: vec![task("a", "claude", &[]), task("b", "claude", &["a"])],
-        };
-        let error = ensure_independent(&dependent).unwrap_err();
-        assert!(error.contains("互不依赖"));
-    }
-
-    #[test]
     fn schema_requires_every_plan_field() {
         let schema = plan_schema(&allowed());
         let required = schema["properties"]["tasks"]["items"]["required"]
@@ -418,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn followup_prompt_carries_previous_context_and_independence_rule() {
+    fn followup_prompt_carries_previous_context_and_chain_rule() {
         let prompt = followup_planner_prompt(
             "补齐上一轮没验证的测试",
             Path::new("C:/work"),
@@ -428,6 +454,6 @@ mod tests {
         assert!(prompt.contains("补齐上一轮没验证的测试"));
         assert!(prompt.contains("上一轮：已创建 A.txt"));
         assert!(prompt.contains("depends_on"));
-        assert!(prompt.contains("互不依赖") || prompt.contains("独立完成"));
+        assert!(prompt.contains("线性链"));
     }
 }

@@ -579,7 +579,6 @@ fn planner_call(
     let team_plan: TeamPlan =
         serde_json::from_value(value).map_err(|error| format!("计划格式不合法：{error}"))?;
     plan::validate_plan(&team_plan, &allowed).map_err(|errors| errors.join("；"))?;
-    plan::ensure_independent(&team_plan)?;
     Ok((
         team_plan,
         outcome.session_id,
@@ -846,6 +845,82 @@ enum Pick {
     None,
 }
 
+/// 无依赖任务从本轮 base 创建；有依赖任务从依赖分支的 tip 创建，这样
+/// 能看到前一个任务的改动，同时仍是独立 worktree。
+fn task_base_commit(
+    run: &TeamRunView,
+    task: &TeamTaskView,
+    repo_root: &Path,
+) -> Result<String, String> {
+    if task.depends_on.len() > 1 {
+        return Err("任务有多个依赖；当前只支持单个依赖的线性链".to_string());
+    }
+    let Some(dependency_id) = task.depends_on.first() else {
+        return run
+            .base_commit
+            .clone()
+            .ok_or_else(|| "这一轮缺少基准 commit，请新建一轮".to_string());
+    };
+    let dependency = run
+        .tasks
+        .iter()
+        .find(|candidate| &candidate.id == dependency_id)
+        .ok_or_else(|| format!("依赖任务不存在：{dependency_id}"))?;
+    if dependency.state != TaskState::Succeeded {
+        return Err(format!("依赖任务还没成功：{}", dependency.title));
+    }
+    let branch = dependency
+        .branch
+        .as_deref()
+        .ok_or_else(|| format!("依赖任务缺少分支：{}", dependency.title))?;
+    worktree::branch_tip(repo_root, branch)
+}
+
+fn dependent_ids(tasks: &[TeamTaskView], root: &str) -> HashSet<String> {
+    let mut ids: HashSet<String> = HashSet::from([root.to_string()]);
+    loop {
+        let mut added = false;
+        for task in tasks {
+            if ids.contains(&task.id) {
+                continue;
+            }
+            if task
+                .depends_on
+                .iter()
+                .any(|dependency| ids.contains(dependency))
+                && ids.insert(task.id.clone())
+            {
+                added = true;
+            }
+        }
+        if !added {
+            return ids;
+        }
+    }
+}
+
+/// 依赖任务有文件改动时，必须先合并进主工作区，后续任务才能合并。
+fn dependency_blocker(tasks: &[TeamTaskView], task: &TeamTaskView) -> Option<String> {
+    for dependency_id in &task.depends_on {
+        let Some(dependency) = tasks
+            .iter()
+            .find(|candidate| &candidate.id == dependency_id)
+        else {
+            return Some(format!("依赖任务不存在：{dependency_id}"));
+        };
+        if dependency.state != TaskState::Succeeded {
+            return Some(format!("依赖任务还没成功：{}", dependency.title));
+        }
+        if dependency.merge_state == MergeState::Discarded {
+            return Some(format!("依赖任务已丢弃，无法合并：{}", dependency.title));
+        }
+        if !dependency.changed_files.is_empty() && dependency.merge_state != MergeState::Merged {
+            return Some(format!("先合并依赖任务：{}", dependency.title));
+        }
+    }
+    None
+}
+
 fn fail_task_setup(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -973,17 +1048,14 @@ fn run_scheduler_serial(app: tauri::AppHandle, run_id: String) {
             );
             return;
         };
-        let Some(base_commit) = run.base_commit.clone() else {
-            fail_task_setup(
-                &app,
-                &state,
-                &run_id,
-                &task.id,
-                "这一轮缺少基准 commit，请新建一轮".to_string(),
-            );
-            return;
-        };
         let repo_path = PathBuf::from(&repo_root);
+        let base_commit = match task_base_commit(&run, &task, &repo_path) {
+            Ok(commit) => commit,
+            Err(error) => {
+                fail_task_setup(&app, &state, &run_id, &task.id, error);
+                return;
+            }
+        };
         let mut repo = match worktree::detect(&repo_path) {
             Ok(repo) => repo,
             Err(error) => {
@@ -1488,7 +1560,6 @@ pub(crate) fn team_confirm_plan(
         tasks: tasks.clone(),
     };
     plan::validate_plan(&plan, &allowed).map_err(|errors| errors.join("；"))?;
-    plan::ensure_independent(&plan)?;
     let views: Vec<TeamTaskView> = plan.tasks.iter().map(from_plan_task).collect();
     let view = state
         .team
@@ -1646,6 +1717,9 @@ pub(crate) fn team_merge_task(
     ) {
         return Err("这一轮还在运行或汇总，等结束后再合并".to_string());
     }
+    if let Some(blocker) = dependency_blocker(&run.tasks, task) {
+        return Err(blocker);
+    }
     if task.merge_state != MergeState::Pending {
         return Err("这个任务没有待合并的改动".to_string());
     }
@@ -1710,30 +1784,46 @@ pub(crate) fn team_discard_task(
         .iter()
         .find(|task| task.id == task_id)
         .ok_or_else(|| "任务不存在".to_string())?;
-    if matches!(
-        task.state,
-        TaskState::Running | TaskState::WaitingApproval | TaskState::Queued
-    ) {
-        return Err("任务还在执行，先取消再丢弃改动".to_string());
-    }
-    if task.merge_state == MergeState::Merged {
-        return Err("已经合并到主工作区，不能丢弃；需要回滚请用 git revert".to_string());
+    let ids = dependent_ids(&run.tasks, &task_id);
+    for dependent in run.tasks.iter().filter(|task| ids.contains(&task.id)) {
+        if matches!(
+            dependent.state,
+            TaskState::Running | TaskState::WaitingApproval | TaskState::Queued
+        ) {
+            return Err(format!(
+                "依赖任务「{}」还在执行，先取消再丢弃",
+                dependent.title
+            ));
+        }
+        if dependent.merge_state == MergeState::Merged {
+            return Err(format!(
+                "「{}」已经合并到主工作区，不能丢弃依赖链；需要回滚请用 git revert",
+                dependent.title
+            ));
+        }
     }
     let root = run
         .repo_root
         .as_deref()
         .ok_or_else(|| "这一轮不是 worktree 模式".to_string())?;
-    let path = task.worktree_path.clone();
-    let branch = task.branch.clone();
-    if let (Some(path), Some(branch)) = (path.as_deref(), branch.as_deref()) {
-        worktree::cleanup(Path::new(root), Path::new(path), branch);
+    for dependent in run.tasks.iter().filter(|task| ids.contains(&task.id)) {
+        let path = dependent.worktree_path.clone();
+        let branch = dependent.branch.clone();
+        if let (Some(path), Some(branch)) = (path.as_deref(), branch.as_deref()) {
+            worktree::cleanup(Path::new(root), Path::new(path), branch);
+        }
     }
+    let root_title = task.title.clone();
     let view = state
         .team
         .update(&id, |run| {
-            if let Some(task) = run.tasks.iter_mut().find(|task| task.id == task_id) {
+            for task in &mut run.tasks {
+                if !ids.contains(&task.id) {
+                    continue;
+                }
                 task.merge_state = MergeState::Discarded;
-                task.merge_error = None;
+                task.merge_error = (task.id != task_id)
+                    .then(|| format!("依赖任务「{root_title}」已丢弃"));
                 task.worktree_path = None;
                 task.branch = None;
             }
@@ -1842,6 +1932,37 @@ mod tests {
             task("b", TaskState::Queued, &["a"]),
         ];
         assert!(matches!(pick_task(&blocked), Pick::Blocked(1)));
+    }
+
+    #[test]
+    fn dependent_ids_cascade_a_linear_chain() {
+        let tasks = vec![
+            task("a", TaskState::Succeeded, &[]),
+            task("b", TaskState::Succeeded, &["a"]),
+            task("c", TaskState::Succeeded, &["b"]),
+            task("independent", TaskState::Succeeded, &[]),
+        ];
+        let ids = dependent_ids(&tasks, "a");
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains("a") && ids.contains("b") && ids.contains("c"));
+        assert!(!ids.contains("independent"));
+    }
+
+    #[test]
+    fn dependency_blocker_requires_a_merged_dependency() {
+        let mut dependency = task("a", TaskState::Succeeded, &[]);
+        dependency.changed_files = vec!["a.txt".into()];
+        dependency.merge_state = MergeState::Pending;
+        let dependent = task("b", TaskState::Queued, &["a"]);
+        let blocked = dependency_blocker(&[dependency.clone(), dependent.clone()], &dependent);
+        assert!(blocked.unwrap().contains("先合并依赖任务"));
+
+        dependency.merge_state = MergeState::Merged;
+        assert!(dependency_blocker(&[dependency.clone(), dependent.clone()], &dependent).is_none());
+
+        dependency.merge_state = MergeState::Discarded;
+        let discarded = dependency_blocker(&[dependency, dependent.clone()], &dependent).unwrap();
+        assert!(discarded.contains("已丢弃"));
     }
 
     #[test]

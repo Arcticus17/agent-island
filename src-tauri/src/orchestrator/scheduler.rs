@@ -80,17 +80,14 @@ pub(crate) fn run_parallel(app: tauri::AppHandle, run_id: String) {
                 );
                 break;
             };
-            let Some(base_commit) = run.base_commit.clone() else {
-                fail_task_setup(
-                    &app,
-                    &state,
-                    &run_id,
-                    &task.id,
-                    "这一轮缺少基准 commit，请新建一轮".to_string(),
-                );
-                break;
-            };
             let repo_path = PathBuf::from(&repo_root);
+            let base_commit = match task_base_commit(&run, &task, &repo_path) {
+                Ok(commit) => commit,
+                Err(error) => {
+                    fail_task_setup(&app, &state, &run_id, &task.id, error);
+                    break;
+                }
+            };
             let mut repo = match worktree::detect(&repo_path) {
                 Ok(repo) => repo,
                 Err(error) => {
