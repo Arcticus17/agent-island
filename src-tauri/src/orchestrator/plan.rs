@@ -212,6 +212,42 @@ pub(crate) fn ensure_independent(plan: &TeamPlan) -> Result<(), String> {
     }
 }
 
+/// 下一轮规划：把上一轮的目标、汇总和任务结果带给主 Agent，避免它从零开始。
+pub(crate) fn followup_planner_prompt(
+    instruction: &str,
+    workspace: &Path,
+    agents: &[String],
+    previous: &str,
+) -> String {
+    let entries = workspace_entries(workspace);
+    let listing = if entries.is_empty() {
+        "（目录为空或不可读）".to_string()
+    } else {
+        entries.join("  ")
+    };
+    format!(
+        "你是 Agent Island 的团队主 Agent，现在在做下一轮规划。你只负责拆解任务，不执行任务。\n\n\
+         工作区：{workspace}\n\
+         工作区顶层：{listing}\n\
+         用户对这一轮的指令：{instruction}\n\n\
+         上一轮上下文：\n{previous}\n\n\
+         可派发的次级 Agent：{agents}\n\n\
+         规则：\n\
+         - 返回 1–{max} 个任务；任务越少越好，能一次做完就不要拆。\n\
+         - 每个任务会交给一个**看不到本次对话**的 Agent，prompt 必须自包含：背景、要改的文件、验收标准、不要做什么。\n\
+         - 每个任务必须能**独立完成**：所有 depends_on 都填空数组；当前 worktree 模式下不支持任务间依赖。\n\
+         - 基于上一轮的实际结果规划；上一轮没验证的东西可以安排验证，但不要把推断写成已验证。\n\
+         - 不要重复上一轮已经成功且用户已合并的改动。\n\
+         - 不要安排必须等用户确认才能开始的任务。\n",
+        workspace = workspace.display(),
+        listing = listing,
+        instruction = instruction.trim(),
+        previous = previous.trim(),
+        agents = agents.join("、"),
+        max = MAX_TASKS
+    )
+}
+
 /// 不信任模型：负责人、依赖、环、数量、空字段都重新检查。
 pub(crate) fn validate_plan(plan: &TeamPlan, allowed_agents: &[String]) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
@@ -379,5 +415,19 @@ mod tests {
         assert!(prompt.contains("C:/work"));
         assert!(prompt.contains("不要询问用户"));
         assert!(prompt.contains("任务：任务 a"));
+    }
+
+    #[test]
+    fn followup_prompt_carries_previous_context_and_independence_rule() {
+        let prompt = followup_planner_prompt(
+            "补齐上一轮没验证的测试",
+            Path::new("C:/work"),
+            &allowed(),
+            "上一轮：已创建 A.txt；验证：未验证",
+        );
+        assert!(prompt.contains("补齐上一轮没验证的测试"));
+        assert!(prompt.contains("上一轮：已创建 A.txt"));
+        assert!(prompt.contains("depends_on"));
+        assert!(prompt.contains("互不依赖") || prompt.contains("独立完成"));
     }
 }

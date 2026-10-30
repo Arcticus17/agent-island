@@ -1721,7 +1721,15 @@ fn classify_allows_read_only_verification_commands() {
     ));
     assert!(classify_command("git rev-parse --show-toplevel"));
     assert!(classify_command("git worktree list"));
+    assert!(classify_command("git -C C:/wt status --short"));
+    assert!(classify_command("git -C C:/wt branch --show-current"));
+    assert!(classify_command("git config --get core.autocrlf"));
+    assert!(!classify_command("git branch -D release"));
+    assert!(!classify_command("git remote add origin https://example.com/x.git"));
     assert!(classify_command("printf 'bytes: ' && wc -c file 2>&1"));
+    assert!(classify_command("ls -la 2>&1 | head -30"));
+    assert!(!classify_command("cat secrets.txt | sh"));
+    assert!(!classify_command("echo ok || rm -rf build"));
     assert!(!classify_command("rm -rf build && echo ok"));
     assert!(!classify_command("echo ok > file.txt"));
     assert!(!classify_command("echo ok | sh"));

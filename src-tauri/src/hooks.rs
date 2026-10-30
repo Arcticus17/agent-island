@@ -31,12 +31,17 @@ pub(crate) fn classify_command(command: &str) -> bool {
         .replace("2>nul", "")
         .replace(">/dev/null", "")
         .replace("2>&1", "");
-    if ["|", "`", "$(", ">", "<"].iter().any(|token| cleaned.contains(token)) {
+    if cleaned.contains("||")
+        || ["`", "$(", ">", "<"]
+            .iter()
+            .any(|token| cleaned.contains(token))
+    {
         return false;
     }
     let segments: Vec<&str> = cleaned
         .split("&&")
         .flat_map(|part| part.split(';'))
+        .flat_map(|part| part.split('|'))
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .collect();
@@ -44,6 +49,45 @@ pub(crate) fn classify_command(command: &str) -> bool {
         return false;
     }
     segments.iter().all(|segment| classify_single_command(segment))
+}
+
+fn git_read_only(args: &str) -> bool {
+    let tokens: Vec<&str> = args.split_whitespace().collect();
+    if tokens.iter().all(|token| matches!(*token, "--version" | "-v")) {
+        return true;
+    }
+    let mut index = 0;
+    while index < tokens.len() {
+        match tokens[index] {
+            "-C" | "-c" | "--git-dir" | "--work-tree" => index += 2,
+            token if token.starts_with('-') => index += 1,
+            _ => break,
+        }
+    }
+    let Some(subcommand) = tokens.get(index) else {
+        return false;
+    };
+    let rest = &tokens[index + 1..];
+    match *subcommand {
+        "status" | "diff" | "log" | "show" | "rev-parse" | "ls-files" | "merge-base"
+        | "describe" => true,
+        "remote" => rest.iter().all(|arg| {
+            matches!(*arg, "-v" | "--verbose" | "show" | "get-url")
+                || arg.starts_with("--format")
+        }),
+        "branch" => rest.iter().all(|arg| {
+            matches!(
+                *arg,
+                "-a" | "-r" | "-v" | "-vv" | "--list" | "--show-current" | "--contains"
+            ) || arg.starts_with("--format")
+        }),
+        "worktree" => rest.first().is_some_and(|arg| *arg == "list"),
+        "config" => rest
+            .first()
+            .is_some_and(|arg| matches!(*arg, "--get" | "--get-regexp")),
+        "stash" => rest.first().is_some_and(|arg| *arg == "list"),
+        _ => false,
+    }
 }
 
 fn classify_single_command(command: &str) -> bool {
@@ -79,6 +123,9 @@ fn classify_single_command(command: &str) -> bool {
         .strip_suffix(".exe")
         .or_else(|| base.strip_suffix(".cmd"))
         .unwrap_or(base);
+    if base.eq_ignore_ascii_case("git") {
+        return git_read_only(args);
+    }
     let full = if args.is_empty() {
         base.to_string()
     } else {
@@ -107,6 +154,7 @@ fn classify_single_command(command: &str) -> bool {
         "stat ",
         "file ",
         "echo ",
+        "printf ",
         "pwd",
         "cd ",
         "chdir ",
@@ -116,16 +164,6 @@ fn classify_single_command(command: &str) -> bool {
         "grep ",
         "find ",
         "findstr ",
-        "git status",
-        "git log",
-        "git diff",
-        "git branch",
-        "git remote",
-        "git show",
-        "git rev-parse",
-        "git worktree list",
-        "git config --get",
-        "printf ",
         "git --version",
         "git -v",
         "node --version",

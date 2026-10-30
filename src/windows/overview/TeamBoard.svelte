@@ -19,6 +19,10 @@
   let workspace = $state("");
   let budget = $state("2.00");
   let parallelism = $state("2");
+  let followupOpen = $state(false);
+  let followupInstruction = $state("");
+  let followupBudget = $state("");
+  let followupParallelism = $state("");
   let busy = $state(false);
   let error = $state<string | null>(null);
   let retryArmed = $state(false);
@@ -82,6 +86,8 @@
       diffs = {};
       mergeArmed = null;
       discardArmed = null;
+      followupOpen = false;
+      followupInstruction = "";
     }
     run = next;
     workspace = workspace || next.workspace;
@@ -214,6 +220,59 @@
     return value.tasks.some((task) => task.state !== "succeeded");
   }
 
+  function hasUnresolvedMerges(value: TeamRun): boolean {
+    return value.tasks.some(
+      (task) => task.mergeState === "pending" || task.mergeState === "conflict",
+    );
+  }
+
+  function openFollowup(): void {
+    if (!run) return;
+    followupInstruction = "";
+    followupBudget = run.budgetUsd != null ? run.budgetUsd.toFixed(2) : "";
+    followupParallelism = String(run.concurrency);
+    followupOpen = true;
+  }
+
+  async function continueRun(): Promise<void> {
+    if (!run || !bridge.continueTeamRun || busy) return;
+    const instruction = followupInstruction.trim();
+    if (!instruction) {
+      error = "请写一句下一轮要做什么";
+      return;
+    }
+    let parsedBudget: number | null = null;
+    if (followupBudget.trim() !== "") {
+      parsedBudget = Number(followupBudget);
+      if (!Number.isFinite(parsedBudget) || parsedBudget <= 0) {
+        error = "下一轮预算必须是大于 0 的 USD 数字";
+        return;
+      }
+    }
+    let parsedParallelism: number | null = null;
+    if (followupParallelism.trim() !== "") {
+      parsedParallelism = Number(followupParallelism);
+      if (!Number.isInteger(parsedParallelism) || parsedParallelism < 1 || parsedParallelism > 4) {
+        error = "并发必须是 1–4 的整数";
+        return;
+      }
+    }
+    error = null;
+    busy = true;
+    try {
+      const next = await bridge.continueTeamRun(run.id, instruction, parsedBudget, parsedParallelism ?? undefined);
+      followupOpen = false;
+      planTasks = [];
+      planForRunId = null;
+      applyRun(next);
+      await loadRuns();
+    } catch (reason) {
+      error = String(reason);
+    } finally {
+      busy = false;
+    }
+  }
+
   function shortCommit(value: string | null): string {
     return value ? value.slice(0, 7) : "";
   }
@@ -286,6 +345,8 @@
     diffs = {};
     mergeArmed = null;
     discardArmed = null;
+    followupOpen = false;
+    followupInstruction = "";
     try {
       applyRun(await bridge.getTeamRun(id));
     } catch (reason) {
@@ -306,6 +367,8 @@
     diffs = {};
     mergeArmed = null;
     discardArmed = null;
+    followupOpen = false;
+    followupInstruction = "";
   }
 
   function removeTask(id: string): void {
@@ -442,7 +505,7 @@
       </div>
       <p class="goal">{run.goal}</p>
       <p class="budget-line">
-        预算 {run.budgetUsd != null ? `$${run.budgetUsd.toFixed(2)}` : "不设上限"}
+        第 {run.round} 轮 · 预算 {run.budgetUsd != null ? `$${run.budgetUsd.toFixed(2)}` : "不设上限"}
         · 已用 ${run.spentUsd.toFixed(2)}
         · 并发 {run.concurrency}
       </p>
@@ -596,6 +659,50 @@
         <pre>{run.summary}</pre>
       </section>
     {/if}
+
+    {#if isTerminal(run.phase)}
+      {#if hasUnresolvedMerges(run)}
+        <p class="hint followup-hint">先合并或丢弃上一轮的改动，再来一轮。</p>
+      {:else if followupOpen}
+        <section class="followup-panel" aria-label="下一轮规划">
+          <h3>再来一轮</h3>
+          <label class="field">
+            <span>下一轮要做什么</span>
+            <textarea
+              data-testid="team-followup-instruction"
+              rows="2"
+              bind:value={followupInstruction}
+              placeholder="例如：补齐上一轮汇总里没验证的测试，然后更新文档"
+            ></textarea>
+          </label>
+          <div class="followup-fields">
+            <label class="field compact">
+              <span>预算（留空继承）</span>
+              <input data-testid="team-followup-budget" inputmode="decimal" bind:value={followupBudget} />
+            </label>
+            <label class="field compact">
+              <span>并发（1–4）</span>
+              <input data-testid="team-followup-concurrency" inputmode="numeric" bind:value={followupParallelism} />
+            </label>
+          </div>
+          <div class="plan-actions">
+            <button class="ghost" type="button" onclick={() => { followupOpen = false; }}>取消</button>
+            <button
+              class="primary"
+              type="button"
+              disabled={busy || !followupInstruction.trim()}
+              onclick={() => void continueRun()}
+            >{busy ? "正在请主 Agent 规划…" : "继续规划"}</button>
+          </div>
+          <p class="hint">会把上一轮的目标、汇总和任务结果带给主 Agent；新计划仍需要你确认。</p>
+        </section>
+      {:else if bridge.continueTeamRun}
+        <section class="followup-cta">
+          <button class="ghost" type="button" data-testid="team-followup" onclick={openFollowup}>再来一轮</button>
+          <span class="hint">基于上一轮结果继续规划；已合并的改动会作为新起点。</span>
+        </section>
+      {/if}
+    {/if}
   {/if}
 
   {#if runs.length > 0}
@@ -714,6 +821,10 @@
   pre { margin: 5px 0 0; max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 10px/1.5 var(--font-mono, Consolas, monospace); color: var(--text-secondary); }
   .cost { margin-top: 6px; text-align: right; }
   .summary pre { color: var(--text-primary); font-family: inherit; font-size: 11.5px; }
+  .followup-panel { border: 1px solid var(--border-subtle); border-radius: var(--radius-card, 10px); background: var(--surface-card); padding: 11px; display: flex; flex-direction: column; gap: 8px; }
+  .followup-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+  .followup-cta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .followup-hint { padding: 6px 8px; border-radius: 7px; background: var(--field); }
   .history { display: flex; flex-direction: column; gap: 4px; }
   .history-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; width: 100%; text-align: left; background: transparent; border-color: transparent; }
   .history-row.selected { background: var(--surface-raised); border-color: var(--border-subtle); }

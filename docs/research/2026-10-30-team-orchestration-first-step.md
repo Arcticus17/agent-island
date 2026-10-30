@@ -89,6 +89,14 @@ worktree 之后才开并发：
 - 合并仍逐个由用户确认；某个任务冲突只影响它自己，其他任务继续可合并。
 - 先不做自动合并、不做按依赖链的并行；合并顺序仍由用户决定。
 
+## 第五步：多轮重规划（同日）
+
+- 上一轮结束且所有改动都已合并/丢弃后，允许「再来一轮」。
+- 新 run 携带上一轮目标、主 Agent 汇总、每个任务的状态与结果；主 Agent 基于实际结果规划，不重复已合并的工作。
+- 新 worktree 从**当前 HEAD** 创建，因此必须先把上一轮改动合并进主工作区；还有待合并/冲突时直接拒绝。
+- 新计划仍要预览、确认；不做自动连续执行，也不自动合并。
+- 这样多轮不会基于旧代码，也不会把“上一轮没验证”悄悄当成已验证。
+
 ## 参考
 
 - [Curating queues beats approving actions — WorkOS](https://webflow.workos.com/blog/curating-queues-beats-approving-actions)

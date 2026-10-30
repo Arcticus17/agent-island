@@ -470,6 +470,14 @@ export function createTauriBridge(): AgentIslandBridge {
         concurrency: concurrency ?? 2,
       });
     },
+    async continueTeamRun(id, instruction, budgetUsd, concurrency) {
+      return await invoke<TeamRun>("team_continue_run", {
+        id,
+        instruction,
+        budgetUsd: budgetUsd ?? null,
+        concurrency: concurrency ?? null,
+      });
+    },
     async getTeamRun(id) {
       return await invoke<TeamRun | null>("team_get_run", { id });
     },

@@ -173,6 +173,15 @@ pub(crate) struct TeamRunView {
     /// 同时执行的独立任务数（旧记录默认 1）。
     #[serde(default = "default_concurrency")]
     pub concurrency: u32,
+    /// 多轮规划：上一轮的 run id；首轮为 None。
+    #[serde(default)]
+    pub parent_run_id: Option<String>,
+    #[serde(default = "default_round")]
+    pub round: u32,
+}
+
+fn default_round() -> u32 {
+    1
 }
 
 fn default_concurrency() -> u32 {
@@ -514,7 +523,7 @@ fn from_plan_task(task: &PlanTask) -> TeamTaskView {
 }
 
 fn planner_call(
-    goal: &str,
+    prompt: &str,
     workspace: &Path,
     max_budget_usd: Option<f64>,
     on_spawn: impl FnOnce(u32),
@@ -536,11 +545,10 @@ fn planner_call(
     let schema_text = schema.to_string();
     let env = capability::claude_settings_env();
     let session_id = new_uuid();
-    let prompt = plan::planner_prompt(goal, workspace, &allowed);
     let config = RunnerConfig {
         program: &program,
         cwd: workspace,
-        prompt: &prompt,
+        prompt,
         settings: None,
         session_id: &session_id,
         permission_mode: "plan",
@@ -1242,15 +1250,32 @@ pub(crate) fn team_start_plan(
         worktree_mode: true,
         workspace_warning,
         concurrency,
+        parent_run_id: None,
+        round: 1,
     };
     state.team.insert(run.clone());
     emit_run(&app, &run);
-    let run_id = run.id.clone();
+    let prompt = plan::planner_prompt(
+        &goal,
+        &workspace,
+        &capability::available_agent_ids(),
+    );
+    spawn_planner(app, run.id.clone(), prompt, workspace, budget_usd);
+    Ok(run)
+}
+
+fn spawn_planner(
+    app: tauri::AppHandle,
+    run_id: String,
+    prompt: String,
+    workspace: PathBuf,
+    budget_usd: Option<f64>,
+) {
     std::thread::spawn(move || {
         let app_state = app.state::<AppState>();
         let planner_key = active_key(&run_id, "planner");
         let planner_pid_key = planner_key.clone();
-        let result = planner_call(&goal, &workspace, budget_usd, |pid| {
+        let result = planner_call(&prompt, &workspace, budget_usd, |pid| {
             app_state
                 .team
                 .active
@@ -1294,7 +1319,6 @@ pub(crate) fn team_start_plan(
             }
         }
     });
-    Ok(run)
 }
 
 #[tauri::command]
@@ -1305,6 +1329,131 @@ pub(crate) fn team_get_run(state: tauri::State<AppState>, id: String) -> Option<
 #[tauri::command]
 pub(crate) fn team_list_runs(state: tauri::State<AppState>) -> Vec<TeamRunView> {
     state.team.list()
+}
+
+fn task_state_label(state: TaskState) -> &'static str {
+    match state {
+        TaskState::Queued => "排队",
+        TaskState::Running => "执行中",
+        TaskState::WaitingApproval => "等待审批",
+        TaskState::Succeeded => "完成",
+        TaskState::Failed => "失败",
+        TaskState::Cancelled => "取消",
+        TaskState::Skipped => "跳过",
+    }
+}
+
+fn previous_round_context(run: &TeamRunView) -> String {
+    let mut text = format!("上一轮目标：{}\n", run.goal);
+    if let Some(summary) = run.summary.as_deref().or(run.plan_summary.as_deref()) {
+        text.push_str(&format!("上一轮总结：{}\n", cap_text(summary, 4_000)));
+    }
+    text.push_str("上一轮任务：\n");
+    for task in &run.tasks {
+        let outcome = task
+            .result
+            .as_deref()
+            .or(task.error.as_deref())
+            .unwrap_or("没有返回结果");
+        text.push_str(&format!(
+            "- [{}] {}：{}\n",
+            task_state_label(task.state),
+            task.title,
+            cap_text(outcome, 1_500)
+        ));
+    }
+    text
+}
+
+#[tauri::command]
+pub(crate) fn team_continue_run(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    id: String,
+    instruction: String,
+    budget_usd: Option<f64>,
+    concurrency: Option<u32>,
+) -> Result<TeamRunView, String> {
+    let instruction = instruction.trim().to_string();
+    if instruction.is_empty() {
+        return Err("请写一句下一轮要做什么".to_string());
+    }
+    if instruction.chars().count() > 2_000 {
+        return Err("下一轮指令太长，请压缩到 2000 字以内".to_string());
+    }
+    let parent = state
+        .team
+        .get(&id)
+        .ok_or_else(|| "上一轮团队任务不存在".to_string())?;
+    if matches!(
+        parent.phase,
+        RunPhase::Planning | RunPhase::AwaitingPlan | RunPhase::Running | RunPhase::Summarizing
+    ) {
+        return Err("上一轮还在运行或汇总，等结束再来一轮".to_string());
+    }
+    let unresolved: Vec<String> = parent
+        .tasks
+        .iter()
+        .filter(|task| matches!(task.merge_state, MergeState::Pending | MergeState::Conflict))
+        .map(|task| task.title.clone())
+        .collect();
+    if !unresolved.is_empty() {
+        return Err(format!(
+            "先处理上一轮的改动（合并或丢弃）再来一轮：{}",
+            unresolved.join("；")
+        ));
+    }
+    if state.team.active.lock_recover().values().next().is_some() {
+        return Err("已有团队任务在运行，请先等它结束或取消".to_string());
+    }
+    let workspace = normalize_workspace(&parent.workspace)?;
+    let repo = worktree::detect(&workspace)?;
+    let workspace_warning = repo.dirty.then(|| {
+        "主工作区有未提交改动；worktree 从当前 HEAD 创建，任务看不到这些改动，合并前需要先提交或暂存"
+            .to_string()
+    });
+    let budget_usd = normalize_budget(budget_usd.or(parent.budget_usd))?;
+    let concurrency = concurrency
+        .unwrap_or(parent.concurrency)
+        .clamp(1, 4);
+    let previous = previous_round_context(&parent);
+    let now = epoch_millis();
+    let run = TeamRunView {
+        id: next_id("team"),
+        goal: instruction.clone(),
+        workspace: workspace.to_string_lossy().into_owned(),
+        main_agent: "claude".to_string(),
+        main_agent_name: "Claude Code".to_string(),
+        phase: RunPhase::Planning,
+        plan_summary: None,
+        summary: None,
+        tasks: Vec::new(),
+        created_at_ms: now,
+        updated_at_ms: now,
+        error: None,
+        planner_session_id: None,
+        budget_usd,
+        spent_usd: 0.0,
+        repo_root: Some(repo.root.to_string_lossy().into_owned()),
+        base_branch: Some(repo.branch),
+        base_commit: Some(repo.head),
+        worktree_mode: true,
+        workspace_warning,
+        concurrency,
+        parent_run_id: Some(parent.id.clone()),
+        round: parent.round.saturating_add(1),
+    };
+    state.team.insert(run.clone());
+    emit_run(&app, &run);
+    let allowed = capability::available_agent_ids();
+    let prompt = plan::followup_planner_prompt(
+        &instruction,
+        &workspace,
+        &allowed,
+        &previous,
+    );
+    spawn_planner(app, run.id.clone(), prompt, workspace, budget_usd);
+    Ok(run)
 }
 
 #[tauri::command]
@@ -1806,6 +1955,8 @@ mod tests {
             worktree_mode: false,
             workspace_warning: None,
             concurrency: 1,
+            parent_run_id: None,
+            round: 1,
         };
         let mut value = serde_json::to_value(&view).unwrap();
         value.as_object_mut().unwrap().remove("budgetUsd");
@@ -1831,8 +1982,13 @@ mod tests {
     #[ignore = "live Claude call; costs tokens"]
     fn live_planner_returns_a_valid_plan() {
         let dir = live_dir("planner");
-        let plan = planner_call(
+        let prompt = plan::planner_prompt(
             "Create a file named island_live.txt containing LIVE_OK. Do not change anything else.",
+            &dir,
+            &capability::available_agent_ids(),
+        );
+        let plan = planner_call(
+            &prompt,
             &dir,
             None,
             |_| {},

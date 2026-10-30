@@ -67,6 +67,8 @@ function run(overrides: Partial<TeamRun> = {}): TeamRun {
     worktreeMode: true,
     workspaceWarning: null,
     concurrency: 2,
+    parentRunId: null,
+    round: 1,
     ...overrides,
   };
 }
@@ -144,6 +146,18 @@ function harness(initial: TeamRun | null = null) {
     async retryTeamRun(id) {
       calls.push("retry");
       latest = run({ id, phase: "running", tasks: [task({ state: "running" })] });
+      return latest;
+    },
+    async continueTeamRun(id, instruction) {
+      calls.push("continue");
+      latest = run({
+        id: "team-2",
+        goal: instruction,
+        phase: "awaiting_plan",
+        parentRunId: id,
+        round: 2,
+        tasks: [task()],
+      });
       return latest;
     },
     async teamTaskDiff() {
@@ -345,5 +359,48 @@ describe("team board", () => {
 
     await waitFor(() => calls.includes("discard"));
     expect(calls).toContain("discard");
+  });
+
+  it("starts a follow-up round from a finished run", async () => {
+    const initial = run({
+      phase: "succeeded",
+      summary: "上一轮完成",
+      tasks: [task({ state: "succeeded" })],
+    });
+    const { bridge, calls, current } = harness(initial);
+    const target = await render(bridge);
+    await waitFor(() => target.textContent?.includes("再来一轮") === true);
+
+    target.querySelector<HTMLButtonElement>('[data-testid="team-followup"]')!.click();
+    await waitFor(() => target.querySelector('[data-testid="team-followup-instruction"]') !== null);
+    await userEvent.fill(
+      target.querySelector<HTMLTextAreaElement>('[data-testid="team-followup-instruction"]')!,
+      "补齐上一轮没验证的测试",
+    );
+    [...target.querySelectorAll<HTMLButtonElement>("button")]
+      .find((candidate) => candidate.textContent?.trim() === "继续规划")!
+      .click();
+
+    await waitFor(() => calls.includes("continue"));
+    expect(current()?.parentRunId).toBe("team-1");
+    expect(current()?.round).toBe(2);
+  });
+
+  it("blocks a follow-up while a previous merge is still pending", async () => {
+    const initial = run({
+      phase: "succeeded",
+      summary: "上一轮完成",
+      tasks: [
+        task({
+          state: "succeeded",
+          branch: "agent-island/team-1/t1",
+          changedFiles: ["a.txt"],
+          mergeState: "pending",
+        }),
+      ],
+    });
+    const target = await render(harness(initial).bridge);
+    await waitFor(() => target.textContent?.includes("先合并或丢弃") === true);
+    expect(target.querySelector('[data-testid="team-followup"]')).toBeNull();
   });
 });

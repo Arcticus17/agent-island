@@ -59,6 +59,8 @@ function activeRun(): TeamRun {
     worktreeMode: true,
     workspaceWarning: null,
     concurrency: 2,
+    parentRunId: null,
+    round: 1,
   };
 }
 

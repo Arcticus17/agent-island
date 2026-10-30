@@ -686,6 +686,7 @@ pub fn run() {
             cancel_agent_task,
             team_capabilities,
             team_start_plan,
+            team_continue_run,
             team_get_run,
             team_list_runs,
             team_confirm_plan,
