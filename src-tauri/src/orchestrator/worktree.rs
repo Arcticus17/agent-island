@@ -139,7 +139,7 @@ pub(crate) fn create(
         fs::create_dir_all(parent).map_err(|error| format!("创建 worktree 目录失败：{error}"))?;
     }
     remove_existing(&repo.root, &path, &branch);
-    git(
+    if let Err(error) = git(
         &repo.root,
         &[
             "worktree",
@@ -149,8 +149,10 @@ pub(crate) fn create(
             &path.to_string_lossy(),
             &repo.head,
         ],
-    )
-    .map_err(|error| format!("创建任务 worktree 失败：{error}"))?;
+    ) {
+        remove_existing(&repo.root, &path, &branch);
+        return Err(format!("创建任务 worktree 失败：{error}"));
+    }
     Ok(TaskWorktree {
         path,
         branch,
