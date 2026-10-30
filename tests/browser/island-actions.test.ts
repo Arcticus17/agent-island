@@ -95,6 +95,7 @@ interface BridgeHarness {
   readonly terminalCalls: () => Array<{ kind: string; [key: string]: unknown }>;
   readonly taskCalls: () => Array<{ id: string; prompt: string }>;
   readonly resizeCalls: () => Array<{ width: number; height: number }>;
+  readonly minWidths: () => number[];
   emitTask(task: AgentTaskSnapshot): void;
   emit(event: HookEvent): void;
   emitTerminal(event: TerminalEvent): void;
@@ -126,6 +127,7 @@ function createBridgeHarness(
   const taskLog: Array<{ id: string; prompt: string }> = [];
   const taskHandlers = new Set<(task: AgentTaskSnapshot) => void>();
   const resizeLog: Array<{ width: number; height: number }> = [];
+  const minWidthLog: number[] = [];
   let terminalSequence = 0;
 
   const bridge: AgentIslandBridge = {
@@ -148,6 +150,9 @@ function createBridgeHarness(
     },
     async resizeWindow(size) {
       resizeLog.push({ ...size });
+    },
+    async setWindowMinWidth(width) {
+      minWidthLog.push(width);
     },
     async terminalOpen(request) {
       terminalSequence += 1;
@@ -224,6 +229,7 @@ function createBridgeHarness(
       for (const handler of taskHandlers) handler(structuredClone(task));
     },
     resizeCalls: () => resizeLog.map((entry) => ({ ...entry })),
+    minWidths: () => [...minWidthLog],
     emit(event) {
       for (const handler of handlers) handler(structuredClone(event));
     },
@@ -348,6 +354,14 @@ describe("Agent Island commands", () => {
     await waitFor(() => target.textContent?.includes('drag rejected') === true);
   });
 
+  it("raises the native minimum width while expanded and lowers it when collapsed", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    const target = await renderIsland(harness);
+    await waitFor(() => harness.minWidths().includes(360));
+    target.querySelector<HTMLButtonElement>('[data-testid="compact-toggle"]')!.click();
+    await waitFor(() => harness.minWidths().includes(80));
+  });
+
   it("expands settings below the controls instead of overlaying them", async () => {
     await page.viewport(360, 740);
     const target = await renderIsland(createBridgeHarness([snapshot(100)], [{ ok: true, value: true }]));
@@ -359,6 +373,8 @@ describe("Agent Island commands", () => {
     expect(getComputedStyle(panel).position).toBe('static');
     expect(panel.getBoundingClientRect().top).toBeGreaterThanOrEqual(controls.getBoundingClientRect().bottom);
     expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(window.innerHeight);
+    const island = target.querySelector<HTMLElement>('[data-testid="agent-island"]')!;
+    expect(island.scrollWidth).toBeLessThanOrEqual(island.clientWidth);
     if (import.meta.env.VITE_CAPTURE_UI === '1') await page.screenshot({ path: '../../.superpowers/inline-settings.png' });
   });
 

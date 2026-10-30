@@ -195,6 +195,9 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
   /** 展开态的目标宽度：和高度上限 560 一起构成接近正方形的面板。 */
   const expandedWidth = 560;
   const expandedPanelHeight = 560;
+  /** 展开态最小宽度：再窄设置行和卡片就会互相挤压。收起态仍允许回到胶囊宽度。 */
+  const expandedMinWidth = 360;
+  const compactMinWidth = 80;
   /** 没有展开时的窗口宽度：由刘海内容量出来，窗口只比它大一圈。 */
   let compactWindowWidth = 168;
   let restingWidth = 0;
@@ -352,6 +355,12 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
   // 原生控件（下拉弹层、滚动条、输入光标）跟随明暗，而不是永远深色
   $effect(() => {
     if (typeof document !== "undefined") document.documentElement.style.colorScheme = appearance;
+  });
+
+  // 原生窗口的 min size 跟着展开/收起切换：展开态不允许拖到 360 以下，
+  // 收起态必须能缩回胶囊宽度，所以不能把全局 minWidth 固定成 360。
+  $effect(() => {
+    void bridge.setWindowMinWidth?.(expanded ? expandedMinWidth : compactMinWidth);
   });
 
   // 今日花费：把每个 Agent 的窗口累计花费按增量累加，并检查每日预算
@@ -652,6 +661,7 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
       await bridge.resizeWindow?.({
         width: Math.max(1, width),
         height,
+        minWidth: targetExpanded ? expandedMinWidth : compactMinWidth,
       });
     } catch {
       // A browser preview or closing Tauri window may not support resizing.
@@ -668,7 +678,7 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
       const target = Math.min(760, Math.max(widthBeforeMax, 720));
       targetWindowWidth = target;
       try {
-        await bridge.resizeWindow?.({ width: target, height: Math.round(window.innerHeight) });
+        await bridge.resizeWindow?.({ width: target, height: Math.round(window.innerHeight), minWidth: expandedMinWidth });
       } catch {
         // 浏览器预览不支持真实窗口尺寸，忽略即可
       }
@@ -677,7 +687,7 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
       widthBeforeMax = 0;
       targetWindowWidth = restore;
       try {
-        await bridge.resizeWindow?.({ width: restore, height: Math.round(window.innerHeight) });
+        await bridge.resizeWindow?.({ width: restore, height: Math.round(window.innerHeight), minWidth: expandedMinWidth });
       } catch {
         // 同上
       }
@@ -951,16 +961,24 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
     restingWidth = compactWindowWidth;
     expanded = true;
     peeked = true;
-    void syncWindowSize();
-    if (!terminalMax && restingWidth < expandedWidth) void applyWindowWidth(expandedWidth);
+    void (async () => {
+      try {
+        await bridge.setWindowMinWidth?.(expandedMinWidth);
+      } finally {
+        if (!terminalMax && restingWidth < expandedWidth) {
+          await applyWindowWidth(expandedWidth, expandedMinWidth);
+        }
+        await syncWindowSize();
+      }
+    })();
   }
 
-  async function applyWindowWidth(width: number): Promise<void> {
+  async function applyWindowWidth(width: number, minWidth = compactMinWidth): Promise<void> {
     targetWindowWidth = width;
     // 目标宽度只在这次调整期间有效，避免之后一直压着用户手动改的宽度
     window.setTimeout(() => { if (targetWindowWidth === width) targetWindowWidth = 0; }, 700);
     try {
-      await bridge.resizeWindow?.({ width, height: Math.round(window.innerHeight) });
+      await bridge.resizeWindow?.({ width, height: Math.round(window.innerHeight), minWidth });
     } catch {
       // 浏览器预览不支持真实窗口尺寸
     }
@@ -980,8 +998,17 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
     }
     expanded = false;
     peeked = true;
-    if (restore > 0 && Math.round(window.innerWidth) !== restore) void applyWindowWidth(restore);
-    void syncWindowSize();
+    // 先把窗口最小宽度降回胶囊尺寸，再缩窗口；否则展开态的 360 min 会顶住。
+    void (async () => {
+      try {
+        await bridge.setWindowMinWidth?.(compactMinWidth);
+      } finally {
+        if (restore > 0 && Math.round(window.innerWidth) !== restore) {
+          await applyWindowWidth(restore, compactMinWidth);
+        }
+        await syncWindowSize();
+      }
+    })();
   }
 
   function peekFromHidden(): void {
@@ -2168,7 +2195,7 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
           onAgentMode={setAgentMode}
           onHookToggle={() => void toggleHook()}
           onSettingsOpen={() => void loadHookStatus()}
-          onAdjustWidth={bridge.adjustWindowWidth ? (delta) => void windowAction(() => bridge.adjustWindowWidth!(delta)) : undefined}
+          onAdjustWidth={bridge.adjustWindowWidth ? (delta) => void windowAction(() => bridge.adjustWindowWidth!(delta, expandedMinWidth)) : undefined}
           onStartResize={bridge.startWindowResize ? () => windowAction(() => bridge.startWindowResize!()) : undefined}
         />
       {/key}

@@ -582,13 +582,16 @@ export interface AgentIslandBridge {
   getSnapshot(): Promise<AgentViewSnapshot>;
   runCommand(command: AgentCommand): Promise<CommandResult>;
   listenHookEvents(handler: (event: HookEvent) => void): Promise<() => void>;
-  resizeWindow?(size: { width: number; height: number }): Promise<void>;
+  /** 调整原生窗口尺寸；minWidth 防止展开态被拖到内容无法排版的宽度。 */
+  resizeWindow?(size: { width: number; height: number; minWidth?: number }): Promise<void>;
+  /** 设置窗口最小宽度；展开态 360，收起态 80。 */
+  setWindowMinWidth?(width: number): Promise<void>;
   /** 窗口获得/失去焦点：展开态点外面空白处收起靠它判断 */
   onWindowFocusChange?(handler: (focused: boolean) => void): Promise<() => void>;
   startWindowDrag?(): Promise<void>;
   startWindowResize?(): Promise<void>;
   initializeWindowPlacement?(onError?: (error: unknown) => void): Promise<() => void>;
-  adjustWindowWidth?(delta: number): Promise<void>;
+  adjustWindowWidth?(delta: number, minWidth?: number): Promise<void>;
   /** 内置终端：在岛里直接跑 Agent 的交互式 CLI（Windows 走 ConPTY）。 */
   terminalOpen?(request: TerminalOpenRequest): Promise<string>;
   terminalWrite?(id: string, data: string): Promise<void>;

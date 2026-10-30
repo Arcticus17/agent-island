@@ -307,6 +307,7 @@ describe("read-only Agent Island", () => {
     expect(bridge.windowSizes().at(-1)).toEqual({
       width: 560,
       height: Math.min(Math.max(40, renderedHeight), heightCap),
+      minWidth: 360,
     });
     expect(getComputedStyle(island).overflowY).toBe("auto");
     expect(island.scrollWidth).toBeLessThanOrEqual(island.clientWidth);

@@ -23,6 +23,11 @@ describe("window placement", () => {
     expect(clampWindowPlacement({ x: 10, y: 20, width: 100 }, [{ scaleFactor: 2, workArea: { position: { x: 0, y: 0 }, size: { width: 600, height: 400 } } }], 500)).toEqual({ x: 10, y: 0, width: 100 });
     expect(clampWindowPlacement({ x: 10, y: 20, width: 100 }, [{ scaleFactor: 2, workArea: { position: { x: 0, y: 0 }, size: { width: 120, height: 400 } } }], 500)).toEqual({ x: 0, y: 0, width: 60 });
   });
+  it("keeps an expanded panel above its usable minimum width", () => {
+    expect(clampWindowPlacement({ x: 0, y: 0, width: 200 }, monitors, 500, 360)).toEqual({ x: 0, y: 0, width: 360 });
+    // 屏幕本身比最小宽度还窄时，仍以屏幕为准
+    expect(clampWindowPlacement({ x: 0, y: 0, width: 200 }, [{ scaleFactor: 1, workArea: { position: { x: 0, y: 0 }, size: { width: 300, height: 800 } } }], 500, 360)).toEqual({ x: 0, y: 0, width: 300 });
+  });
   it("fails explicitly when monitor discovery cannot establish bounds", () => {
     expect(() => clampWindowPlacement({ x: 0, y: 0, width: 420 }, [])).toThrow();
   });

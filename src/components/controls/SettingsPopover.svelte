@@ -190,4 +190,11 @@
   .setting-error { margin: 0; color: var(--state-error); font-size: var(--fs-2xs); overflow-wrap: anywhere; }
 
   @media (prefers-reduced-motion: reduce) { summary, button { transition: none; } }
+
+  /* 展开态最小宽度 360px；到 380 以下时让设置行可以换行，避免标签和控件互相压。 */
+  @media (max-width: 380px) {
+    label, .setting-row { flex-wrap: wrap; }
+    select, button { min-width: 0; }
+    .width-controls { width: 100%; justify-content: flex-end; }
+  }
 </style>

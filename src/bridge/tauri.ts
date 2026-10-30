@@ -179,17 +179,20 @@ function isTerminalId(payload: unknown): payload is { id: string } {
 }
 
 export function createTauriBridge(): AgentIslandBridge {
-  async function placement(delta = 0) {
+  async function placement(delta = 0, minWidth = 80) {
     const window = getCurrentWindow();
     const [position, size, scale, monitors] = await Promise.all([window.outerPosition(), window.innerSize(), window.scaleFactor(), availableMonitors()]);
-    return { window, height: size.height / scale, value: clampWindowPlacement({ x: position.x, y: position.y, width: size.width / scale + delta }, monitors, size.height / scale) };
+    return { window, height: size.height / scale, value: clampWindowPlacement({ x: position.x, y: position.y, width: size.width / scale + delta }, monitors, size.height / scale, minWidth) };
   }
   return {
     async startWindowDrag() { await getCurrentWindow().startDragging(); },
     async startWindowResize() { await getCurrentWindow().startResizeDragging("East"); },
-    async adjustWindowWidth(delta) {
+    async setWindowMinWidth(width) {
+      await getCurrentWindow().setMinSize(new LogicalSize(Math.max(80, width), 1));
+    },
+    async adjustWindowWidth(delta, minWidth = 80) {
       if (!Number.isFinite(delta)) throw new Error("无效窗口宽度");
-      const { window, value, height } = await placement(delta);
+      const { window, value, height } = await placement(delta, minWidth);
       await window.setSize(new LogicalSize(value.width, height));
       await window.setPosition(new PhysicalPosition(value.x, value.y));
     },
@@ -286,12 +289,12 @@ export function createTauriBridge(): AgentIslandBridge {
         }
       };
     },
-    async resizeWindow({ width, height }) {
+    async resizeWindow({ width, height, minWidth }) {
       const window = getCurrentWindow();
       const [size, scale, monitors, position] = await Promise.all([window.innerSize(), window.scaleFactor(), availableMonitors(), window.outerPosition()]);
       // 改宽度时保持窗口原来的水平中心（岛在顶部居中，展开/收起不应该往右漂）
       const centeredX = Math.round(position.x + (size.width - width * scale) / 2);
-      const value = clampWindowPlacement({ x: centeredX, y: position.y, width }, monitors, height);
+      const value = clampWindowPlacement({ x: centeredX, y: position.y, width }, monitors, height, minWidth ?? 80);
       const monitor = monitors.find(m => value.x >= m.workArea.position.x && value.x < m.workArea.position.x + m.workArea.size.width && value.y >= m.workArea.position.y && value.y < m.workArea.position.y + m.workArea.size.height) ?? monitors[0];
       const boundedHeight = Math.min(height, monitor.workArea.size.height / monitor.scaleFactor);
       if (Math.abs(size.width / scale - value.width) >= 1 || Math.abs(size.height / scale - boundedHeight) >= 1) {
