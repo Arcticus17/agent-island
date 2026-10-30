@@ -1,4 +1,4 @@
-﻿# 自动更新（签名通道）
+# 自动更新（签名通道）
 
 日期：2026-10-22
 范围：`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`、`src-tauri/capabilities/default.json`、`src-tauri/src/lib.rs`、`src/app/release.ts`、`src/app/App.svelte`、`src/bridge/*`、`.github/workflows/release.yml`、测试
@@ -68,9 +68,11 @@ npx tauri signer generate -w ~/.tauri/agent-island.key --ci
 
 ```
 $env:TAURI_SIGNING_PRIVATE_KEY=<~/.tauri/agent-island.key 全文>
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD=agentisland-dev   # 本地测试密钥的口令，不是正式发布用
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<本地测试口令，2026-10-30 后该测试密钥已退役，不再记录>
 npx tauri build --bundles nsis -- --no-default-features
 ```
+
+> 2026-10-30：这篇文章里的本地测试密钥已退役，更新签名已轮换到新的生产密钥。旧口令不再适用于发布；轮换记录见 [团队编排发布前硬化](2026-10-30-team-release-hardening.md)。
 
 产物：
 

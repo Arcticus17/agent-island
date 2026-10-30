@@ -2,7 +2,7 @@
 
 一个常驻 Windows 桌面的“Agent 灵动岛”：一眼看到正在运行的 AI 编程 Agent，并直接在桌面上控制它们。
 
-**当前状态**：v1.9.1 测试版。安装包已发布，但在完成干净环境、混合 DPI、多显示器与安装/卸载验收前不宣称正式支持，详见[公开发布适配门槛](docs/verification/public-release-compatibility.md)与[发布记录](docs/verification/2026-09-30-v1.9.0-release.md)。
+**当前状态**：v1.9.2 测试版（更新签名密钥已轮换）。安装包已发布，但在完成干净环境、混合 DPI、多显示器与安装/卸载验收前不宣称正式支持，详见[公开发布适配门槛](docs/verification/public-release-compatibility.md)与[发布记录](docs/verification/2026-09-30-v1.9.0-release.md)。
 
 ## 目录
 
@@ -57,11 +57,11 @@
 | `Agent.Island_<version>_x64-setup.exe` | Windows 安装器（NSIS） |
 | `Agent.Island_<version>_en-US.msi` | MSI 安装包 |
 
-`<version>` 指当前发布版本号，例如 `Agent.Island_1.9.1_x64-setup.exe`。安装后直接运行 `Agent Island` 即可。
+`<version>` 指当前发布版本号，例如 `Agent.Island_1.9.2_x64-setup.exe`。安装后直接运行 `Agent Island` 即可。
 
 ## 发布与验收
 
-仓库当前版本为 1.9.1，安装包由 GitHub Actions 自动构建并发布（Release `v1.9.1`，含 EXE 安装器、MSI 与更新清单 latest.json）。按[公开发布适配门槛](docs/verification/public-release-compatibility.md)口径，在完成干净环境、混合 DPI、多显示器与安装/卸载验收前仍属**测试版**。
+仓库当前版本为 1.9.2（更新签名密钥轮换版本），安装包由 GitHub Actions 自动构建并发布。1.9.1 及更早版本使用旧更新密钥，不能自动升级到 1.9.2，需要手动重装；1.9.2 之后恢复自动更新。按[公开发布适配门槛](docs/verification/public-release-compatibility.md)口径，在完成干净环境、混合 DPI、多显示器与安装/卸载验收前仍属**测试版**。
 
 本项目面向其他用户分发，不应依赖开发者本机环境。门槛清单覆盖干净系统、普通权限、中文/空格路径、CLI 安装方式、混合 DPI、多屏和升级卸载；未实测的系统与架构不列为已支持。实测记录见 [docs/verification/](docs/verification/)，索引在 [验证记录索引](docs/verification/README.md)。
 
@@ -74,7 +74,7 @@ git commit -am "chore: release X.Y.Z"
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-打 tag 后 GitHub Actions 会自动跑回归、构建并发布 EXE/MSI、`.sig` 与 `latest.json`（自动更新清单）。前提是仓库 Secrets 里已有 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
+打 tag 后 GitHub Actions 会自动跑回归、构建并发布 EXE/MSI、`.sig` 与 `latest.json`（自动更新清单）。前提是仓库 Secrets 里的 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 已更新为轮换后的生产密钥（key id `3B66FF8F0CD833C7`）；旧的本地测试密钥已退役。
 ## 使用
 
 ### 快捷键

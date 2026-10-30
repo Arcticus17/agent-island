@@ -13,7 +13,7 @@
 - Windows 11 Home China，10.0.26200，x64
 - 单显示器 1920×1080，系统缩放 100%（AppliedDPI=96）
 - Chromium：Playwright 1.63.0 / Chromium 153.0.8010.12（revision 1243）
-- 应用版本：1.9.1
+- 应用版本：1.9.2（更新签名密钥轮换后）
 
 ## 视觉回归
 
@@ -33,41 +33,52 @@
 
 限制：这是 Chromium + 行内主题变量的截图，不覆盖 overview 外壳 header，也不等于原生 WebView2 渲染。
 
+## 密钥轮换
+
+项目此前使用一把本地测试 minisign 密钥（key id `B48CEA496C22F38F`），口令写在仓库的旧验证记录里。由于公开仓库已经包含口令，正式发布不应继续使用它。
+
+2026-10-30 完成轮换：
+
+- 生成新的生产密钥：`C:\Users\LENOVO\.tauri\agent-island-prod.key`（key id `3B66FF8F0CD833C7`）
+- 随机 64 位十六进制口令保存在 `C:\Users\LENOVO\.tauri\agent-island-prod.password`，两个文件只授予当前用户读写 ACL
+- `tauri.conf.json` 的 `plugins.updater.pubkey` 已替换为新公钥
+- 版本升到 1.9.2，避免覆盖已经发布的 1.9.1
+- 1.9.1 及更早版本不能自动升级到新密钥；目前没有已知用户，因此不做桥接版本，发布说明要求手动重装 1.9.2
+- GitHub Actions Secrets 仍需人工更新为**新私钥内容**和新口令；本机 `gh` token 已失效，未能代为更新
+
 ## 安装包
 
-`npm run tauri build` 已编译 release 并生成两个 1.9.1 安装包：
+`npm run tauri build` 使用新生产密钥编译 release，并生成两个 1.9.2 安装包：
 
 | 文件 | 大小 | SHA256 | Authenticode |
 | --- | ---: | --- | --- |
-| `Agent Island_1.9.1_x64-setup.exe` | 3,846,083 | `32EE347B24F947B87E590BB24474E45624EF28E0378D97028F03CD4D531F80B9` | NotSigned |
-| `Agent Island_1.9.1_x64_en-US.msi` | 5,345,280 | `3A66A648180A50596B4FBA68CF4E7858ECBD6F52BEEB5C5A35E675011652656C` | NotSigned |
+| `Agent Island_1.9.2_x64-setup.exe` | 3,844,802 | `35323E1C959871792CF47493D567DFCE001251AC768A8A941D65726BC8A37035` | NotSigned |
+| `Agent Island_1.9.2_x64_en-US.msi` | 5,349,376 | `F7539E0397205D05B8AAE2D050CDA81966432A4347744FCFFC48C3A274ABA3EB` | NotSigned |
 
 两个 updater 签名（`.sig`，424 字节）也已生成：
 
-- `Agent Island_1.9.1_x64-setup.exe.sig`
-- `Agent Island_1.9.1_x64_en-US.msi.sig`
+- `Agent Island_1.9.2_x64-setup.exe.sig`
+- `Agent Island_1.9.2_x64_en-US.msi.sig`
 
 非破坏性校验：
 
-- `msiexec /a <msi> /qn TARGETDIR=<temp>` 退出码 0，包内 `dynamic-island.exe` 版本 1.9.1。
+- `msiexec /a <msi> /qn TARGETDIR=<temp>` 退出码 0，包内 `dynamic-island.exe` 版本 1.9.2。
 - 从 MSI 管理安装目录直接启动 release exe，进程存活 6 秒后手动结束；说明 release 二进制能启动。
 - **没有执行真正的系统安装**，避免改动当前机器；安装/卸载/升级仍需干净虚拟机。
 
 ### 构建结论
 
-第一次构建没有设置签名环境变量，`tauri build` 在产出安装包后以错误退出：
+设置新密钥环境变量后，`tauri build` **退出码 0**，并生成两个 `.sig`：
 
-> A public key has been found, but no private key. Make sure to set `TAURI_SIGNING_PRIVATE_KEY` environment variable.
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = "$env:USERPROFILE\.tauri\agent-island-prod.key"
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<新口令>"
+npm run tauri build
+```
 
-本机已有配对密钥，且口令记录在 [2026-10-22 签名更新验证](2026-10-22-signed-auto-update.md)：
+旧测试密钥仍保留在本机用于回滚排查，但不再用于新的发布；1.9.1 的旧 `.sig` 不能用于 1.9.2。
 
-- 私钥：`C:\Users\LENOVO\.tauri\agent-island.key`
-- 公钥：`C:\Users\LENOVO\.tauri\agent-island.key.pub`
-- 公钥内容与 `tauri.conf.json` 的 `plugins.updater.pubkey` 完全一致（minisign key id `B48CEA496C22F38F`）
-
-按记录中的本地测试口令重新设置 `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 后，构建 **退出码 0**，并生成两个 `.sig`。因此不需要生成新密钥；重新生成会让老客户端无法自动升级。
-
-注意：这是本地测试密钥，口令也写在仓库验证记录里。正式公开发布应使用只存在于密码管理器/CI Secret 的独立生产密钥；如果现在切换到新密钥，需要接受旧版本不能自动更新、只能手动重装的迁移成本。`latest.json` 仍由 CI 的 `tauri-action` 生成，本地构建只产出 `.sig`。
+`latest.json` 仍由 CI 的 `tauri-action` 生成，本地构建只产出 `.sig`。CI Secrets 更新后，发布 1.9.2 才能让 1.9.2+ 的自动更新链路工作。
 
 ## 干净机器验收清单（未执行）
 
@@ -97,8 +108,9 @@
 ## 结论
 
 - 团队页/团队条的关键视觉状态已有可回归基线，21 个视觉用例通过。
-- 1.9.1 NSIS/MSI 可构建、MSI 可非破坏性展开、release exe 可启动。
-- 设置已有 updater 私钥/口令后，`tauri build` 退出码 0，NSIS/MSI 两个 `.sig` 均生成；不需要生成新密钥。
+- 1.9.2 NSIS/MSI 可构建、MSI 可非破坏性展开、release exe 可启动。
+- 使用新生产密钥后 `tauri build` 退出码 0，NSIS/MSI 两个 `.sig` 均生成；旧测试密钥退役。
+- 1.9.2 更新签名公钥已切换；1.9.1 及更早版本需手动重装 1.9.2，CI Secrets 仍需人工更新。
 - 安装包仍没有 Authenticode 签名，Windows 上可能出现 SmartScreen“未知发布者”。
 - `latest.json` 由 CI 的 `tauri-action` 生成，本地构建不产出完整更新清单。
 - 干净机器安装、混合 DPI、多显示器、原生 WebView2 均**未验证**，不能写成已通过。
