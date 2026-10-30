@@ -99,7 +99,7 @@ pub(crate) fn planner_prompt(goal: &str, workspace: &Path, agents: &[String]) ->
          规则：\n\
          - 返回 1–{max} 个任务；任务越少越好，能一次做完就不要拆。\n\
          - 每个任务会交给一个**看不到本次对话**的 Agent，所以任务 prompt 必须自包含：背景、要改的文件或目录、验收标准、不要做什么。\n\
-         - 有先后依赖时用 depends_on 指向其他任务的 id；没有依赖给空数组。\n\
+         - 每个任务必须能**独立完成**：所有 depends_on 都填空数组。当前 worktree 模式下还没支持任务间依赖，不要安排需要看到其他任务改动的任务。\n\
          - 不要安排必须等用户确认才能开始的任务；不要编造目标里没有的文件或需求。\n\
          - 优先小步、可验证；每个任务都要能在同一个工作区内独立完成。\n",
         workspace = workspace.display(),
@@ -191,6 +191,25 @@ pub(crate) fn synthesis_prompt(goal: &str, workspace: &Path, tasks: &[PlanTask],
         workspace = workspace.display(),
         lines = lines
     )
+}
+
+/// worktree 模式下每个任务从同一个 HEAD 创建，看不到其他任务的改动；
+/// 有依赖的任务会基于旧代码执行，必须明确拒绝而不是静默算成功。
+pub(crate) fn ensure_independent(plan: &TeamPlan) -> Result<(), String> {
+    let dependent: Vec<String> = plan
+        .tasks
+        .iter()
+        .filter(|task| !task.depends_on.is_empty())
+        .map(|task| format!("{} 依赖 {}", task.id, task.depends_on.join("、")))
+        .collect();
+    if dependent.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "worktree 模式下任务必须互不依赖；请重新生成计划或去掉依赖：{}",
+            dependent.join("；")
+        ))
+    }
 }
 
 /// 不信任模型：负责人、依赖、环、数量、空字段都重新检查。
@@ -326,6 +345,21 @@ mod tests {
         };
         let cycle_errors = validate_plan(&cycle, &allowed()).unwrap_err();
         assert!(cycle_errors.iter().any(|error| error.contains("环")));
+    }
+
+    #[test]
+    fn worktree_plan_must_be_independent() {
+        let independent = TeamPlan {
+            summary: String::new(),
+            tasks: vec![task("a", "claude", &[]), task("b", "claude", &[])],
+        };
+        assert!(ensure_independent(&independent).is_ok());
+        let dependent = TeamPlan {
+            summary: String::new(),
+            tasks: vec![task("a", "claude", &[]), task("b", "claude", &["a"])],
+        };
+        let error = ensure_independent(&dependent).unwrap_err();
+        assert!(error.contains("互不依赖"));
     }
 
     #[test]

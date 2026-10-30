@@ -563,6 +563,7 @@ fn planner_call(
     let team_plan: TeamPlan =
         serde_json::from_value(value).map_err(|error| format!("计划格式不合法：{error}"))?;
     plan::validate_plan(&team_plan, &allowed).map_err(|errors| errors.join("；"))?;
+    plan::ensure_independent(&team_plan)?;
     Ok((
         team_plan,
         outcome.session_id,
@@ -1313,6 +1314,7 @@ pub(crate) fn team_confirm_plan(
         tasks: tasks.clone(),
     };
     plan::validate_plan(&plan, &allowed).map_err(|errors| errors.join("；"))?;
+    plan::ensure_independent(&plan)?;
     let views: Vec<TeamTaskView> = plan.tasks.iter().map(from_plan_task).collect();
     let view = state
         .team
@@ -1463,6 +1465,12 @@ pub(crate) fn team_merge_task(
         .ok_or_else(|| "任务不存在".to_string())?;
     if task.state != TaskState::Succeeded {
         return Err("只有已完成的任务才能合并".to_string());
+    }
+    if matches!(
+        run.phase,
+        RunPhase::Planning | RunPhase::AwaitingPlan | RunPhase::Running | RunPhase::Summarizing
+    ) {
+        return Err("这一轮还在运行或汇总，等结束后再合并".to_string());
     }
     if task.merge_state != MergeState::Pending {
         return Err("这个任务没有待合并的改动".to_string());

@@ -108,7 +108,7 @@
 
 - 主 Agent 规划：Claude `--json-schema` 输出结构化计划，先预览/可编辑，再确认执行
 - 次级 Agent 执行：独立 `--session-id`、`acceptEdits` 写文件、串行 DAG 调度、10 分钟超时、取消杀进程树
-- worktree：每个任务在独立 git worktree/分支执行；主工作区不动；团队页查看 diff、手动合并或丢弃；非 git 工作区拒绝；主工作区脏时拒绝合并；冲突 abort 并保留分支；Edit/Write 只允许写 worktree 内（绝对路径/`..` 逃逸拒绝）
+- worktree：每个任务在独立 git worktree/分支执行；主工作区不动；团队页查看 diff、手动合并或丢弃；非 git 工作区拒绝；主工作区脏时拒绝合并；冲突 abort 并保留分支；Edit/Write 只允许写 worktree 内（绝对路径/`..` 逃逸拒绝）。任务目前必须互不依赖（worktree 同基，依赖任务会基于旧代码）
 - 审批：文件编辑/只读 Bash 自动放行；危险 Bash 进入 `waiting_approval`，小岛审批卡允许/拒绝，5 分钟超时按拒绝；只读命令链不再反复弹审批
 - 完成判定：worker 必须返回结构化 `completed / blocked / failed`；说 blocked/failed 或没返回结构化结果都标失败，避免退出码 0 的假成功
 - 恢复：失败/跳过的任务可"重试未完成任务"，已成功的不重跑；重试前清理旧 worktree/分支

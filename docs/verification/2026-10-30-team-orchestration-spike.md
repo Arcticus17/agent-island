@@ -187,7 +187,7 @@ Bash  od -c ".../E2E_OK.txt"
 
 主岛团队条与 `open_team` 已在真实 WebView2 里验证：运行中显示进度/待审批，点击后总览切到团队页。
 
-回归：Rust 256 通过（4 个 live 默认忽略）、浏览器 150 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
+回归：Rust 257 通过（4 个 live 默认忽略）、浏览器 150 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
 
 ## 13. worktree 隔离（第三步）
 
@@ -201,7 +201,7 @@ Bash  od -c ".../E2E_OK.txt"
 6. 文件路径边界：worker 的 Edit/Write 走 PreToolUse 校验，只允许落在自己的 worktree 内；绝对路径、`..` 逃逸会被 deny。单测覆盖 inside / `../outside` / 绝对 outside。
 7. 冲突：两个同基任务改同一文件时，第二个 merge 失败并 abort，主工作区分支保留；单测覆盖。
 
-当前仍是串行执行：依赖任务不会并行；并行独立任务留到下一步。worktree 合并是手动的，不自动合并。
+当前仍是串行执行：任务必须互不依赖（worktree 都从同一个 HEAD 创建，依赖任务会基于旧代码，已在生成/确认两处明确拒绝）；并行独立任务留到下一步。worktree 合并是手动的，不自动合并。
 
 ## 14. 下一步
 
