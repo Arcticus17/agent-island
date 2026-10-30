@@ -542,6 +542,11 @@ struct HookApproval {
     /// 本地规则评估结果（风险、仓库、分支、diff 预览）。
     #[serde(skip_serializing_if = "Option::is_none")]
     review: Option<ApprovalReview>,
+    /// 这条审批属于哪个团队任务（用户自己的会话为空）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
     created_at_ms: u64,
     expires_at_ms: u64,
 }
@@ -684,6 +689,7 @@ pub fn run() {
             team_get_run,
             team_list_runs,
             team_confirm_plan,
+            team_retry_run,
             team_cancel_run,
             reveal_session,
             list_approval_rules,
@@ -702,6 +708,7 @@ pub fn run() {
             set_autostart,
             privacy_active,
             open_overview,
+            open_team,
             get_hook_status,
             set_hook_enabled,
             respond_hook_approval,

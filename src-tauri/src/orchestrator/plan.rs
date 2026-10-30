@@ -110,6 +110,29 @@ pub(crate) fn planner_prompt(goal: &str, workspace: &Path, agents: &[String]) ->
     )
 }
 
+/// worker 的收尾契约：退出码只能说明进程结束，不能说明任务完成。
+/// 用 schema 强制 worker 自报 completed / blocked / failed，避免"说了未完成
+/// 却被记成成功"的假答案。
+pub(crate) fn worker_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": ["completed", "blocked", "failed"]
+            },
+            "summary": { "type": "string" },
+            "files_changed": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "verification": { "type": "string" }
+        },
+        "required": ["status", "summary", "files_changed", "verification"],
+        "additionalProperties": false
+    })
+}
+
 /// 发给 worker 的完整提示词。worker 不知道主 Agent 的对话，这里补上最少上下文。
 pub(crate) fn worker_prompt(goal: &str, workspace: &Path, task: &PlanTask) -> String {
     format!(
@@ -122,8 +145,13 @@ pub(crate) fn worker_prompt(goal: &str, workspace: &Path, task: &PlanTask) -> St
          执行要求：\n\
          - 直接开始；不要询问用户。\n\
          - 不能完成时说明原因并停止，不要伪造结果。\n\
+         - 写文件优先用 Write / Edit 工具；不要用 shell 的 > / >> 重定向创建文件。\n\
          - 修改文件后，在最后一条消息里列出改了哪些文件。\n\
-         - 不要执行 git push、发布、删除工作区之外的文件。\n",
+         - 不要执行 git push、发布、删除工作区之外的文件。\n\
+         - 结束时必须调用结构化输出：只有确实完成验收标准才填 completed；\n\
+           权限被拒、依赖缺失或做不到，填 blocked 或 failed。\n\
+         - summary 写实际做了什么；files_changed 写真实改动的文件；\n\
+           verification 写实际跑过的验证，没跑就明确写\"未验证\"。\n",
         goal = goal.trim(),
         workspace = workspace.display(),
         title = task.title.trim(),

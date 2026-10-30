@@ -19,6 +19,7 @@
   let workspace = $state("");
   let busy = $state(false);
   let error = $state<string | null>(null);
+  let retryArmed = $state(false);
   let planTasks: TeamPlanTask[] = $state([]);
   let planForRunId: string | null = null;
   let disposed = false;
@@ -38,6 +39,7 @@
   const taskText: Record<TeamTaskState, string> = {
     queued: "排队",
     running: "执行中",
+    waiting_approval: "等待审批",
     succeeded: "完成",
     failed: "失败",
     cancelled: "取消",
@@ -153,6 +155,7 @@
   async function cancel(): Promise<void> {
     if (!run || !bridge.cancelTeamRun) return;
     error = null;
+    retryArmed = false;
     try {
       applyRun(await bridge.cancelTeamRun(run.id));
     } catch (reason) {
@@ -160,11 +163,34 @@
     }
   }
 
+  async function retry(): Promise<void> {
+    if (!run || !bridge.retryTeamRun) return;
+    if (!retryArmed) {
+      retryArmed = true;
+      return;
+    }
+    error = null;
+    busy = true;
+    try {
+      applyRun(await bridge.retryTeamRun(run.id));
+      retryArmed = false;
+    } catch (reason) {
+      error = String(reason);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function hasUnfinishedTasks(value: TeamRun): boolean {
+    return value.tasks.some((task) => task.state !== "succeeded");
+  }
+
   async function selectRun(id: string): Promise<void> {
     if (!bridge.getTeamRun) return;
     error = null;
     planForRunId = null;
     planTasks = [];
+    retryArmed = false;
     try {
       applyRun(await bridge.getTeamRun(id));
     } catch (reason) {
@@ -179,6 +205,7 @@
     planForRunId = null;
     goal = "";
     error = null;
+    retryArmed = false;
   }
 
   function removeTask(id: string): void {
@@ -303,6 +330,13 @@
       {#if run.error}<p class="error" role="alert">{run.error}</p>{/if}
       {#if activePhases.includes(run.phase)}
         <button class="danger ghost" type="button" onclick={() => void cancel()}>取消运行</button>
+      {:else if (run.phase === "failed" || run.phase === "cancelled") && hasUnfinishedTasks(run)}
+        <div class="retry-row">
+          <button class="primary" type="button" disabled={busy} onclick={() => void retry()}>
+            {retryArmed ? "确认重试未完成任务" : "重试未完成任务"}
+          </button>
+          {#if retryArmed}<span class="hint">会再次执行失败/跳过的任务，已完成的不会重跑。</span>{/if}
+        </div>
       {/if}
     </section>
 
@@ -362,6 +396,11 @@
               <span class="meta">{taskElapsed(task)}</span>
             </div>
             {#if task.error}<p class="task-error">{task.error}</p>{/if}
+            {#if task.state === "waiting_approval"}
+              <p class="waiting" role="status">
+                等待在小岛上确认：<code>{task.pendingApproval ?? "危险命令"}</code>
+              </p>
+            {/if}
             {#if task.log.length > 0}
               <details>
                 <summary>过程（{task.log.length} 行）</summary>
@@ -464,6 +503,7 @@
   .phase-failed { color: var(--status-error); }
   .phase-cancelled { color: var(--text-secondary); }
   .goal { margin-top: 6px; font-size: 12px; line-height: 1.5; }
+  .retry-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .error { padding: 7px 9px; border-radius: 7px; color: var(--danger-ink); background: var(--danger); font-size: 11px; }
   .plan-summary { color: var(--text-secondary); font-size: 11px; line-height: 1.5; margin-bottom: 8px; }
   .plan-task { padding: 9px 0; border-top: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 6px; }
@@ -476,12 +516,15 @@
   .task:first-child { border-top: 0; padding-top: 0; }
   .task .dot { background: var(--text-secondary); }
   .task.state-running .dot { background: var(--status-working); }
+  .task.state-waiting_approval .dot { background: var(--status-waiting); }
   .task.state-succeeded .dot { background: var(--status-done); }
   .task.state-failed .dot { background: var(--status-error); }
   .task.state-skipped .dot, .task.state-cancelled .dot { background: var(--text-secondary); }
   .task-line strong { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .state { color: var(--text-secondary); font-size: 10px; }
   .task-error { margin-top: 4px; color: var(--status-error); font-size: 10px; }
+  .waiting { margin-top: 5px; padding: 6px 8px; border-radius: 7px; color: var(--text-primary); background: color-mix(in srgb, var(--status-waiting) 16%, transparent); font-size: 10px; line-height: 1.45; }
+  .waiting code { font: 10px/1.4 var(--font-mono, Consolas, monospace); word-break: break-all; }
   details { margin-top: 5px; }
   summary { color: var(--text-secondary); font-size: 10px; cursor: pointer; }
   pre { margin: 5px 0 0; max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 10px/1.5 var(--font-mono, Consolas, monospace); color: var(--text-secondary); }

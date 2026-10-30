@@ -1716,6 +1716,12 @@ fn classify_allows_read_only_verification_commands() {
     assert!(classify_command("Get-ChildItem"));
     assert!(classify_command("Test-Path E2E_OK.txt"));
     assert!(classify_command("Get-FileHash E2E_OK.txt"));
+    assert!(classify_command(
+        "find . -name delete_me.txt 2>/dev/null; echo done"
+    ));
+    assert!(!classify_command("rm -rf build && echo ok"));
+    assert!(!classify_command("echo ok > file.txt"));
+    assert!(!classify_command("echo ok | sh"));
 }
 
 #[test]

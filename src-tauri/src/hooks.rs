@@ -21,9 +21,33 @@ pub(crate) fn hook_script_path() -> PathBuf {
 pub(crate) const HOOK_BRIDGE_SCRIPT: &str = include_str!("hook_bridge.mjs");
 
 pub(crate) fn classify_command(command: &str) -> bool {
+    // 只读验证经常写成 `find … 2>/dev/null; echo …`。把无害的
+    // "丢弃 stderr" 归一化掉，再按 && / ; 拆成单条命令逐段判断；
+    // 真正的写文件、管道、命令替换仍然整体拒绝。
+    let cleaned = command
+        .trim()
+        .to_lowercase()
+        .replace("2>/dev/null", "")
+        .replace("2>nul", "")
+        .replace(">/dev/null", "");
+    if ["|", "`", "$(", ">", "<"].iter().any(|token| cleaned.contains(token)) {
+        return false;
+    }
+    let segments: Vec<&str> = cleaned
+        .split("&&")
+        .flat_map(|part| part.split(';'))
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    if segments.is_empty() {
+        return false;
+    }
+    segments.iter().all(|segment| classify_single_command(segment))
+}
+
+fn classify_single_command(command: &str) -> bool {
     let mut c = command.trim().to_lowercase();
-    if c.contains("&&") || c.contains("||") || c.contains(';') || c.contains('|') || c.contains('>')
-    {
+    if c.is_empty() {
         return false;
     }
     c = c
@@ -527,9 +551,15 @@ fn create_approval(
     cwd: String,
     rule_key: String,
     review: ApprovalReview,
+    team_task: Option<(String, String)>,
+    ttl_ms: u64,
 ) -> String {
     let id = new_hook_approval_id();
     let now = epoch_millis();
+    let (run_id, task_id) = match team_task {
+        Some((run_id, task_id)) => (Some(run_id), Some(task_id)),
+        None => (None, None),
+    };
     let approval = HookApproval {
         id: id.clone(),
         session,
@@ -540,8 +570,10 @@ fn create_approval(
         decision: None,
         reason: None,
         review: Some(review),
+        run_id,
+        task_id,
         created_at_ms: now,
-        expires_at_ms: now.saturating_add(120_000),
+        expires_at_ms: now.saturating_add(ttl_ms),
     };
     let payload = approval_payload(&approval);
     {
@@ -670,46 +702,31 @@ pub(crate) fn handle_hook_conn(mut stream: std::net::TcpStream, app: tauri::AppH
                 write_http_json(&mut stream, "200 OK", "{\"decision\":\"ask\"}");
                 return;
             }
-            // 团队任务无人值守：不能像用户自己的会话那样等 120 秒人工审批。
-            // 只读命令和文件编辑自动放行，其余命令立即拒绝并把原因写进通知，
-            // 让 worker 自己改道或让用户看到失败，而不是一直"执行中"。
-            if state.team.is_managed_session(&session_id) {
+            // 团队任务：只读命令和文件编辑自动放行；危险命令继续走人工审批，
+            // 但任务会进入"等待审批"，小岛上的审批卡负责真正的决定。
+            let team_task = state.team.task_for_session(&session_id);
+            if team_task.is_some() {
                 let file_edit = matches!(tool.as_str(), "Edit" | "Write" | "MultiEdit");
-                let allow = file_edit || classify_command(&command);
-                let reason = if allow {
-                    "团队任务：只读命令或文件编辑自动放行"
-                } else {
-                    "团队任务不等待人工审批，这条命令被视为危险已拒绝；请改用只读方式，或由用户手动执行"
-                };
-                if !allow {
-                    log_event(
-                        "INFO",
-                        "hook",
-                        &format!(
-                            "team denied tool={tool} session={session_id} len={}",
-                            command.len()
-                        ),
+                if file_edit || classify_command(&command) {
+                    write_http_json(
+                        &mut stream,
+                        "200 OK",
+                        &serde_json::json!({
+                            "decision": "allow",
+                            "reason": "团队任务：只读命令或文件编辑自动放行",
+                        })
+                        .to_string(),
                     );
-                    use tauri::Emitter;
-                    let _ = app.emit(
-                        "hook-event",
-                        serde_json::json!({
-                            "kind": "notification",
-                            "message": format!("团队任务已拒绝危险命令：{}", tool_display(&tool, &command, &tool_input, &review_tool(if tool.is_empty() { "Bash" } else { &tool }, &tool_input, &cwd))),
-                            "session": session_id,
-                        }),
-                    );
+                    return;
                 }
-                write_http_json(
-                    &mut stream,
-                    "200 OK",
-                    &serde_json::json!({
-                        "decision": if allow { "allow" } else { "deny" },
-                        "reason": reason,
-                    })
-                    .to_string(),
+                log_event(
+                    "INFO",
+                    "hook",
+                    &format!(
+                        "team approval needed tool={tool} session={session_id} len={}",
+                        command.len()
+                    ),
                 );
-                return;
             }
             let review = review_tool(if tool.is_empty() { "Bash" } else { &tool }, &tool_input, &cwd);
             let display = tool_display(&tool, &command, &tool_input, &review);
@@ -763,6 +780,8 @@ pub(crate) fn handle_hook_conn(mut stream: std::net::TcpStream, app: tauri::AppH
             }
 
             let rule_key = rule_key_for(&tool, &tool_input, &display);
+            let approval_command = display.clone();
+            let ttl_ms = if team_task.is_some() { 5 * 60_000 } else { 120_000 };
             let id = create_approval(
                 &app,
                 &state,
@@ -772,7 +791,20 @@ pub(crate) fn handle_hook_conn(mut stream: std::net::TcpStream, app: tauri::AppH
                 cwd,
                 rule_key,
                 review,
+                team_task.clone(),
+                ttl_ms,
             );
+            if let Some((run_id, task_id)) = team_task {
+                if let Some(view) = state.team.begin_task_approval(
+                    &run_id,
+                    &task_id,
+                    &id,
+                    &approval_command,
+                ) {
+                    use tauri::Emitter;
+                    let _ = app.emit("team-run", &view);
+                }
+            }
             write_http_json(
                 &mut stream,
                 "200 OK",
@@ -882,30 +914,49 @@ pub(crate) fn start_hook_server(app: tauri::AppHandle) {
         std::thread::sleep(std::time::Duration::from_secs(15));
         let state = cleanup_app.state::<AppState>();
         let now = epoch_millis();
-        let expired: Vec<String> = {
+        let expired: Vec<(String, Option<String>, Option<String>)> = {
             let mut approvals = state.approvals.lock_recover();
-            let ids: Vec<String> = approvals
+            let entries: Vec<(String, Option<String>, Option<String>)> = approvals
                 .values()
                 .filter(|approval| {
                     approval.decision.is_none() && approval.expires_at_ms <= now
                 })
-                .map(|approval| approval.id.clone())
+                .map(|approval| {
+                    (
+                        approval.id.clone(),
+                        approval.run_id.clone(),
+                        approval.task_id.clone(),
+                    )
+                })
                 .collect();
-            for id in &ids {
+            for (id, run_id, _) in &entries {
                 if let Some(approval) = approvals.get_mut(id) {
-                    approval.decision = Some("ask".to_string());
+                    // 团队任务没有"回退原生确认"可退：超时直接拒绝，
+                    // 让 worker 明确失败，而不是继续挂在 print 模式里。
+                    approval.decision = Some(if run_id.is_some() { "deny" } else { "ask" }.to_string());
                 }
             }
-            ids
+            entries
         };
         if expired.is_empty() {
             continue;
         }
-        for id in &expired {
+        let ids: Vec<String> = expired.iter().map(|(id, _, _)| id.clone()).collect();
+        for (id, run_id, task_id) in &expired {
             resolve_approval_inbox(&cleanup_app, &state, id);
+            if let (Some(run_id), Some(task_id)) = (run_id, task_id) {
+                if let Some(view) =
+                    state
+                        .team
+                        .fail_task_approval(run_id, task_id, "审批超时，已按拒绝处理")
+                {
+                    use tauri::Emitter;
+                    let _ = cleanup_app.emit("team-run", &view);
+                }
+            }
         }
         use tauri::Emitter;
-        let _ = cleanup_app.emit("hook-approval-expired", serde_json::json!({ "ids": expired }));
+        let _ = cleanup_app.emit("hook-approval-expired", serde_json::json!({ "ids": ids }));
     });
 }
 
@@ -938,7 +989,7 @@ pub(crate) fn respond_hook_approval(
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
     let now = epoch_millis();
-    let (tool, rule_key, session) = {
+    let (tool, rule_key, session, run_id, task_id) = {
         let approvals = state.approvals.lock_recover();
         let approval = approvals
             .get(&id)
@@ -947,6 +998,8 @@ pub(crate) fn respond_hook_approval(
             approval.tool.clone(),
             approval.rule_key.clone(),
             approval.session.clone(),
+            approval.run_id.clone(),
+            approval.task_id.clone(),
         )
     };
 
@@ -977,6 +1030,12 @@ pub(crate) fn respond_hook_approval(
         approval.reason = reason.filter(|value| !value.trim().is_empty());
     }
     resolve_approval_inbox(&app, &state, &id);
+    if let (Some(run_id), Some(task_id)) = (run_id, task_id) {
+        if let Some(view) = state.team.finish_task_approval(&run_id, &task_id) {
+            use tauri::Emitter;
+            let _ = app.emit("team-run", &view);
+        }
+    }
     Ok(())
 }
 

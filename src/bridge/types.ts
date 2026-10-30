@@ -442,6 +442,7 @@ export type TeamRunPhase =
 export type TeamTaskState =
   | "queued"
   | "running"
+  | "waiting_approval"
   | "succeeded"
   | "failed"
   | "cancelled"
@@ -486,6 +487,8 @@ export interface TeamTask {
   costUsd: number | null;
   log: string[];
   sessionId: string | null;
+  pendingApproval: string | null;
+  approvalId: string | null;
 }
 
 export interface TeamRun {
@@ -600,6 +603,9 @@ export interface AgentIslandBridge {
   /** 把本机检测到的候选写进 ~/.agent-island/agents.json。 */
   addAgentDefinition?(name: string, program: string): Promise<void>;
   /** 团队任务：当前可规划/可派发的 Agent 及原因。 */
+  /** 打开始终在顶部的总览窗口，并切到团队页。 */
+  openTeam?(): Promise<void>;
+  listenOpenTeam?(handler: () => void): Promise<() => void>;
   teamCapabilities?(): Promise<TeamCapability[]>;
   /** 团队任务：让主 Agent 生成计划；返回后通过 getTeamRun 轮询或 listenTeamRuns 接收更新。 */
   startTeamPlan?(goal: string, workspace: string): Promise<TeamRun>;
@@ -608,6 +614,8 @@ export interface AgentIslandBridge {
   /** 确认（可编辑的）计划并开始执行。 */
   confirmTeamPlan?(id: string, tasks: TeamPlanTask[]): Promise<TeamRun>;
   cancelTeamRun?(id: string): Promise<TeamRun>;
+  /** 把未完成的任务重新排队执行（已成功的任务不重跑）。 */
+  retryTeamRun?(id: string): Promise<TeamRun>;
   listenTeamRuns?(handler: (run: TeamRun) => void): Promise<() => void>;
 }
 

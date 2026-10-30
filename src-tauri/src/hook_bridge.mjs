@@ -21,7 +21,12 @@ if (!cfg || !cfg.port || !cfg.token) {
 }
 
 const headers = { "content-type": "application/json", "x-agent-island-token": cfg.token };
-const DECISION_TIMEOUT_MS = 120_000;
+// 用户自己的会话：120 秒后回退原生确认。团队任务会在命令行传更长的时间，
+// 因为 print 模式没有原生确认可退，超时只能按拒绝处理。
+const timeoutArg = process.argv.slice(2).find((arg) => arg.startsWith("--timeout="));
+const parsedTimeout = Number(timeoutArg ? timeoutArg.split("=")[1] : "");
+const DECISION_TIMEOUT_MS =
+  Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 120_000;
 
 // Give stdout/undici a tick to flush before exiting; an immediate exit after a
 // fast allow decision can abort a closing socket (libuv assertion on Windows).

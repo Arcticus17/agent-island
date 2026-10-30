@@ -52,6 +52,7 @@
   let stopConfirmationTimer: number | undefined;
   let statsVisible = $state(false);
   let teamVisible = $state(false);
+  let unlistenOpenTeam: (() => void) | null = null;
   let statsDays = $state<1 | 7>(7);
   let statsState = $state<"idle" | "pending" | "ready" | "failed">("idle");
   let statsReport = $state<StatsReport | null>(null);
@@ -322,12 +323,27 @@
       if (next.snapshot && !next.selectedSession) queueMicrotask(selectFirstAvailable);
     });
     void refresh();
+    if (bridge.listenOpenTeam) {
+      void bridge
+        .listenOpenTeam(() => {
+          teamVisible = true;
+          statsVisible = false;
+        })
+        .then((stop) => {
+          if (disposed) stop();
+          else unlistenOpenTeam = stop;
+        })
+        .catch(() => {
+          unlistenOpenTeam = null;
+        });
+    }
     const timer = pollIntervalMs > 0
       ? window.setInterval(() => void refresh(), pollIntervalMs)
       : undefined;
     return () => {
       disposed = true;
       unsubscribe();
+      unlistenOpenTeam?.();
       if (timer !== undefined) window.clearInterval(timer);
       if (stopConfirmationTimer !== undefined) window.clearTimeout(stopConfirmationTimer);
       for (const timer of sendTimers.values()) window.clearTimeout(timer);

@@ -104,15 +104,19 @@
 - 验证：Rust 228、Node 29（含 3 条 bridge 协议测试）、浏览器 136、视觉 24；真机 CDP 验证 allow / 10 分钟 grant / deny reason / inbox peek，并核对 Agent 检测路径与本机文件一致
 - 记录：[docs/verification/2026-10-28-inbox-and-approval-2.md](docs/verification/2026-10-28-inbox-and-approval-2.md)、[docs/verification/2026-10-28-agent-update-guard.md](docs/verification/2026-10-28-agent-update-guard.md)、[docs/verification/2026-10-28-agent-detection-exactness.md](docs/verification/2026-10-28-agent-detection-exactness.md)
 
-## v1.11：团队编排（验证骨架已完成，MVP 未开始）
+## v1.11：团队编排（第一步已完成，下一步并行/预算）
 
 - 主 Agent 规划：Claude `--json-schema` 输出结构化计划，先预览/可编辑，再确认执行
 - 次级 Agent 执行：独立 `--session-id`、`acceptEdits` 写文件、串行 DAG 调度、10 分钟超时、取消杀进程树
-- 审批边界：团队 worker 只挂 Bash PreToolUse；只读命令自动放行，危险/复合命令立即拒绝，不走 120 秒人工等待
+- 审批：文件编辑/只读 Bash 自动放行；危险 Bash 进入 `waiting_approval`，小岛审批卡允许/拒绝，5 分钟超时按拒绝；只读命令链不再反复弹审批
+- 完成判定：worker 必须返回结构化 `completed / blocked / failed`；说 blocked/failed 或没返回结构化结果都标失败，避免退出码 0 的假成功
+- 恢复：失败/跳过的任务可"重试未完成任务"，已成功的不重跑
+- 入口：主岛展开态团队条（进度/待审批）→ 总览团队页；`open_team` 命令
 - 汇总与持久化：主 Agent 汇总、`~/.agent-island/team-runs.json` 原子写、重启把中断任务标失败
 - 进程隔离：团队 worker pid 从主岛快照过滤，应用退出 `/T /F` 清理
-- 真实端到端：总览「团队」入口跑通 17 秒闭环（$0.131），详情见 [验证记录](docs/verification/2026-10-30-team-orchestration-spike.md)
-- 仍未做：主岛团队条、并发/预算上限、多轮重规划、Codex/自定义 Agent 适配、审批按任务归属
+- 真实端到端：允许→完成、拒绝→失败→重试→允许→完成两条链路均跑通；详情见 [验证记录](docs/verification/2026-10-30-team-orchestration-spike.md)
+- 设计依据：[第一步设计：审批、状态与入口](docs/research/2026-10-30-team-orchestration-first-step.md)
+- 下一步：并发与 worktree 隔离、预算/成本上限、多轮重规划、Codex/自定义 Agent 适配、视觉基线
 
 ## 当前已完成
 

@@ -79,6 +79,7 @@ pub(crate) enum RunPhase {
 pub(crate) enum TaskState {
     Queued,
     Running,
+    WaitingApproval,
     Succeeded,
     Failed,
     Cancelled,
@@ -104,6 +105,8 @@ pub(crate) struct TeamTaskView {
     pub cost_usd: Option<f64>,
     pub log: Vec<String>,
     pub session_id: Option<String>,
+    pub pending_approval: Option<String>,
+    pub approval_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,8 +131,14 @@ pub(crate) struct TeamState {
     pub runs: Mutex<HashMap<String, TeamRunView>>,
     /// task_key（run_id:task_id）→ 子进程 pid，用于取消与主岛过滤。
     pub active: Mutex<HashMap<String, u32>>,
-    /// 团队任务正在使用的 Claude session；hooks 用它区分"团队任务"和用户自己的会话。
-    pub managed_sessions: Mutex<HashSet<String>>,
+    /// 团队任务正在使用的 Claude session → 所属任务。
+    pub managed_sessions: Mutex<HashMap<String, ManagedSession>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ManagedSession {
+    pub run_id: String,
+    pub task_id: String,
 }
 
 fn team_runs_path() -> PathBuf {
@@ -170,7 +179,10 @@ impl TeamState {
                 run.phase = RunPhase::Failed;
                 run.error = Some("岛已退出或重启，任务中断；结果未知".to_string());
                 for task in &mut run.tasks {
-                    if matches!(task.state, TaskState::Running | TaskState::Queued) {
+                    if matches!(
+                        task.state,
+                        TaskState::Running | TaskState::Queued | TaskState::WaitingApproval
+                    ) {
                         task.state = TaskState::Failed;
                         task.error = Some("岛已退出或重启，结果未知".to_string());
                     }
@@ -181,7 +193,7 @@ impl TeamState {
         let state = Self {
             runs: Mutex::new(runs),
             active: Mutex::new(HashMap::new()),
-            managed_sessions: Mutex::new(HashSet::new()),
+            managed_sessions: Mutex::new(HashMap::new()),
         };
         if changed {
             state.save();
@@ -213,10 +225,14 @@ impl TeamState {
         self.active.lock_recover().values().copied().collect()
     }
 
-    pub(crate) fn register_session(&self, session_id: &str) {
-        self.managed_sessions
-            .lock_recover()
-            .insert(session_id.to_string());
+    pub(crate) fn register_session(&self, session_id: &str, run_id: &str, task_id: &str) {
+        self.managed_sessions.lock_recover().insert(
+            session_id.to_string(),
+            ManagedSession {
+                run_id: run_id.to_string(),
+                task_id: task_id.to_string(),
+            },
+        );
     }
 
     pub(crate) fn unregister_session(&self, session_id: &str) {
@@ -224,7 +240,72 @@ impl TeamState {
     }
 
     pub(crate) fn is_managed_session(&self, session_id: &str) -> bool {
-        self.managed_sessions.lock_recover().contains(session_id)
+        self.managed_sessions.lock_recover().contains_key(session_id)
+    }
+
+    pub(crate) fn task_for_session(&self, session_id: &str) -> Option<(String, String)> {
+        self.managed_sessions
+            .lock_recover()
+            .get(session_id)
+            .map(|session| (session.run_id.clone(), session.task_id.clone()))
+    }
+
+    fn update_task(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        change: impl FnOnce(&mut TeamTaskView),
+    ) -> Option<TeamRunView> {
+        self.update(run_id, |run| {
+            if let Some(task) = run.tasks.iter_mut().find(|task| task.id == task_id) {
+                change(task);
+            }
+        })
+    }
+
+    /// worker 的 Bash 需要人工确认：任务进入"等待审批"，由小岛上的审批卡处理。
+    pub(crate) fn begin_task_approval(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        approval_id: &str,
+        command: &str,
+    ) -> Option<TeamRunView> {
+        self.update_task(run_id, task_id, |task| {
+            task.state = TaskState::WaitingApproval;
+            task.pending_approval = Some(cap_text(command, 400));
+            task.approval_id = Some(approval_id.to_string());
+        })
+    }
+
+    pub(crate) fn finish_task_approval(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Option<TeamRunView> {
+        self.update_task(run_id, task_id, |task| {
+            if task.state == TaskState::WaitingApproval {
+                task.state = TaskState::Running;
+            }
+            task.pending_approval = None;
+            task.approval_id = None;
+        })
+    }
+
+    /// 审批超时：立即按拒绝处理，避免 worker 在 print 模式里无限等待。
+    pub(crate) fn fail_task_approval(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        reason: &str,
+    ) -> Option<TeamRunView> {
+        self.update_task(run_id, task_id, |task| {
+            task.state = TaskState::Failed;
+            task.error = Some(reason.to_string());
+            task.pending_approval = None;
+            task.approval_id = None;
+            task.ended_at_ms = Some(epoch_millis());
+        })
     }
 
     pub(crate) fn insert(&self, run: TeamRunView) {
@@ -288,7 +369,10 @@ pub(crate) fn shutdown(state: &AppState) {
             run.phase = RunPhase::Failed;
             run.error = Some("岛已退出，任务已中止；结果未知".to_string());
             for task in &mut run.tasks {
-                if matches!(task.state, TaskState::Running | TaskState::Queued) {
+                if matches!(
+                    task.state,
+                    TaskState::Running | TaskState::Queued | TaskState::WaitingApproval
+                ) {
                     task.state = TaskState::Cancelled;
                     task.error = Some("岛已退出，任务已中止".to_string());
                     task.ended_at_ms = Some(epoch_millis());
@@ -344,10 +428,16 @@ fn from_plan_task(task: &PlanTask) -> TeamTaskView {
         cost_usd: None,
         log: Vec::new(),
         session_id: None,
+        pending_approval: None,
+        approval_id: None,
     }
 }
 
-fn planner_call(goal: &str, workspace: &Path) -> Result<(TeamPlan, String, Option<f64>), String> {
+fn planner_call(
+    goal: &str,
+    workspace: &Path,
+    on_spawn: impl FnOnce(u32),
+) -> Result<(TeamPlan, String, Option<f64>), String> {
     let program = capability::claude_program()
         .ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
     let allowed = capability::available_agent_ids();
@@ -378,7 +468,7 @@ fn planner_call(goal: &str, workspace: &Path) -> Result<(TeamPlan, String, Optio
         json_schema: Some(&schema_text),
         env: &env,
     };
-    let outcome = runner::run_claude(&config, |_| {});
+    let outcome = runner::run_claude(&config, on_spawn);
     if !outcome.ok {
         return Err(outcome
             .error
@@ -408,6 +498,7 @@ fn synthesis_call(
     goal: &str,
     workspace: &Path,
     tasks: &[TeamTaskView],
+    on_spawn: impl FnOnce(u32),
 ) -> Result<String, String> {
     let program = capability::claude_program()
         .ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
@@ -447,7 +538,7 @@ fn synthesis_call(
         json_schema: None,
         env: &env,
     };
-    let outcome = runner::run_claude(&config, |_| {});
+    let outcome = runner::run_claude(&config, on_spawn);
     match (outcome.ok, outcome.result) {
         (true, Some(text)) if !text.trim().is_empty() => Ok(text),
         (_, _) => Err(outcome
@@ -463,7 +554,7 @@ fn worker_settings_path(run_id: &str) -> Result<PathBuf, String> {
     }
     let dir = team_run_dir(run_id);
     fs::create_dir_all(&dir).map_err(|error| format!("创建团队运行目录失败：{error}"))?;
-    let hook = format!("node \"{}\"", script.display());
+    let hook = format!("node \"{}\" --timeout=310000", script.display());
     let settings = serde_json::json!({
         "hooks": {
             // 只拦 Bash。文件编辑由 acceptEdits 自动放行；如果也挂
@@ -520,6 +611,7 @@ fn execute_task(
     let prompt = plan::worker_prompt(goal, workspace, &plan_task);
     let session_id = task.session_id.clone().unwrap_or_else(new_uuid);
     let env = capability::claude_settings_env();
+    let schema = plan::worker_schema().to_string();
     let config = RunnerConfig {
         program: &program,
         cwd: workspace,
@@ -530,18 +622,93 @@ fn execute_task(
         max_turns: 16,
         timeout: Duration::from_secs(TASK_TIMEOUT_SECS),
         output_format: "stream-json",
-        json_schema: None,
+        json_schema: Some(&schema),
         env: &env,
     };
     let key = active_key(run_id, &task.id);
     let team = &state.team;
-    team.register_session(&session_id);
+    team.register_session(&session_id, run_id, &task.id);
     let outcome = runner::run_claude(&config, |pid| {
         team.active.lock_recover().insert(key.clone(), pid);
     });
     team.unregister_session(&session_id);
     team.active.lock_recover().remove(&key);
     outcome
+}
+
+fn worker_report(outcome: &ProcessOutcome) -> (TaskState, Option<String>, Option<String>) {
+    let structured = outcome.structured.as_ref();
+    let status = structured
+        .and_then(|value| value.get("status"))
+        .and_then(Value::as_str);
+    let summary = structured
+        .and_then(|value| value.get("summary"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let files: Vec<String> = structured
+        .and_then(|value| value.get("files_changed"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let verification = structured
+        .and_then(|value| value.get("verification"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let mut parts = Vec::new();
+    if let Some(summary) = &summary {
+        parts.push(summary.clone());
+    }
+    if !files.is_empty() {
+        parts.push(format!("文件：{}", files.join("、")));
+    }
+    if let Some(verification) = verification {
+        parts.push(format!("验证：{verification}"));
+    }
+    let display = if parts.is_empty() {
+        outcome.result.clone()
+    } else {
+        Some(parts.join("\n"))
+    };
+
+    if !outcome.ok {
+        return (
+            TaskState::Failed,
+            display,
+            outcome
+                .error
+                .clone()
+                .or_else(|| Some("worker 进程失败".to_string())),
+        );
+    }
+
+    match status {
+        Some("completed") => (TaskState::Succeeded, display, None),
+        Some("blocked") => (
+            TaskState::Failed,
+            display,
+            Some(summary.unwrap_or_else(|| "任务报告 blocked".to_string())),
+        ),
+        Some("failed") => (
+            TaskState::Failed,
+            display,
+            Some(summary.unwrap_or_else(|| "任务报告 failed".to_string())),
+        ),
+        _ => (
+            TaskState::Failed,
+            display,
+            Some("worker 没有返回结构化任务结果，不能算完成".to_string()),
+        ),
+    }
 }
 
 fn pick_task(tasks: &[TeamTaskView]) -> Pick {
@@ -638,6 +805,8 @@ fn run_scheduler(app: tauri::AppHandle, run_id: String) {
                 task.error = None;
                 task.result = None;
                 task.log.clear();
+                task.pending_approval = None;
+                task.approval_id = None;
             }
         }) else {
             return;
@@ -650,19 +819,15 @@ fn run_scheduler(app: tauri::AppHandle, run_id: String) {
             return;
         }
         let ended = epoch_millis();
+        let (next_state, display, report_error) = worker_report(&outcome);
         let Some(view) = state.team.update(&run_id, |run| {
             if let Some(task) = run.tasks.iter_mut().find(|item| item.id == task.id) {
-                task.state = if outcome.ok {
-                    TaskState::Succeeded
-                } else {
-                    TaskState::Failed
-                };
+                task.state = next_state;
                 task.ended_at_ms = Some(ended);
                 task.exit_code = outcome.exit_code;
                 task.cost_usd = outcome.cost_usd;
-                task.result = outcome.result.as_deref().map(|text| cap_text(text, 8_000));
-                task.error = outcome
-                    .error
+                task.result = display.as_deref().map(|text| cap_text(text, 8_000));
+                task.error = report_error
                     .as_deref()
                     .map(|text| cap_text(text, 2_000))
                     .or_else(|| {
@@ -705,7 +870,21 @@ fn run_scheduler(app: tauri::AppHandle, run_id: String) {
     }) {
         emit_run(&app, &view);
     }
-    let synthesis = synthesis_call(&run.goal, &PathBuf::from(&run.workspace), &run.tasks);
+    let synthesis_key = active_key(&run_id, "synthesis");
+    let synthesis_pid_key = synthesis_key.clone();
+    let synthesis = synthesis_call(
+        &run.goal,
+        &PathBuf::from(&run.workspace),
+        &run.tasks,
+        |pid| {
+            state
+                .team
+                .active
+                .lock_recover()
+                .insert(synthesis_pid_key.clone(), pid);
+        },
+    );
+    state.team.active.lock_recover().remove(&synthesis_key);
     if state
         .team
         .get(&run_id)
@@ -791,8 +970,17 @@ pub(crate) fn team_start_plan(
     emit_run(&app, &run);
     let run_id = run.id.clone();
     std::thread::spawn(move || {
-        let result = planner_call(&goal, &workspace);
         let app_state = app.state::<AppState>();
+        let planner_key = active_key(&run_id, "planner");
+        let planner_pid_key = planner_key.clone();
+        let result = planner_call(&goal, &workspace, |pid| {
+            app_state
+                .team
+                .active
+                .lock_recover()
+                .insert(planner_pid_key.clone(), pid);
+        });
+        app_state.team.active.lock_recover().remove(&planner_key);
         if app_state
             .team
             .get(&run_id)
@@ -879,8 +1067,56 @@ pub(crate) fn team_confirm_plan(
 }
 
 #[tauri::command]
-pub(crate) fn team_cancel_run(
+pub(crate) fn team_retry_run(
     app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    id: String,
+) -> Result<TeamRunView, String> {
+    let run = state
+        .team
+        .get(&id)
+        .ok_or_else(|| "团队任务不存在".to_string())?;
+    if matches!(run.phase, RunPhase::Planning | RunPhase::Running | RunPhase::Summarizing) {
+        return Err("任务还在运行，先取消或等它结束".to_string());
+    }
+    if state.team.active.lock_recover().values().next().is_some() {
+        return Err("已有任务在运行，请先等它结束或取消".to_string());
+    }
+    if run.tasks.iter().all(|task| task.state == TaskState::Succeeded) {
+        return Err("这一轮已经全部完成，不需要重试".to_string());
+    }
+    let view = state
+        .team
+        .update(&id, |run| {
+            run.phase = RunPhase::Running;
+            run.error = None;
+            run.summary = None;
+            for task in &mut run.tasks {
+                if task.state == TaskState::Succeeded {
+                    continue;
+                }
+                task.state = TaskState::Queued;
+                task.started_at_ms = None;
+                task.ended_at_ms = None;
+                task.exit_code = None;
+                task.result = None;
+                task.error = None;
+                task.cost_usd = None;
+                task.log.clear();
+                task.session_id = None;
+                task.pending_approval = None;
+                task.approval_id = None;
+            }
+        })
+        .ok_or_else(|| "团队任务不存在".to_string())?;
+    emit_run(&app, &view);
+    let run_id = id.clone();
+    std::thread::spawn(move || run_scheduler(app, run_id));
+    Ok(view)
+}
+
+#[tauri::command]
+pub(crate) fn team_cancel_run(    app: tauri::AppHandle,
     state: tauri::State<AppState>,
     id: String,
 ) -> Result<TeamRunView, String> {
@@ -911,10 +1147,12 @@ pub(crate) fn team_cancel_run(
             run.error = Some("已取消".to_string());
             for task in &mut run.tasks {
                 match task.state {
-                    TaskState::Running => {
+                    TaskState::Running | TaskState::WaitingApproval => {
                         task.state = TaskState::Cancelled;
                         task.error = Some("已取消".to_string());
                         task.ended_at_ms = Some(epoch_millis());
+                        task.pending_approval = None;
+                        task.approval_id = None;
                     }
                     TaskState::Queued => {
                         task.state = TaskState::Skipped;
@@ -952,6 +1190,8 @@ mod tests {
             cost_usd: None,
             log: Vec::new(),
             session_id: None,
+            pending_approval: None,
+            approval_id: None,
         }
     }
 
@@ -984,11 +1224,15 @@ mod tests {
         let state = TeamState {
             runs: Mutex::new(HashMap::new()),
             active: Mutex::new(HashMap::new()),
-            managed_sessions: Mutex::new(HashSet::new()),
+            managed_sessions: Mutex::new(HashMap::new()),
         };
         assert!(!state.is_managed_session("s"));
-        state.register_session("s");
+        state.register_session("s", "run-1", "task-1");
         assert!(state.is_managed_session("s"));
+        assert_eq!(
+            state.task_for_session("s"),
+            Some(("run-1".to_string(), "task-1".to_string()))
+        );
         state.unregister_session("s");
         assert!(!state.is_managed_session("s"));
     }
@@ -1000,6 +1244,46 @@ mod tests {
         let text = normalized.to_string_lossy();
         assert!(!text.starts_with(r"\\?\"), "界面不应显示 verbatim 前缀：{text}");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn outcome(status: Option<&str>) -> ProcessOutcome {
+        ProcessOutcome {
+            ok: true,
+            result: Some("已完成".into()),
+            structured: status.map(|status| {
+                serde_json::json!({
+                    "status": status,
+                    "summary": "创建了文件",
+                    "files_changed": ["a.txt"],
+                    "verification": "未验证"
+                })
+            }),
+            session_id: "s".into(),
+            ..ProcessOutcome::default()
+        }
+    }
+
+    #[test]
+    fn blocked_worker_is_not_a_success() {
+        let (state, display, error) = worker_report(&outcome(Some("blocked")));
+        assert_eq!(state, TaskState::Failed);
+        assert!(display.unwrap().contains("创建了文件"));
+        assert!(error.unwrap().contains("创建了文件"));
+    }
+
+    #[test]
+    fn completed_worker_is_a_success() {
+        let (state, display, error) = worker_report(&outcome(Some("completed")));
+        assert_eq!(state, TaskState::Succeeded);
+        assert!(display.unwrap().contains("验证：未验证"));
+        assert!(error.is_none());
+    }
+
+    #[test]
+    fn worker_without_structured_output_is_not_a_success() {
+        let (state, _, error) = worker_report(&outcome(None));
+        assert_eq!(state, TaskState::Failed);
+        assert!(error.unwrap().contains("结构化"));
     }
 
     fn live_dir(tag: &str) -> PathBuf {
@@ -1021,6 +1305,7 @@ mod tests {
         let plan = planner_call(
             "Create a file named island_live.txt containing LIVE_OK. Do not change anything else.",
             &dir,
+            |_| {},
         )
         .expect("planner should return a valid plan");
         assert!(!plan.0.tasks.is_empty());
@@ -1045,6 +1330,7 @@ mod tests {
             "Create a marker file and report what changed",
             &dir,
             &[finished],
+            |_| {},
         )
         .expect("synthesis should return text");
         assert!(!text.trim().is_empty());
@@ -1073,6 +1359,7 @@ mod tests {
         };
         let prompt = plan::worker_prompt("Write a marker file", &dir, &task);
         let session_id = new_uuid();
+        let schema = plan::worker_schema().to_string();
         let config = RunnerConfig {
             program: &program,
             cwd: &dir,
@@ -1083,11 +1370,20 @@ mod tests {
             max_turns: 8,
             timeout: Duration::from_secs(180),
             output_format: "stream-json",
-            json_schema: None,
+            json_schema: Some(&schema),
             env: &env,
         };
         let outcome = runner::run_claude(&config, |_| {});
         assert!(outcome.ok, "worker failed: {:?}", outcome.error);
+        assert_eq!(
+            outcome
+                .structured
+                .as_ref()
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str),
+            Some("completed"),
+            "worker 应自报 completed"
+        );
         let content = fs::read_to_string(dir.join("island_live.txt")).expect("file");
         assert_eq!(content.trim(), "LIVE_OK");
         let _ = fs::remove_dir_all(&dir);

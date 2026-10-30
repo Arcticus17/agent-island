@@ -1145,8 +1145,7 @@ pub(crate) fn toggle_window(app: &tauri::AppHandle) {
 }
 
 #[tauri::command]
-pub(crate) fn open_overview(app: tauri::AppHandle) -> Result<(), String> {
-    let window = app
+pub(crate) fn open_overview(app: tauri::AppHandle) -> Result<(), String> {    let window = app
         .get_webview_window("overview")
         .ok_or("总览窗口尚未创建")?;
     window
@@ -1162,6 +1161,14 @@ pub(crate) fn open_overview(app: tauri::AppHandle) -> Result<(), String> {
     window
         .set_focus()
         .map_err(|error| format!("无法聚焦总览窗口: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn open_team(app: tauri::AppHandle) -> Result<(), String> {
+    open_overview(app.clone())?;
+    use tauri::Emitter;
+    let _ = app.emit("open-team", ());
     Ok(())
 }
 

@@ -24,6 +24,7 @@
   import DiagnosticsPanel from "../components/diagnostics/DiagnosticsPanel.svelte";
   import LayoutEditor from "../components/layout/LayoutEditor.svelte";
   import NotificationStack from "../components/notifications/NotificationStack.svelte";
+import TeamStrip from "../components/team/TeamStrip.svelte";
   import InboxPanel from "../components/inbox/InboxPanel.svelte";
   import type { ApprovalItem, CommandFailure, CommandUiState, NotificationItem } from "../components/events/types";
   import { tauriBridge } from "../bridge/tauri";
@@ -1822,6 +1823,7 @@
           onSnooze={(id, minutes) => void snoozeInbox(id, minutes)}
           onOpenApproval={focusApproval}
         />
+        <TeamStrip {bridge} />
         <nav class="agent-strip" data-testid="agent-strip" aria-label="切换 Agent">
           {#each visibleAgents as agent (agent.id)}
             <button

@@ -146,30 +146,52 @@ Bash  od -c ".../E2E_OK.txt"
 
 仍然存在的限制：带 `>` / `;` / `|` 的复合命令会整体被拒绝（即使其中包含只读命令）；worker 需要改用 Read / Glob 或单条只读命令。这是骨架阶段的有意取舍——**快速拒绝**优于**静默等待**。
 
-## 10. 团队任务的权限策略（骨架）
+## 10. 团队任务的权限策略（第一步）
 
 | 场景 | 行为 |
 | --- | --- |
 | 文件编辑（Edit/Write/MultiEdit） | `acceptEdits` 自动放行；worker 只能改工作区内的文件 |
-| 只读 Bash（ls / cat / wc / od / Get-ChildItem…） | hook 立即 allow |
-| 危险或复合 Bash（git push、rm、含 `>`/`;`/`|` 的链） | hook 立即 deny，原因回传 worker；不弹 120 秒审批 |
+| 只读 Bash（ls / cat / wc / od / find / Get-ChildItem…） | hook 立即 allow；`2>/dev/null; echo …` 这类只读链也放行 |
+| 危险或复合 Bash（git push、rm、含写重定向/管道的链） | 任务进入 `waiting_approval`，小岛审批卡显示命令；允许后继续，拒绝后 worker 收到 deny |
+| 5 分钟无人处理 | 按拒绝处理，任务失败，可重试 |
 | 用户自己的会话 | 保持原来的审批行为（approval card + 120 秒回退） |
 
-## 11. 骨架已实现的边界
+## 11. 第一步已实现的边界
 
-- 入口：总览窗口顶部「团队」；主岛还没有团队状态条。
+- 入口：主岛展开态团队条（进度 + 待审批数）→ 点开总览团队页；总览顶部「团队」仍可直接进入。
 - 主 Agent：Claude Code；规划走 `--json-schema`，汇总走普通 JSON。
-- 调度：同一工作区串行、按依赖 DAG 取第一个就绪任务；最多 4 个任务；单任务 10 分钟超时。
+- worker 收尾：`--json-schema` 强制返回 `completed / blocked / failed`，并附 `summary / files_changed / verification`。退出码 0 但没返回结构化结果、或返回 blocked/failed，都按失败处理。
+- 调度：同一工作区串行、按依赖 DAG 取第一个就绪任务；最多 4 个任务；单任务 10 分钟超时；取消杀进程树。
+- 恢复：失败/跳过的任务可"重试未完成任务"，已成功的任务不重跑。
 - 持久化：`~/.agent-island/team-runs.json`；重启时把中断的 run 标记为失败，不假装还在跑。
 - 进程归属：团队 worker 的根 pid 登记在 `TeamState.active`，主岛快照排除这些 pid；应用正常退出时 `orchestrator::shutdown` 杀掉进程树。
+- 审批归属：`managed_sessions` 把 session → (run, task) 映射起来；审批记录带 `run_id/task_id`，决定后任务从 `waiting_approval` 回到 `running`，超时则失败。
 - 能力预检：Claude 可用；Codex 显示"已安装但未通过无头可用性验证"；OpenCode/Hermes 未接入。凭据从 `~/.claude/settings.json` / `setting.json` 的 env 解析，缺失时明确报错。
 
-## 12. 进入 MVP 前仍要做
+## 12. 第一步真实应用验收（2026-10-30）
 
-1. 主岛团队条 + 任务树/审批入口；当前只有总览窗口。
-2. 并行与成本上限：并发数、`--max-budget-usd`、运行预算、超时后的清理。
-3. 多轮重规划（主 Agent 看结果再补计划）与失败重试/改派。
+三条真实链路，全部使用临时工作区、真实 Claude 进程：
+
+1. **允许 → 完成**：目标"删除 delete_me.txt"→ 计划 → 确认 → 任务 `waiting_approval`（`rm …`）→ 小岛允许 → `running` → `summarizing` → `succeeded`；文件真实删除，汇总明确写了"未独立复核"。
+2. **拒绝 → 失败**：同一目标，小岛点拒绝；worker 收到 deny，返回 `blocked` 并说明权限被拒；任务标 `failed`，文件仍在；汇总不生成。
+3. **失败 → 重试 → 允许 → 完成**：点"重试未完成任务"（二次确认）→ 再次进入 `waiting_approval` → 允许 → `succeeded`；文件删除。
+
+最后一次冒烟用"创建 FINAL_OK.txt"验证 worker 结构化收尾：worker 先尝试 `printf … > FINAL_OK.txt`（写重定向必须审批），允许后完成，文件 8 字节、内容 `FINAL_OK`，汇总做了独立复核。随后把 worker 提示词改为**优先用 Write / Edit 写文件**，减少这类无谓的 Bash 重定向审批。
+
+期间发现并修掉两个真实问题：
+
+- 第一次拒绝后 worker 说"任务未完成"，但因为退出码 0 被记成成功。修复：worker 必须用 `--json-schema` 返回结构化状态；新增单元测试钉住"blocked 不是成功、没有结构化结果不是成功"。
+- 只读验证链 `find … 2>/dev/null; echo …` 会再次弹审批。修复：分类器先去掉无害的 stderr 重定向，再按 `&&`/`;` 拆段逐条判断；写重定向、管道、命令替换仍整体拒绝。
+
+主岛团队条与 `open_team` 已在真实 WebView2 里验证：运行中显示进度/待审批，点击后总览切到团队页。
+
+回归：Rust 248 通过（4 个 live 默认忽略）、浏览器 148 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
+
+## 13. 下一步
+
+1. 并行与 worktree 隔离：并发上限、每任务独立 worktree、合并/回滚。
+2. 预算与成本：`--max-budget-usd`、运行总预算、超预算暂停。
+3. 多轮重规划、失败任务改派（Codex 接入后才有第二个负责人）。
 4. Codex 适配器（等后端可达后再验收）、自定义 Agent 的 dispatch 模板。
-5. 审批归属到 task；当前团队任务不进入人工审批，直接按策略放行/拒绝。
-6. 视觉回归基线、混合 DPI、多显示器与安装包验收。
+5. 视觉回归基线、混合 DPI、多显示器与安装包验收。
 

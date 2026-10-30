@@ -456,6 +456,12 @@ export function createTauriBridge(): AgentIslandBridge {
     async teamCapabilities() {
       return await invoke<TeamCapability[]>("team_capabilities");
     },
+    async openTeam() {
+      await invoke("open_team");
+    },
+    async listenOpenTeam(handler) {
+      return await listen("open-team", () => handler());
+    },
     async startTeamPlan(goal, workspace) {
       return await invoke<TeamRun>("team_start_plan", { goal, workspace });
     },
@@ -470,6 +476,9 @@ export function createTauriBridge(): AgentIslandBridge {
     },
     async cancelTeamRun(id) {
       return await invoke<TeamRun>("team_cancel_run", { id });
+    },
+    async retryTeamRun(id) {
+      return await invoke<TeamRun>("team_retry_run", { id });
     },
     async listenTeamRuns(handler) {
       return await listen<TeamRun>("team-run", (event) => handler(event.payload));

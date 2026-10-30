@@ -31,6 +31,8 @@ function task(overrides: Partial<TeamTask> = {}): TeamTask {
     costUsd: null,
     log: [],
     sessionId: null,
+    pendingApproval: null,
+    approvalId: null,
     ...overrides,
   };
 }
@@ -65,8 +67,8 @@ const capability: TeamCapability = {
   detail: "可用",
 };
 
-function harness() {
-  let latest: TeamRun | null = null;
+function harness(initial: TeamRun | null = null) {
+  let latest: TeamRun | null = initial;
   const calls: string[] = [];
   const bridge: AgentIslandBridge = {
     async getSnapshot() {
@@ -113,6 +115,11 @@ function harness() {
     async cancelTeamRun(id) {
       calls.push("cancel");
       latest = run({ id, phase: "cancelled", error: "已取消" });
+      return latest;
+    },
+    async retryTeamRun(id) {
+      calls.push("retry");
+      latest = run({ id, phase: "running", tasks: [task({ state: "running" })] });
       return latest;
     },
     async listenTeamRuns() {
@@ -184,5 +191,42 @@ describe("team board", () => {
     await waitFor(() => target.textContent?.includes("已取消") === true);
     expect(calls).toContain("cancel");
     expect(current()?.phase).toBe("cancelled");
+  });
+
+  it("shows a waiting team approval with the command", async () => {
+    const waiting = run({
+      phase: "running",
+      tasks: [task({ state: "waiting_approval", pendingApproval: "rm -rf build" })],
+    });
+    const target = await render(harness(waiting).bridge);
+    await waitFor(() => target.textContent?.includes("等待审批") === true);
+    expect(target.textContent).toContain("rm -rf build");
+  });
+
+  it("retries unfinished tasks after a failure", async () => {
+    const failed = run({
+      phase: "failed",
+      error: "有任务失败或被跳过",
+      tasks: [task({ state: "failed", error: "命令被拒绝" })],
+    });
+    const { bridge, calls } = harness(failed);
+    const target = await render(bridge);
+    await waitFor(() =>
+      [...target.querySelectorAll<HTMLButtonElement>("button")].some(
+        (candidate) => candidate.textContent?.trim() === "重试未完成任务",
+      ),
+    );
+
+    const button = [...target.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent?.trim() === "重试未完成任务",
+    )!;
+    button.click();
+    await waitFor(() => target.textContent?.includes("确认重试未完成任务") === true);
+    [...target.querySelectorAll<HTMLButtonElement>("button")]
+      .find((candidate) => candidate.textContent?.trim() === "确认重试未完成任务")!
+      .click();
+
+    await waitFor(() => calls.includes("retry"));
+    expect(calls).toContain("retry");
   });
 });
