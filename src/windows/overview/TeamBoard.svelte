@@ -17,6 +17,7 @@
   let run: TeamRun | null = $state(null);
   let goal = $state("");
   let workspace = $state("");
+  let budget = $state("2.00");
   let busy = $state(false);
   let error = $state<string | null>(null);
   let retryArmed = $state(false);
@@ -126,7 +127,13 @@
     error = null;
     busy = true;
     try {
-      const next = await bridge.startTeamPlan(goal.trim(), workspace.trim());
+      const parsedBudget = budget.trim() === "" ? null : Number(budget);
+      if (parsedBudget !== null && (!Number.isFinite(parsedBudget) || parsedBudget <= 0)) {
+        error = "预算必须是大于 0 的 USD 数字";
+        busy = false;
+        return;
+      }
+      const next = await bridge.startTeamPlan(goal.trim(), workspace.trim(), parsedBudget);
       planTasks = [];
       planForRunId = null;
       applyRun(next);
@@ -206,6 +213,7 @@
     goal = "";
     error = null;
     retryArmed = false;
+    budget = "2.00";
   }
 
   function removeTask(id: string): void {
@@ -226,11 +234,6 @@
         acceptance: "",
       },
     ];
-  }
-
-  function taskCost(tasks: TeamTask[]): string {
-    const total = tasks.reduce((sum, task) => sum + (task.costUsd ?? 0), 0);
-    return total > 0 ? `$${total.toFixed(3)}` : "";
   }
 
   function taskElapsed(task: TeamTask): string {
@@ -304,6 +307,16 @@
           placeholder="C:\\path\\to\\project"
         />
       </label>
+      <label class="field">
+        <span>预算（USD）</span>
+        <input
+          data-testid="team-budget"
+          inputmode="decimal"
+          bind:value={budget}
+          placeholder="2.00"
+        />
+      </label>
+      <p class="hint">预算只按本机 Claude 返回的成本累计；超出后停止派发，不会继续花钱。</p>
       <div class="capabilities">
         {#each capabilities as capability (capability.id)}
           <span class="capability" class:ready={capability.available} title={capability.detail}>
@@ -327,6 +340,10 @@
         <span class="meta">{run.workspace}</span>
       </div>
       <p class="goal">{run.goal}</p>
+      <p class="budget-line">
+        预算 {run.budgetUsd != null ? `$${run.budgetUsd.toFixed(2)}` : "不设上限"}
+        · 已用 ${run.spentUsd.toFixed(2)}
+      </p>
       {#if run.error}<p class="error" role="alert">{run.error}</p>{/if}
       {#if activePhases.includes(run.phase)}
         <button class="danger ghost" type="button" onclick={() => void cancel()}>取消运行</button>
@@ -415,7 +432,7 @@
             {/if}
           </article>
         {/each}
-        {#if taskCost(run.tasks)}<p class="meta cost">本次花费 {taskCost(run.tasks)}</p>{/if}
+        {#if run.spentUsd > 0}<p class="meta cost">本次花费 ${run.spentUsd.toFixed(3)}</p>{/if}
       </section>
     {/if}
 
@@ -503,6 +520,7 @@
   .phase-failed { color: var(--status-error); }
   .phase-cancelled { color: var(--text-secondary); }
   .goal { margin-top: 6px; font-size: 12px; line-height: 1.5; }
+  .budget-line { margin-top: 4px; color: var(--text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; }
   .retry-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .error { padding: 7px 9px; border-radius: 7px; color: var(--danger-ink); background: var(--danger); font-size: 11px; }
   .plan-summary { color: var(--text-secondary); font-size: 11px; line-height: 1.5; margin-bottom: 8px; }

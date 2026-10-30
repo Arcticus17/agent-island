@@ -22,6 +22,8 @@ pub(crate) struct RunnerConfig<'a> {
     /// "json"（一次性结果，适合规划）或 "stream-json"（带过程，适合 worker）。
     pub output_format: &'a str,
     pub json_schema: Option<&'a str>,
+    /// Claude print 模式的单进程 USD 上限；None 表示不设。
+    pub max_budget_usd: Option<f64>,
     pub env: &'a HashMap<String, String>,
 }
 
@@ -217,6 +219,9 @@ fn build_command(config: &RunnerConfig) -> std::process::Command {
     if let Some(schema) = config.json_schema {
         command.arg("--json-schema").arg(schema);
     }
+    if let Some(budget) = config.max_budget_usd {
+        command.arg("--max-budget-usd").arg(format!("{budget:.4}"));
+    }
     command
         .current_dir(config.cwd)
         .stdin(Stdio::null())
@@ -312,12 +317,24 @@ pub(crate) fn run_claude(
             config.timeout.as_secs()
         ));
     } else if parsed.is_error {
+        let budget_exhausted =
+            parsed.terminal_reason.as_deref() == Some("budget_exhausted");
         let detail = parsed
             .result
             .clone()
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "Claude 报告执行失败".to_string());
-        error = Some(if stderr.trim().is_empty() {
+            .unwrap_or_else(|| {
+                if budget_exhausted {
+                    format!(
+                        "预算不足：本轮已花 ${:.3}，超过上限 ${:.2} 后 Claude 停止。提高预算或新建一轮后重试。",
+                        parsed.cost_usd.unwrap_or(0.0),
+                        config.max_budget_usd.unwrap_or(0.0)
+                    )
+                } else {
+                    "Claude 报告执行失败".to_string()
+                }
+            });
+        error = Some(if stderr.trim().is_empty() || budget_exhausted {
             detail
         } else {
             format!("{detail}（{}）", cap_text(&stderr, 300))

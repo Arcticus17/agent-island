@@ -111,12 +111,13 @@
 - 审批：文件编辑/只读 Bash 自动放行；危险 Bash 进入 `waiting_approval`，小岛审批卡允许/拒绝，5 分钟超时按拒绝；只读命令链不再反复弹审批
 - 完成判定：worker 必须返回结构化 `completed / blocked / failed`；说 blocked/failed 或没返回结构化结果都标失败，避免退出码 0 的假成功
 - 恢复：失败/跳过的任务可"重试未完成任务"，已成功的不重跑
+- 预算：每次运行设置 USD 上限（默认 $2），规划/worker/汇总成本累加并显示；超预算停止派发，重试也受剩余预算约束
 - 入口：主岛展开态团队条（进度/待审批）→ 总览团队页；`open_team` 命令
 - 汇总与持久化：主 Agent 汇总、`~/.agent-island/team-runs.json` 原子写、重启把中断任务标失败
 - 进程隔离：团队 worker pid 从主岛快照过滤，应用退出 `/T /F` 清理
 - 真实端到端：允许→完成、拒绝→失败→重试→允许→完成两条链路均跑通；详情见 [验证记录](docs/verification/2026-10-30-team-orchestration-spike.md)
 - 设计依据：[第一步设计：审批、状态与入口](docs/research/2026-10-30-team-orchestration-first-step.md)
-- 下一步：并发与 worktree 隔离、预算/成本上限、多轮重规划、Codex/自定义 Agent 适配、视觉基线
+- 下一步：并发与 worktree 隔离、多轮重规划、Codex/自定义 Agent 适配、视觉基线
 
 ## 当前已完成
 

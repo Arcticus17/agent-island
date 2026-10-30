@@ -125,6 +125,12 @@ pub(crate) struct TeamRunView {
     pub updated_at_ms: u64,
     pub error: Option<String>,
     pub planner_session_id: Option<String>,
+    /// 本轮 USD 预算；None 表示不设上限（旧记录默认 None）。
+    #[serde(default)]
+    pub budget_usd: Option<f64>,
+    /// 已经花掉的 USD（规划 + worker + 汇总）。
+    #[serde(default)]
+    pub spent_usd: f64,
 }
 
 pub(crate) struct TeamState {
@@ -382,6 +388,16 @@ pub(crate) fn shutdown(state: &AppState) {
     }
 }
 
+fn normalize_budget(value: Option<f64>) -> Result<Option<f64>, String> {
+    match value {
+        Some(value) if value.is_finite() && value > 0.0 && value <= 100.0 => {
+            Ok(Some((value * 100.0).round() / 100.0))
+        }
+        Some(_) => Err("预算必须是 0.01–100 USD 之间的数字".to_string()),
+        None => Ok(None),
+    }
+}
+
 fn normalize_workspace(input: &str) -> Result<PathBuf, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -436,7 +452,9 @@ fn from_plan_task(task: &PlanTask) -> TeamTaskView {
 fn planner_call(
     goal: &str,
     workspace: &Path,
+    max_budget_usd: Option<f64>,
     on_spawn: impl FnOnce(u32),
+    on_cost: impl FnOnce(Option<f64>),
 ) -> Result<(TeamPlan, String, Option<f64>), String> {
     let program = capability::claude_program()
         .ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
@@ -466,9 +484,11 @@ fn planner_call(
         timeout: Duration::from_secs(PLANNER_TIMEOUT_SECS),
         output_format: "json",
         json_schema: Some(&schema_text),
+        max_budget_usd,
         env: &env,
     };
     let outcome = runner::run_claude(&config, on_spawn);
+    on_cost(outcome.cost_usd);
     if !outcome.ok {
         return Err(outcome
             .error
@@ -498,8 +518,9 @@ fn synthesis_call(
     goal: &str,
     workspace: &Path,
     tasks: &[TeamTaskView],
+    max_budget_usd: Option<f64>,
     on_spawn: impl FnOnce(u32),
-) -> Result<String, String> {
+) -> Result<(String, Option<f64>), String> {
     let program = capability::claude_program()
         .ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
     let env = capability::claude_settings_env();
@@ -536,14 +557,15 @@ fn synthesis_call(
         timeout: Duration::from_secs(SYNTHESIS_TIMEOUT_SECS),
         output_format: "json",
         json_schema: None,
+        max_budget_usd,
         env: &env,
     };
     let outcome = runner::run_claude(&config, on_spawn);
+    let cost = outcome.cost_usd;
+    let error = outcome.error;
     match (outcome.ok, outcome.result) {
-        (true, Some(text)) if !text.trim().is_empty() => Ok(text),
-        (_, _) => Err(outcome
-            .error
-            .unwrap_or_else(|| "主 Agent 汇总失败".to_string())),
+        (true, Some(text)) if !text.trim().is_empty() => Ok((text, cost)),
+        (_, _) => Err(error.unwrap_or_else(|| "主 Agent 汇总失败".to_string())),
     }
 }
 
@@ -581,6 +603,7 @@ fn execute_task(
     task: &TeamTaskView,
     workspace: &Path,
     goal: &str,
+    max_budget_usd: Option<f64>,
 ) -> ProcessOutcome {
     let state = app.state::<AppState>();
     let Some(program) = capability::claude_program() else {
@@ -623,6 +646,7 @@ fn execute_task(
         timeout: Duration::from_secs(TASK_TIMEOUT_SECS),
         output_format: "stream-json",
         json_schema: Some(&schema),
+        max_budget_usd,
         env: &env,
     };
     let key = active_key(run_id, &task.id);
@@ -757,6 +781,29 @@ fn run_scheduler(app: tauri::AppHandle, run_id: String) {
         }
         let workspace = PathBuf::from(&run.workspace);
         let goal = run.goal.clone();
+        let remaining = run
+            .budget_usd
+            .map(|budget| (budget - run.spent_usd).max(0.0));
+        if remaining.is_some_and(|value| value <= 0.005) {
+            let budget = run.budget_usd.unwrap_or(0.0);
+            let spent = run.spent_usd;
+            if let Some(view) = state.team.update(&run_id, |run| {
+                run.phase = RunPhase::Failed;
+                run.error = Some(format!(
+                    "预算已用完：已花 ${spent:.2} / 预算 ${budget:.2}；未派发的任务已跳过"
+                ));
+                for task in &mut run.tasks {
+                    if task.state == TaskState::Queued {
+                        task.state = TaskState::Skipped;
+                        task.error = Some("预算已用完，未派发".to_string());
+                        task.ended_at_ms = Some(epoch_millis());
+                    }
+                }
+            }) {
+                emit_run(&app, &view);
+            }
+            return;
+        }
         let index = match pick_task(&run.tasks) {
             Pick::Ready(index) => index,
             Pick::Blocked(index) => {
@@ -813,7 +860,7 @@ fn run_scheduler(app: tauri::AppHandle, run_id: String) {
         };
         emit_run(&app, &started_view);
 
-        let outcome = execute_task(&app, &run_id, &task, &workspace, &goal);
+        let outcome = execute_task(&app, &run_id, &task, &workspace, &goal, remaining);
         let current = state.team.get(&run_id);
         if current.as_ref().is_some_and(|run| run.phase == RunPhase::Cancelled) {
             return;
@@ -837,6 +884,7 @@ fn run_scheduler(app: tauri::AppHandle, run_id: String) {
                     });
                 task.log = outcome.log.clone();
             }
+            run.spent_usd += outcome.cost_usd.unwrap_or(0.0);
         }) else {
             return;
         };
@@ -872,18 +920,26 @@ fn run_scheduler(app: tauri::AppHandle, run_id: String) {
     }
     let synthesis_key = active_key(&run_id, "synthesis");
     let synthesis_pid_key = synthesis_key.clone();
-    let synthesis = synthesis_call(
-        &run.goal,
-        &PathBuf::from(&run.workspace),
-        &run.tasks,
-        |pid| {
-            state
-                .team
-                .active
-                .lock_recover()
-                .insert(synthesis_pid_key.clone(), pid);
-        },
-    );
+    let synthesis_budget = run
+        .budget_usd
+        .map(|budget| (budget - run.spent_usd).max(0.0));
+    let synthesis = if synthesis_budget.is_some_and(|value| value <= 0.005) {
+        Err("预算已用完，跳过汇总".to_string())
+    } else {
+        synthesis_call(
+            &run.goal,
+            &PathBuf::from(&run.workspace),
+            &run.tasks,
+            synthesis_budget,
+            |pid| {
+                state
+                    .team
+                    .active
+                    .lock_recover()
+                    .insert(synthesis_pid_key.clone(), pid);
+            },
+        )
+    };
     state.team.active.lock_recover().remove(&synthesis_key);
     if state
         .team
@@ -908,8 +964,9 @@ fn run_scheduler(app: tauri::AppHandle, run_id: String) {
     if let Some(view) = state.team.update(&run_id, |run| {
         run.phase = RunPhase::Succeeded;
         match &synthesis {
-            Ok(text) => {
+            Ok((text, cost)) => {
                 run.summary = Some(text.clone());
+                run.spent_usd += (*cost).unwrap_or(0.0);
                 run.error = None;
             }
             Err(error) => {
@@ -933,6 +990,7 @@ pub(crate) fn team_start_plan(
     state: tauri::State<AppState>,
     goal: String,
     workspace: String,
+    budget_usd: Option<f64>,
 ) -> Result<TeamRunView, String> {
     let goal = goal.trim().to_string();
     if goal.is_empty() {
@@ -941,6 +999,7 @@ pub(crate) fn team_start_plan(
     if goal.chars().count() > 4000 {
         return Err("目标太长，请压缩到 4000 字以内".to_string());
     }
+    let budget_usd = normalize_budget(budget_usd)?;
     let workspace = normalize_workspace(&workspace)?;
     let available = capability::available_agent_ids();
     if !available.iter().any(|id| id == "claude") {
@@ -965,6 +1024,8 @@ pub(crate) fn team_start_plan(
         updated_at_ms: now,
         error: None,
         planner_session_id: None,
+        budget_usd,
+        spent_usd: 0.0,
     };
     state.team.insert(run.clone());
     emit_run(&app, &run);
@@ -973,12 +1034,18 @@ pub(crate) fn team_start_plan(
         let app_state = app.state::<AppState>();
         let planner_key = active_key(&run_id, "planner");
         let planner_pid_key = planner_key.clone();
-        let result = planner_call(&goal, &workspace, |pid| {
+        let result = planner_call(&goal, &workspace, budget_usd, |pid| {
             app_state
                 .team
                 .active
                 .lock_recover()
                 .insert(planner_pid_key.clone(), pid);
+        }, |cost| {
+            if let Some(cost) = cost {
+                let _ = app_state.team.update(&run_id, |run| {
+                    run.spent_usd += cost;
+                });
+            }
         });
         app_state.team.active.lock_recover().remove(&planner_key);
         if app_state
@@ -1081,6 +1148,16 @@ pub(crate) fn team_retry_run(
     }
     if state.team.active.lock_recover().values().next().is_some() {
         return Err("已有任务在运行，请先等它结束或取消".to_string());
+    }
+    if run
+        .budget_usd
+        .is_some_and(|budget| budget - run.spent_usd <= 0.005)
+    {
+        return Err(format!(
+            "预算已用完（已花 ${:.2} / 预算 ${:.2}），请新建一轮或提高预算",
+            run.spent_usd,
+            run.budget_usd.unwrap_or(0.0)
+        ));
     }
     if run.tasks.iter().all(|task| task.state == TaskState::Succeeded) {
         return Err("这一轮已经全部完成，不需要重试".to_string());
@@ -1286,6 +1363,43 @@ mod tests {
         assert!(error.unwrap().contains("结构化"));
     }
 
+    #[test]
+    fn budget_must_be_a_positive_sane_amount() {
+        assert_eq!(normalize_budget(Some(2.0)).unwrap(), Some(2.0));
+        assert_eq!(normalize_budget(Some(0.129)).unwrap(), Some(0.13));
+        assert!(normalize_budget(Some(0.0)).is_err());
+        assert!(normalize_budget(Some(-1.0)).is_err());
+        assert!(normalize_budget(Some(101.0)).is_err());
+        assert_eq!(normalize_budget(None).unwrap(), None);
+    }
+
+    #[test]
+    fn old_run_records_without_budget_default_to_no_cap() {
+        let view = TeamRunView {
+            id: "r".into(),
+            goal: "g".into(),
+            workspace: "C:\\work".into(),
+            main_agent: "claude".into(),
+            main_agent_name: "Claude Code".into(),
+            phase: RunPhase::Succeeded,
+            plan_summary: None,
+            summary: None,
+            tasks: vec![task("a", TaskState::Succeeded, &[])],
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            error: None,
+            planner_session_id: None,
+            budget_usd: Some(2.0),
+            spent_usd: 0.5,
+        };
+        let mut value = serde_json::to_value(&view).unwrap();
+        value.as_object_mut().unwrap().remove("budgetUsd");
+        value.as_object_mut().unwrap().remove("spentUsd");
+        let parsed: TeamRunView = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.budget_usd, None);
+        assert_eq!(parsed.spent_usd, 0.0);
+    }
+
     fn live_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "agent-island-live-{tag}-{}-{}",
@@ -1305,6 +1419,8 @@ mod tests {
         let plan = planner_call(
             "Create a file named island_live.txt containing LIVE_OK. Do not change anything else.",
             &dir,
+            None,
+            |_| {},
             |_| {},
         )
         .expect("planner should return a valid plan");
@@ -1326,10 +1442,11 @@ mod tests {
         let mut finished = task("a", TaskState::Succeeded, &[]);
         finished.title = "Create island_live.txt".into();
         finished.result = Some("Created island_live.txt with LIVE_OK.".into());
-        let text = synthesis_call(
+        let (text, _cost) = synthesis_call(
             "Create a marker file and report what changed",
             &dir,
             &[finished],
+            None,
             |_| {},
         )
         .expect("synthesis should return text");
@@ -1371,6 +1488,7 @@ mod tests {
             timeout: Duration::from_secs(180),
             output_format: "stream-json",
             json_schema: Some(&schema),
+            max_budget_usd: None,
             env: &env,
         };
         let outcome = runner::run_claude(&config, |_| {});

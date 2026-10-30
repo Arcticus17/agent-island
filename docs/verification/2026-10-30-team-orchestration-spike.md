@@ -175,6 +175,8 @@ Bash  od -c ".../E2E_OK.txt"
 1. **允许 → 完成**：目标"删除 delete_me.txt"→ 计划 → 确认 → 任务 `waiting_approval`（`rm …`）→ 小岛允许 → `running` → `summarizing` → `succeeded`；文件真实删除，汇总明确写了"未独立复核"。
 2. **拒绝 → 失败**：同一目标，小岛点拒绝；worker 收到 deny，返回 `blocked` 并说明权限被拒；任务标 `failed`，文件仍在；汇总不生成。
 3. **失败 → 重试 → 允许 → 完成**：点"重试未完成任务"（二次确认）→ 再次进入 `waiting_approval` → 允许 → `succeeded`；文件删除。
+4. **预算内**：预算 $1.00，真实运行花费 $0.279，界面显示"预算 $1.00 · 已用 $0.28"，任务完成。
+5. **预算不足**：预算 $0.05，主 Agent 规划阶段在 `budget_exhausted` 停止；界面显示"预算不足：本轮已花 $0.093，超过上限 $0.05 后 Claude 停止。提高预算或新建一轮后重试。"任务未派发。`--max-budget-usd` 是近似上限，实际计费会略超；界面显示真实累计值，不美化。
 
 最后一次冒烟用"创建 FINAL_OK.txt"验证 worker 结构化收尾：worker 先尝试 `printf … > FINAL_OK.txt`（写重定向必须审批），允许后完成，文件 8 字节、内容 `FINAL_OK`，汇总做了独立复核。随后把 worker 提示词改为**优先用 Write / Edit 写文件**，减少这类无谓的 Bash 重定向审批。
 
@@ -185,13 +187,12 @@ Bash  od -c ".../E2E_OK.txt"
 
 主岛团队条与 `open_team` 已在真实 WebView2 里验证：运行中显示进度/待审批，点击后总览切到团队页。
 
-回归：Rust 248 通过（4 个 live 默认忽略）、浏览器 148 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
+回归：Rust 250 通过（4 个 live 默认忽略）、浏览器 148 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
 
 ## 13. 下一步
 
 1. 并行与 worktree 隔离：并发上限、每任务独立 worktree、合并/回滚。
-2. 预算与成本：`--max-budget-usd`、运行总预算、超预算暂停。
-3. 多轮重规划、失败任务改派（Codex 接入后才有第二个负责人）。
-4. Codex 适配器（等后端可达后再验收）、自定义 Agent 的 dispatch 模板。
-5. 视觉回归基线、混合 DPI、多显示器与安装包验收。
+2. 多轮重规划、失败任务改派（Codex 接入后才有第二个负责人）。
+3. Codex 适配器（等后端可达后再验收）、自定义 Agent 的 dispatch 模板。
+4. 视觉回归基线、混合 DPI、多显示器与安装包验收。
 

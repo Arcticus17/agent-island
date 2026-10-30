@@ -505,6 +505,9 @@ export interface TeamRun {
   updatedAtMs: number;
   error: string | null;
   plannerSessionId: string | null;
+  /** 本轮 USD 预算；null 表示不设上限（旧记录）。 */
+  budgetUsd: number | null;
+  spentUsd: number;
 }
 
 export interface AgentStatsRow {
@@ -607,8 +610,8 @@ export interface AgentIslandBridge {
   openTeam?(): Promise<void>;
   listenOpenTeam?(handler: () => void): Promise<() => void>;
   teamCapabilities?(): Promise<TeamCapability[]>;
-  /** 团队任务：让主 Agent 生成计划；返回后通过 getTeamRun 轮询或 listenTeamRuns 接收更新。 */
-  startTeamPlan?(goal: string, workspace: string): Promise<TeamRun>;
+  /** 团队任务：让主 Agent 生成计划；budgetUsd 是本次运行的硬上限。 */
+  startTeamPlan?(goal: string, workspace: string, budgetUsd?: number | null): Promise<TeamRun>;
   getTeamRun?(id: string): Promise<TeamRun | null>;
   listTeamRuns?(): Promise<TeamRun[]>;
   /** 确认（可编辑的）计划并开始执行。 */

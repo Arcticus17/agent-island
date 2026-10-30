@@ -44,6 +44,8 @@ function activeRun(): TeamRun {
     updatedAtMs: Date.now(),
     error: null,
     plannerSessionId: null,
+    budgetUsd: 2,
+    spentUsd: 0.12,
   };
 }
 

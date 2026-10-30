@@ -59,6 +59,14 @@
 5. 主岛团队条显示进度/待审批，点击能打开总览团队页。
 6. 重启/退出不会留下假装运行中的任务或孤儿进程。
 
+## 第二步：预算（同日）
+
+第一步跑完后先补预算，而不是马上上并发：
+
+- Claude 的 `--max-budget-usd` 是**近似**上限，实测预算 $0.05 时仍花了 $0.093 才停；所以界面显示"真实累计成本"，不把上限画成精确线。
+- 规划、worker、汇总三次调用都计入同一个 `spent_usd`；超预算后停止派发未开始的任务，重试也受剩余预算约束。
+- 不做自动充值、不自动降级模型：预算不够就明确失败，让用户提高预算或新建一轮。
+
 ## 参考
 
 - [Curating queues beats approving actions — WorkOS](https://webflow.workos.com/blog/curating-queues-beats-approving-actions)
