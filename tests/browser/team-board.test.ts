@@ -66,6 +66,7 @@ function run(overrides: Partial<TeamRun> = {}): TeamRun {
     baseCommit: "abc123",
     worktreeMode: true,
     workspaceWarning: null,
+    concurrency: 2,
     ...overrides,
   };
 }
@@ -85,6 +86,7 @@ function harness(initial: TeamRun | null = null) {
   let latest: TeamRun | null = initial;
   const calls: string[] = [];
   const budgets: Array<number | null | undefined> = [];
+  const parallelisms: Array<number | undefined> = [];
   const bridge: AgentIslandBridge = {
     async getSnapshot() {
       throw new Error("not used");
@@ -98,9 +100,15 @@ function harness(initial: TeamRun | null = null) {
     async teamCapabilities() {
       return [capability];
     },
-    async startTeamPlan(_goal: string, _workspace: string, budgetUsd?: number | null) {
+    async startTeamPlan(
+      _goal: string,
+      _workspace: string,
+      budgetUsd?: number | null,
+      concurrency?: number,
+    ) {
       calls.push("start");
       budgets.push(budgetUsd);
+      parallelisms.push(concurrency);
       latest = run({ phase: "awaiting_plan", tasks: [task()] });
       return latest;
     },
@@ -163,7 +171,7 @@ function harness(initial: TeamRun | null = null) {
       return () => {};
     },
   };
-  return { bridge, calls, budgets, current: () => latest };
+  return { bridge, calls, budgets, parallelisms, current: () => latest };
 }
 
 async function waitFor(check: () => boolean, timeoutMs = 1_500) {
@@ -190,17 +198,19 @@ afterEach(async () => {
 
 describe("team board", () => {
   it("edits the generated plan and confirms it", async () => {
-    const { bridge, calls, budgets, current } = harness();
+    const { bridge, calls, budgets, parallelisms, current } = harness();
     const target = await render(bridge);
 
     await userEvent.fill(target.querySelector<HTMLTextAreaElement>('[data-testid="team-goal"]')!, "写一个标记文件");
     await userEvent.fill(target.querySelector<HTMLInputElement>('[data-testid="team-workspace"]')!, "C:\\work");
     await userEvent.fill(target.querySelector<HTMLInputElement>('[data-testid="team-budget"]')!, "1.25");
+    await userEvent.fill(target.querySelector<HTMLInputElement>('[data-testid="team-concurrency"]')!, "2");
     target.querySelector<HTMLButtonElement>('[data-testid="team-generate"]')!.click();
 
     await waitFor(() => target.textContent?.includes("计划已生成") === true);
     expect(calls).toContain("start");
     expect(budgets[0]).toBe(1.25);
+    expect(parallelisms[0]).toBe(2);
     expect(current()?.phase).toBe("awaiting_plan");
 
     const prompt = target.querySelector<HTMLTextAreaElement>(".plan-task textarea")!;

@@ -58,6 +58,7 @@ function activeRun(): TeamRun {
     baseCommit: "abc123",
     worktreeMode: true,
     workspaceWarning: null,
+    concurrency: 2,
   };
 }
 

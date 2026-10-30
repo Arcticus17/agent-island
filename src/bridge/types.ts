@@ -522,6 +522,7 @@ export interface TeamRun {
   baseCommit: string | null;
   worktreeMode: boolean;
   workspaceWarning: string | null;
+  concurrency: number;
 }
 
 export interface AgentStatsRow {
@@ -624,8 +625,13 @@ export interface AgentIslandBridge {
   openTeam?(): Promise<void>;
   listenOpenTeam?(handler: () => void): Promise<() => void>;
   teamCapabilities?(): Promise<TeamCapability[]>;
-  /** 团队任务：让主 Agent 生成计划；budgetUsd 是本次运行的硬上限。 */
-  startTeamPlan?(goal: string, workspace: string, budgetUsd?: number | null): Promise<TeamRun>;
+  /** 团队任务：让主 Agent 生成计划；budgetUsd 是本次运行的硬上限，concurrency 默认 2。 */
+  startTeamPlan?(
+    goal: string,
+    workspace: string,
+    budgetUsd?: number | null,
+    concurrency?: number,
+  ): Promise<TeamRun>;
   getTeamRun?(id: string): Promise<TeamRun | null>;
   listTeamRuns?(): Promise<TeamRun[]>;
   /** 确认（可编辑的）计划并开始执行。 */

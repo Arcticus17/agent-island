@@ -18,6 +18,7 @@
   let goal = $state("");
   let workspace = $state("");
   let budget = $state("2.00");
+  let parallelism = $state("2");
   let busy = $state(false);
   let error = $state<string | null>(null);
   let retryArmed = $state(false);
@@ -143,7 +144,18 @@
         busy = false;
         return;
       }
-      const next = await bridge.startTeamPlan(goal.trim(), workspace.trim(), parsedBudget);
+      const parsedParallelism = Number(parallelism);
+      if (!Number.isInteger(parsedParallelism) || parsedParallelism < 1 || parsedParallelism > 4) {
+        error = "并发必须是 1–4 的整数";
+        busy = false;
+        return;
+      }
+      const next = await bridge.startTeamPlan(
+        goal.trim(),
+        workspace.trim(),
+        parsedBudget,
+        parsedParallelism,
+      );
       planTasks = [];
       planForRunId = null;
       applyRun(next);
@@ -290,6 +302,7 @@
     error = null;
     retryArmed = false;
     budget = "2.00";
+    parallelism = "2";
     diffs = {};
     mergeArmed = null;
     discardArmed = null;
@@ -395,7 +408,16 @@
           placeholder="2.00"
         />
       </label>
-      <p class="hint">预算只按本机 Claude 返回的成本累计；超出后停止派发，不会继续花钱。</p>
+      <label class="field">
+        <span>并发（1–4）</span>
+        <input
+          data-testid="team-concurrency"
+          inputmode="numeric"
+          bind:value={parallelism}
+          placeholder="2"
+        />
+      </label>
+      <p class="hint">预算只按本机 Claude 返回的成本累计；超出后停止派发，不会继续花钱。并发只用于互不依赖的任务。</p>
       <div class="capabilities">
         {#each capabilities as capability (capability.id)}
           <span class="capability" class:ready={capability.available} title={capability.detail}>
@@ -422,6 +444,7 @@
       <p class="budget-line">
         预算 {run.budgetUsd != null ? `$${run.budgetUsd.toFixed(2)}` : "不设上限"}
         · 已用 ${run.spentUsd.toFixed(2)}
+        · 并发 {run.concurrency}
       </p>
       {#if run.worktreeMode}
         <p class="worktree-note">独立 worktree：{run.baseBranch ?? "HEAD"}@{shortCommit(run.baseCommit)}；主工作区不会被直接修改。</p>
@@ -523,10 +546,12 @@
             {#if task.mergeError}<p class="task-error">{task.mergeError}</p>{/if}
             {#if task.mergeState === "pending" && task.changedFiles.length > 0}
               <div class="merge-actions">
-                {#if task.state === "succeeded"}
+                {#if task.state === "succeeded" && !activePhases.includes(run.phase)}
                   <button class="primary" type="button" disabled={taskBusy === task.id} onclick={() => void mergeTask(task)}>
                     {mergeArmed === task.id ? "确认合并到主工作区" : "合并"}
                   </button>
+                {:else if task.state === "succeeded"}
+                  <span class="hint">任务已完成；等这一轮结束后可合并。</span>
                 {:else}
                   <span class="hint">任务未成功；改动保留在分支，可查看或丢弃。</span>
                 {/if}

@@ -9,6 +9,7 @@
 pub(crate) mod capability;
 pub(crate) mod plan;
 pub(crate) mod runner;
+pub(crate) mod scheduler;
 pub(crate) mod worktree;
 
 use crate::*;
@@ -169,6 +170,13 @@ pub(crate) struct TeamRunView {
     /// 主工作区脏等需要用户知道、但不阻塞启动的提醒。
     #[serde(default)]
     pub workspace_warning: Option<String>,
+    /// 同时执行的独立任务数（旧记录默认 1）。
+    #[serde(default = "default_concurrency")]
+    pub concurrency: u32,
+}
+
+fn default_concurrency() -> u32 {
+    1
 }
 
 pub(crate) struct TeamState {
@@ -859,6 +867,20 @@ fn fail_task_setup(
 }
 
 fn run_scheduler(app: tauri::AppHandle, run_id: String) {
+    let concurrency = app
+        .state::<AppState>()
+        .team
+        .get(&run_id)
+        .map(|run| run.concurrency)
+        .unwrap_or(1);
+    if concurrency <= 1 {
+        run_scheduler_serial(app, run_id);
+    } else {
+        scheduler::run_parallel(app, run_id);
+    }
+}
+
+fn run_scheduler_serial(app: tauri::AppHandle, run_id: String) {
     loop {
         let state = app.state::<AppState>();
         let Some(run) = state.team.get(&run_id) else {
@@ -1172,6 +1194,7 @@ pub(crate) fn team_start_plan(
     goal: String,
     workspace: String,
     budget_usd: Option<f64>,
+    concurrency: Option<u32>,
 ) -> Result<TeamRunView, String> {
     let goal = goal.trim().to_string();
     if goal.is_empty() {
@@ -1181,6 +1204,7 @@ pub(crate) fn team_start_plan(
         return Err("目标太长，请压缩到 4000 字以内".to_string());
     }
     let budget_usd = normalize_budget(budget_usd)?;
+    let concurrency = concurrency.unwrap_or(2).clamp(1, 4);
     let workspace = normalize_workspace(&workspace)?;
     let repo = worktree::detect(&workspace)?;
     let workspace_warning = repo.dirty.then(|| {
@@ -1217,6 +1241,7 @@ pub(crate) fn team_start_plan(
         base_commit: Some(repo.head),
         worktree_mode: true,
         workspace_warning,
+        concurrency,
     };
     state.team.insert(run.clone());
     emit_run(&app, &run);
@@ -1780,6 +1805,7 @@ mod tests {
             base_commit: None,
             worktree_mode: false,
             workspace_warning: None,
+            concurrency: 1,
         };
         let mut value = serde_json::to_value(&view).unwrap();
         value.as_object_mut().unwrap().remove("budgetUsd");
