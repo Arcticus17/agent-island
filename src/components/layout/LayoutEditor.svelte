@@ -35,7 +35,7 @@
     status: "状态",
     usage: "用量",
     session: "会话",
-    log: "日志",
+    log: "回执",
     stats: "统计",
   };
   const sizeNames: Record<CardSize, string> = {
@@ -113,62 +113,7 @@
   }
 </script>
 
-<section class="layout-editor" data-testid="layout-editor" data-editing={editing}>
-  <div class="editor-toolbar">
-    <div>
-      <span class="eyebrow">自适应布局</span>
-      <strong>{editing ? "正在编辑卡片" : "卡片布局"}</strong>
-    </div>
-    <div class="toolbar-actions">
-      <select
-        class="preset-select"
-        data-testid="layout-preset-select"
-        aria-label="布局预设"
-        title="切换布局预设：极简只留状态与对话"
-        value={layout.preset}
-        onchange={(event) => {
-          const value = event.currentTarget.value;
-          if (value !== "custom") usePreset(value as DefaultLayoutName);
-        }}
-      >
-        {#each presetIds as preset (preset)}
-          <option value={preset}>{presetNames[preset]}</option>
-        {/each}
-        {#if layout.preset === "custom"}<option value="custom">自定义</option>{/if}
-      </select>
-      <button
-        class:active={editing}
-        data-testid="layout-edit-toggle"
-        type="button"
-        aria-label={editing ? "完成布局编辑" : "编辑布局"}
-        aria-pressed={editing}
-        onclick={() => { editing = !editing; }}
-      >{editing ? "完成" : "编辑"}</button>
-    </div>
-  </div>
-
-  {#if editing}
-    <div class="preset-toolbar" aria-label="布局预设">
-      {#each presetIds as preset (preset)}
-        <button
-          class:active={resetPreset === preset}
-          data-testid="layout-preset"
-          data-preset={preset}
-          type="button"
-          aria-label={`应用${presetNames[preset]}布局`}
-          aria-pressed={resetPreset === preset}
-          onclick={() => usePreset(preset)}
-        >{presetNames[preset]}</button>
-      {/each}
-      <button
-        data-testid="layout-reset"
-        type="button"
-        aria-label={`重置为${presetNames[resetPreset]}布局`}
-        onclick={reset}
-      >重置</button>
-    </div>
-  {/if}
-
+<section class="layout-editor" data-testid="layout-editor" data-editing={editing} aria-label="卡片布局">
   <CardGrid
     {layout}
     {editing}
@@ -180,13 +125,15 @@
   >
     {#snippet children(placement: CardPlacement)}
       <div class="card-shell">
-        <div class="card-heading">
-          <div>
-            <span class="drag-hint" aria-hidden="true">{editing ? "⋮⋮" : ""}</span>
-            <strong>{cardNames[placement.id]}卡片</strong>
+        {#if editing}
+          <div class="card-heading">
+            <div>
+              <span class="drag-hint" aria-hidden="true">⋮⋮</span>
+              <span class="card-name">{cardNames[placement.id]}</span>
+            </div>
+            <span class="size-badge">{placement.height ? `${placement.height}px` : sizeNames[placement.size]}</span>
           </div>
-          {#if editing}<span class="size-badge">{placement.height ? `${placement.height}px` : sizeNames[placement.size]}</span>{/if}
-        </div>
+        {/if}
 
         <div class="card-content">
           {#if content}
@@ -243,6 +190,56 @@
     {/snippet}
   </CardGrid>
 
+  {#if editing}
+    <div class="preset-toolbar" aria-label="布局预设">
+      {#each presetIds as preset (preset)}
+        <button
+          class:active={resetPreset === preset}
+          data-testid="layout-preset"
+          data-preset={preset}
+          type="button"
+          aria-label={`应用${presetNames[preset]}布局`}
+          aria-pressed={resetPreset === preset}
+          onclick={() => usePreset(preset)}
+        >{presetNames[preset]}</button>
+      {/each}
+      <button
+        data-testid="layout-reset"
+        type="button"
+        aria-label={`重置为${presetNames[resetPreset]}布局`}
+        onclick={reset}
+      >重置</button>
+    </div>
+  {/if}
+
+  <div class="board-toolbar">
+    <select
+      class="preset-select"
+      data-testid="layout-preset-select"
+      aria-label="布局预设"
+      title="切换布局预设：极简只留状态与对话"
+      value={layout.preset}
+      onchange={(event) => {
+        const value = event.currentTarget.value;
+        if (value !== "custom") usePreset(value as DefaultLayoutName);
+      }}
+    >
+      {#each presetIds as preset (preset)}
+        <option value={preset}>{presetNames[preset]}</option>
+      {/each}
+      {#if layout.preset === "custom"}<option value="custom">自定义</option>{/if}
+    </select>
+    <button
+      class="edit-toggle"
+      class:active={editing}
+      data-testid="layout-edit-toggle"
+      type="button"
+      aria-label={editing ? "完成布局编辑" : "编辑布局"}
+      aria-pressed={editing}
+      onclick={() => { editing = !editing; }}
+    >{editing ? "完成" : "编辑"}</button>
+  </div>
+
   {#if editing && hiddenCards.length > 0}
     <div class="restore-tray" aria-label="已隐藏卡片">
       <span>已隐藏</span>
@@ -262,96 +259,16 @@
 <style>
   .layout-editor {
     min-width: 0;
-    display: grid;
-    gap: var(--island-space-card, 10px);
-    color: var(--island-text-primary, CanvasText);
-  }
-
-  .editor-toolbar,
-  .preset-toolbar,
-  .card-heading,
-  .card-controls,
-  .restore-tray {
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    gap: 0;
+    color: var(--ink);
   }
 
-  .editor-toolbar {
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .editor-toolbar > div {
-    min-width: 0;
-    display: grid;
-    gap: 2px;
-  }
-
-  .editor-toolbar > .toolbar-actions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .preset-select {
-    min-height: 32px;
-    padding: 4px 6px;
-    color-scheme: dark;
-  }
-
-  .eyebrow {
-    color: var(--island-text-tertiary, GrayText);
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-  }
-
-  .preset-toolbar,
-  .restore-tray {
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 8px;
-    border: 1px solid var(--island-border-subtle, ButtonBorder);
-    border-radius: var(--island-radius-control, 12px);
-    background: var(--island-surface-raised, Canvas);
-  }
-
-  .preset-toolbar button:last-child {
-    margin-left: auto;
-  }
-
-  button,
-  select {
-    min-height: 32px;
-    border: 1px solid var(--island-border-subtle, ButtonBorder);
-    border-radius: var(--island-radius-control, 9px);
-    color: var(--island-text-primary, ButtonText);
-    background: var(--island-control-surface, ButtonFace);
-    font: inherit;
-  }
-
-  button {
-    padding: 5px 10px;
-    cursor: pointer;
-  }
-
-  button:hover:not(:disabled),
-  button.active {
-    border-color: var(--island-accent-primary, Highlight);
-    background: var(--island-control-hover, ButtonFace);
-  }
-
-  button:disabled {
-    opacity: 0.38;
-    cursor: default;
-  }
-
-  button:focus-visible,
-  select:focus-visible {
-    outline: 2px solid var(--island-accent-primary, Highlight);
-    outline-offset: 2px;
-  }
+  /* 板面在上，布局工具在下：工具属于设置，不属于要看的数据。 */
+  .preset-toolbar { order: 2; }
+  .board-toolbar { order: 3; }
+  .restore-tray { order: 4; }
 
   .card-shell {
     box-sizing: border-box;
@@ -359,64 +276,63 @@
     min-height: inherit;
     display: flex;
     flex-direction: column;
-    gap: var(--layout-card-gap, 8px);
-    padding: var(--layout-card-padding, 11px);
-  }
-
-  .card-heading {
-    justify-content: space-between;
     gap: 8px;
   }
 
-  .card-heading > div {
-    min-width: 0;
+  .card-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--ink-3);
+  }
+  .card-heading > div { min-width: 0; display: flex; align-items: center; gap: 6px; }
+  .card-name { font-size: var(--fs-2xs); font-weight: 650; letter-spacing: var(--tracking-label); }
+  .drag-hint { font-size: 11px; letter-spacing: -.2em; }
+  .size-badge { flex: 0 0 auto; font: 500 var(--fs-2xs)/1 var(--font-readout); font-variant-numeric: tabular-nums; }
+
+  .card-content { min-width: 0; flex: 1; min-height: 0; }
+  .card-content > span { color: var(--ink-3); font-size: var(--fs-xs); }
+
+  .card-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--rule-strong);
+  }
+
+  .board-toolbar,
+  .preset-toolbar,
+  .restore-tray {
     display: flex;
     align-items: center;
     gap: 6px;
-  }
-
-  .drag-hint,
-  .size-badge,
-  .restore-tray > span,
-  .card-content {
-    min-height: 0;
-    overflow: auto;
-    color: var(--island-text-secondary, GrayText);
-  }
-
-  .drag-hint {
-    font-size: 13px;
-    letter-spacing: -0.28em;
-  }
-
-  .size-badge {
-    flex: 0 0 auto;
-    font-size: 10px;
-  }
-
-  .card-content {
     min-width: 0;
-    flex: 1;
-    font-size: 11px;
   }
+  .board-toolbar { justify-content: flex-end; padding-top: 8px; border-top: 1px solid var(--rule); }
+  .preset-toolbar { flex-wrap: wrap; padding: 8px 0 0; border-top: 1px solid var(--rule); }
+  .preset-toolbar button:last-child { margin-left: auto; }
+  .restore-tray { flex-wrap: wrap; padding-top: 8px; }
+  .restore-tray > span { margin-right: 2px; color: var(--ink-3); font-size: var(--fs-2xs); }
 
-  .card-controls {
-    flex-wrap: wrap;
-    gap: 5px;
-    padding-top: 7px;
-    border-top: 1px solid var(--island-border-subtle, ButtonBorder);
+  button,
+  select {
+    min-height: 26px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-control);
+    color: var(--ink-2);
+    background: transparent;
+    font: inherit;
+    font-size: var(--fs-2xs);
   }
-
-  .card-controls select {
-    padding: 4px 7px;
-  }
-
-  .restore-tray > span {
-    margin-right: 2px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-  }
+  button { padding: 3px 9px; cursor: pointer; }
+  select { padding: 2px 6px; }
+  button:hover:not(:disabled), button.active { color: var(--ink); border-color: var(--rule-strong); background: var(--field); }
+  button:disabled { opacity: .35; cursor: default; }
+  button:focus-visible, select:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .edit-toggle.active { color: var(--ink); border-color: var(--ink-2); }
 
   .sr-only {
     position: absolute;
@@ -429,9 +345,7 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
+    *, *::before, *::after {
       scroll-behavior: auto !important;
       transition-duration: 1ms !important;
       animation-duration: 1ms !important;

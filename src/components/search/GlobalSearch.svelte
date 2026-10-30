@@ -129,24 +129,83 @@
 </details>
 
 <style>
-  .global-search { border-top: 1px solid var(--island-border-subtle); }
-  summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; list-style: none; cursor: pointer; color: var(--island-text-secondary); font-size: 11px; }
+  /* 全局搜索：系统区里的一个可展开行，命中结果也是一行一条，不再套小卡片 */
+  .global-search { border-top: 1px solid var(--rule); }
+  summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    list-style: none;
+    cursor: pointer;
+    color: var(--ink-3);
+    font-size: var(--fs-2xs);
+  }
   summary::-webkit-details-marker { display: none; }
-  .badge { padding: 1px 6px; border: 1px solid var(--island-border-subtle); border-radius: 999px; background: var(--island-control-surface); color: var(--island-text-primary); font-size: 10px; font-weight: 700; }
-  .muted, .hint { color: var(--island-text-tertiary); font-size: 10px; }
-  .body { display: grid; gap: 6px; padding: 0 12px 12px; }
+  summary::after {
+    content: "";
+    width: 7px;
+    height: 7px;
+    margin-left: auto;
+    border-right: 1px solid currentColor;
+    border-bottom: 1px solid currentColor;
+    transform: rotate(45deg) translateY(-2px);
+    transition: transform var(--duration-fast) ease-out;
+  }
+  .global-search[open] > summary::after { transform: rotate(225deg) translateY(-1px); }
+  summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .badge {
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--ink);
+    background: var(--field);
+    font: 600 var(--fs-2xs)/1.5 var(--font-readout);
+    font-variant-numeric: tabular-nums;
+  }
+  .muted, .hint { color: var(--ink-3); font-size: var(--fs-2xs); }
+  .body { display: grid; gap: 6px; padding: 0 0 10px; }
   .hint, .error { margin: 0; }
-  input { min-height: 28px; padding: 4px 8px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); background: var(--island-control-surface); color: var(--island-text-primary); font-size: 11px; }
-  input:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 1px; }
-  ul { margin: 0; padding: 0; display: grid; gap: 4px; max-height: 220px; overflow-y: auto; list-style: none; }
-  li .hit-row { display: flex; align-items: stretch; gap: 4px; }
-  li .hit { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--island-border-subtle); border-radius: 8px; background: var(--island-control-surface); color: var(--island-text-secondary); text-align: left; cursor: pointer; }
-  li .locate { flex: 0 0 auto; width: 28px; border: 1px solid var(--island-border-subtle); border-radius: 8px; background: var(--island-control-surface); color: var(--island-text-tertiary); cursor: pointer; }
-  li .locate:hover { border-color: var(--island-accent-primary); color: var(--island-text-primary); }
-  li button:hover { border-color: var(--island-accent-primary); }
-  li button:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 1px; }
-  .meta { color: var(--island-text-tertiary); font-size: 10px; }
-  .snippet { color: var(--island-text-primary); font-size: 11px; overflow-wrap: anywhere; }
-  .error { color: var(--island-refresh-error-text); font-size: 10px; }
+  input {
+    min-height: 28px;
+    padding: 4px 8px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-control);
+    color: var(--ink);
+    background: var(--field);
+    font-size: var(--fs-2xs);
+  }
+  input::placeholder { color: var(--ink-3); }
+  input:focus-visible { outline: 1px solid var(--ink-2); outline-offset: 1px; }
+  ul { margin: 0; padding: 0; display: grid; gap: 0; max-height: 220px; overflow-y: auto; list-style: none; }
+  li .hit-row { display: flex; align-items: stretch; border-top: 1px solid var(--rule); }
+  li .hit {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: grid;
+    gap: 1px;
+    padding: 6px 8px 6px 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--ink-2);
+    text-align: left;
+    cursor: pointer;
+  }
+  li .locate {
+    flex: 0 0 auto;
+    width: 24px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+  }
+  li .locate:hover { color: var(--ink); background: var(--field); }
+  li .hit:hover .snippet { color: var(--ink); }
+  li .hit:hover .meta { color: var(--ink-2); }
+  li button:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+  .meta { color: var(--ink-3); font: 400 var(--fs-2xs)/1.5 var(--font-mono); }
+  .snippet { color: var(--ink-2); font-size: var(--fs-2xs); overflow-wrap: anywhere; }
+  .error { color: var(--state-error); font-size: var(--fs-2xs); }
 </style>
 

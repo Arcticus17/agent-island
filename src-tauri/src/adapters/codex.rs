@@ -164,6 +164,9 @@ impl AgentAdapter for CodexAdapter {
                     at_ms,
                     role: MessageRole::User,
                     text: message.to_owned(),
+                    tool: None,
+                    detail: None,
+                    success: None,
                 });
                 continue;
             }
@@ -201,6 +204,9 @@ impl AgentAdapter for CodexAdapter {
                     at_ms,
                     role: message_role,
                     text: message_text,
+                    tool: None,
+                    detail: None,
+                    success: None,
                 });
                 continue;
             }

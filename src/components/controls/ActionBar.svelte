@@ -2,7 +2,7 @@
   import { onDestroy } from "svelte";
   import type { AgentCommand, AgentView, CommandResult, SessionView } from "../../bridge/types";
   import type { CommandFailure, CommandUiState } from "../events/types";
-  import type { ThemeStyle } from "../../themes/theme-style";
+  import type { Appearance } from "../../themes/theme-style";
   import SettingsPopover from "./SettingsPopover.svelte";
 
   type ActionKey = "overview" | "directory" | "terminal" | "focus" | "restart" | "stop";
@@ -15,7 +15,7 @@
     onLayoutChange,
     privacy,
     focusMode,
-    themeStyle,
+    appearance,
     iconStyle,
     agentMode,
     hookEnabled,
@@ -23,7 +23,7 @@
     hookError,
     onPrivacy,
     onFocusMode,
-    onThemeStyle,
+    onAppearance,
     budget = 0,
     onBudget,
     pinnedAgentName = null,
@@ -42,7 +42,7 @@
     onLayoutChange: () => void;
     privacy: boolean;
     focusMode: "off" | "errors" | "quiet";
-    themeStyle: ThemeStyle;
+    appearance: Appearance;
     iconStyle: "dot" | "pixel";
     agentMode: "all" | "running";
     hookEnabled: boolean | null;
@@ -50,7 +50,7 @@
     hookError: CommandFailure | null;
     onPrivacy: (value: boolean) => void;
     onFocusMode: (value: "off" | "errors" | "quiet") => void;
-    onThemeStyle: (value: ThemeStyle) => void;
+    onAppearance: (value: Appearance) => void;
     budget?: number;
     onBudget?: (value: number) => void;
     pinnedAgentName?: string | null;
@@ -173,35 +173,83 @@
     <div class="feedback" data-testid="action-error" role="alert"><span class="sensitive"><strong>{failure.code}</strong> · {failure.message}</span>{#if failure.retryable && failedAction}<button type="button" data-testid="action-retry" onclick={retryFailedAction}>重试</button>{/if}</div>
   {/if}
   <div class="action-row">
-  <div class="actions">
-    <button type="button" data-testid="action-overview" disabled={states.overview === "pending"} onclick={() => void execute("overview", { name: "open_overview" })}>{actionLabel("overview", "总览", "打开中…", "已打开")}</button>
-    <button type="button" data-testid="action-directory" title={directoryReason ?? "打开会话工作目录"} disabled={states.directory === "pending"} onclick={openDirectory}>{actionLabel("directory", "目录", "打开中…", "已打开")}</button>
-    <button type="button" data-testid="action-terminal" title={terminalReason ?? "在这个会话的目录里打开终端"} disabled={states.terminal === "pending"} onclick={openTerminal}>{actionLabel("terminal", "终端", "打开中…", "已打开")}</button>
-    <button type="button" data-testid="action-focus" title={inspectingHistory ? "本地记录无法定位实时窗口" : agent?.state.process === "running" ? "切回 Agent 所在窗口" : "Agent 未运行，无法跳回"} disabled={inspectingHistory || agent?.state.process !== "running" || states.focus === "pending"} onclick={() => agentCommand("focus", "focus_agent_terminal")}>{actionLabel("focus", "跳回", "跳转中…", "已跳回")}</button>
-    <button type="button" data-testid="action-restart" title="使用记录的启动方式重新打开 Agent；不会停止现有任务" disabled={inspectingHistory || agent?.can_restart !== true || states.restart === "pending"} onclick={() => agentCommand("restart", "restart_agent")}>{actionLabel("restart", "重启", "启动中…", "已请求启动")}</button>
-    <button class="danger" type="button" data-testid="action-stop" data-action-state={states.stop} disabled={inspectingHistory || !agent || agent.state.process !== "running" || states.stop === "pending"} onclick={stop}>
-      {states.stop === "confirming" ? "确认停止" : states.stop === "pending" ? "停止中…" : states.stop === "succeeded" ? "已停止" : "停止"}
-    </button>
-  </div>
-  <SettingsPopover {privacy} {focusMode} {themeStyle} {iconStyle} {agentMode} {hookEnabled} {hookState} {hookError} {onPrivacy} {onFocusMode} {onThemeStyle} {onIconStyle} {onAgentMode} {onHookToggle} {budget} {onBudget} {pinnedAgentName} {onTogglePin} onOpen={onSettingsOpen} {onLayoutChange} {onAdjustWidth} {onStartResize} />
+    <div class="actions">
+      <button type="button" class="primary" data-testid="action-overview" disabled={states.overview === "pending"} onclick={() => void execute("overview", { name: "open_overview" })}>{actionLabel("overview", "总览", "打开中…", "已打开")}</button>
+      <button type="button" data-testid="action-directory" title={directoryReason ?? "打开会话工作目录"} disabled={states.directory === "pending"} onclick={openDirectory}>{actionLabel("directory", "目录", "打开中…", "已打开")}</button>
+      <button type="button" data-testid="action-terminal" title={terminalReason ?? "在这个会话的目录里打开终端"} disabled={states.terminal === "pending"} onclick={openTerminal}>{actionLabel("terminal", "终端", "打开中…", "已打开")}</button>
+      <button type="button" data-testid="action-focus" title={inspectingHistory ? "本地记录无法定位实时窗口" : agent?.state.process === "running" ? "切回 Agent 所在窗口" : "Agent 未运行，无法跳回"} disabled={inspectingHistory || agent?.state.process !== "running" || states.focus === "pending"} onclick={() => agentCommand("focus", "focus_agent_terminal")}>{actionLabel("focus", "跳回", "跳转中…", "已跳回")}</button>
+    </div>
+    <div class="destructive">
+      <button type="button" data-testid="action-restart" title="使用记录的启动方式重新打开 Agent；不会停止现有任务" disabled={inspectingHistory || agent?.can_restart !== true || states.restart === "pending"} onclick={() => agentCommand("restart", "restart_agent")}>{actionLabel("restart", "重启", "启动中…", "已请求启动")}</button>
+      <button class="danger" class:confirming={states.stop === "confirming"} type="button" data-testid="action-stop" data-action-state={states.stop} disabled={inspectingHistory || !agent || agent.state.process !== "running" || states.stop === "pending"} onclick={stop}>
+        {states.stop === "confirming" ? "确认停止" : states.stop === "pending" ? "停止中…" : states.stop === "succeeded" ? "已停止" : "停止"}
+      </button>
+    </div>
+    <SettingsPopover {privacy} {focusMode} {appearance} {iconStyle} {agentMode} {hookEnabled} {hookState} {hookError} {onPrivacy} {onFocusMode} {onAppearance} {onIconStyle} {onAgentMode} {onHookToggle} {budget} {onBudget} {pinnedAgentName} {onTogglePin} onOpen={onSettingsOpen} {onLayoutChange} {onAdjustWidth} {onStartResize} />
   </div>
 </footer>
 
 <style>
-  .action-bar { display: grid; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid var(--island-border-subtle); max-height: calc(100dvh - 66px); overflow-y: auto; box-sizing: border-box; }
-  .action-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
-  .actions { min-width: 0; display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+  .action-bar {
+    display: grid;
+    gap: 8px;
+    padding: 9px 14px 11px;
+    border-top: 1px solid var(--rule);
+    background: var(--sticky);
+    box-sizing: border-box;
+    position: sticky;
+    bottom: 0;
+    z-index: var(--z-sticky);
+  }
+  .action-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+  .actions, .destructive { min-width: 0; display: flex; align-items: center; gap: 2px; }
+  .actions { overflow-x: auto; scrollbar-width: none; }
   .actions::-webkit-scrollbar { display: none; }
-  .actions button { flex: 0 0 auto; }
-  button { min-height: 30px; padding: 5px 10px; border: 1px solid var(--island-border-subtle); border-radius: 9px; color: var(--island-text-secondary); background: var(--island-control-surface); cursor: pointer; }
-  button:hover:not(:disabled) { color: var(--island-text-primary); background: var(--island-control-hover); }
-  button.danger { color: var(--island-status-error); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  button:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
-  .feedback { display: flex; justify-content: space-between; gap: 8px; max-height: 120px; overflow: auto; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 10px; color: var(--island-refresh-error-text); background: var(--island-refresh-error-surface); font-size: 11px; }
-  .feedback button { color: inherit; }
-  @media (max-width: 420px) { .action-bar { align-items: flex-start; } .actions { display: flex; flex-wrap: nowrap; flex: 1 1 auto; overflow-x: auto; } button { min-height: 38px; padding-inline: 7px; flex: 0 0 auto; } }
+  .destructive { flex: 0 0 auto; margin-left: auto; }
+
+  button {
+    flex: 0 0 auto;
+    min-height: 28px;
+    padding: 4px 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    color: var(--ink-2);
+    background: transparent;
+    font: 600 var(--fs-xs)/1 var(--font-ui);
+    cursor: pointer;
+    transition: background var(--duration-fast) ease-out, color var(--duration-fast) ease-out;
+  }
+  button:hover:not(:disabled) { color: var(--ink); background: var(--field); }
+  button:active:not(:disabled) { transform: translateY(.5px); }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+
+  /* 只有"总览"是实心主按钮：它是这排里唯一"打开另一块屏幕"的动作 */
+  button.primary { color: var(--ground); background: var(--ink); font-weight: 650; }
+  button.primary:hover:not(:disabled) { color: var(--ground); background: var(--ink); opacity: .88; }
+
+  button.danger { color: var(--state-error); }
+  button.danger:hover:not(:disabled) { color: var(--state-error); background: color-mix(in srgb, var(--state-error) 12%, transparent); }
+  button.danger.confirming { color: var(--danger-ink); background: var(--danger); }
+  button.danger.confirming:hover:not(:disabled) { color: var(--danger-ink); background: var(--danger); }
+
+  .feedback {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    max-height: 120px;
+    overflow: auto;
+    overflow-wrap: anywhere;
+    padding: 8px 10px;
+    border-radius: var(--radius-control);
+    color: var(--alarm-ink);
+    background: var(--alarm);
+    font-size: var(--fs-2xs);
+  }
+  .feedback button { color: var(--alarm-ink); border-color: color-mix(in srgb, var(--alarm-ink) 45%, transparent); }
+  .feedback button:hover:not(:disabled) { color: var(--alarm-ink); background: color-mix(in srgb, var(--alarm-ink) 12%, transparent); }
+
+  @media (max-width: 420px) {
+    .action-bar { padding-inline: 10px; }
+    button { min-height: 34px; padding-inline: 8px; }
+  }
 </style>
-
-
-

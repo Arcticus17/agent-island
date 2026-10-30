@@ -1,4 +1,4 @@
-﻿import { mount, unmount } from "svelte";
+import { mount, unmount } from "svelte";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import App from "../../src/app/App.svelte";
@@ -22,6 +22,7 @@ function snapshot(status: "idle" | "working" | "error", longLog: boolean): Agent
         records: [
           { event_id: "user-1", at_ms: NOW - 20_000, role: "User", text: "请检查布局保存与状态显示。" },
           { event_id: "assistant-1", at_ms: NOW - 10_000, role: "Assistant", text: longLog ? "正在检查布局保存、键盘排序与会话状态。".repeat(80) : "布局已读取，正在核对当前会话。" },
+          { event_id: "tool-1", at_ms: NOW - 6_000, role: "Tool", text: "Bash(npm run check && npm run build)", tool: "Bash", detail: "npm run check && npm run build", success: true },
         ],
         recent_output: [], current_file: "src/app/App.svelte", log_status: null,
         alert: status === "error" ? "构建失败，请查看当前会话日志。" : null,
@@ -51,18 +52,20 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ version: "0.1.0" }), { status: 200 })));
 });
 
-for (const theme of ["graphite", "pure-black", "terminal"] as const) {
+for (const appearance of ["dark", "light"] as const) {
   for (const scenario of ["compact-idle", "compact-working", "compact-error", "monitoring", "approval", "long-log", "single-column", "welcome"] as const) {
-    it(`${theme} ${scenario}`, async () => {
+    it(`${appearance} ${scenario}`, async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(NOW);
-      await page.viewport(scenario === "single-column" ? 360 : 520, 900);
+      const compact = scenario.startsWith("compact");
+      await page.viewport(compact ? 320 : scenario === "single-column" ? 360 : 520, compact ? 140 : 900);
       // 视觉基线固定"已看过引导"，单独用 welcome 场景覆盖引导卡片
       localStorage.setItem("agent-island-onboarded", scenario === "welcome" ? "0" : "1");
-      localStorage.setItem("agent-island-theme-style-v2", theme);
+      localStorage.setItem("agent-island-appearance-v1", appearance);
       localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(DEFAULT_LAYOUTS.monitoring));
       const style = document.createElement("style");
-      style.textContent = "html,body { margin:0; background:#181b24; } *,*::before,*::after { animation:none!important; transition:none!important; caret-color:transparent!important; }";
+      const surround = appearance === "dark" ? "#101318" : "#e4e7ea";
+      style.textContent = `html,body { margin:0; background:${surround}; } *,*::before,*::after { animation:none!important; transition:none!important; caret-color:transparent!important; }`;
       document.body.append(style);
       const target = document.createElement("div");
       document.body.append(target);
@@ -73,7 +76,7 @@ for (const theme of ["graphite", "pure-black", "terminal"] as const) {
         bridge, pollIntervalMs: 0, initiallyExpanded: !scenario.startsWith("compact"), initiallyPeeked: scenario.startsWith("compact"),
         diagnosticsBridge: { getDiagnostics: async () => ({ generated_at_ms: NOW, issues: [], sources: [] }), exportDiagnostics: async () => undefined },
       } });
-      await expect.poll(() => target.textContent).toContain("Claude Code");
+      await expect.poll(() => target.querySelector('[data-testid="compact-toggle"]') !== null).toBe(true);
       await expect.poll(() => bridge.listenerCount()).toBe(1);
       if (scenario === "approval") {
         bridge.emitHookEvent({ kind: "approval", approval: {
@@ -82,7 +85,7 @@ for (const theme of ["graphite", "pure-black", "terminal"] as const) {
         await expect.element(page.getByTestId("approval-allow")).toBeVisible();
       }
       await document.fonts.ready;
-      await expect(page).toMatchScreenshot(`${theme}-${scenario}`, {
+      await expect(page).toMatchScreenshot(`${appearance}-${scenario}`, {
         comparatorOptions: { allowedMismatchedPixels: 0, threshold: 0.1 },
         screenshotOptions: { animations: "disabled", caret: "hide" },
       });

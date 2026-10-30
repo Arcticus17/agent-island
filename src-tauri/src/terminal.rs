@@ -49,8 +49,8 @@ pub(crate) fn terminal_program_allowed(program: &str) -> bool {
     ) {
         return true;
     }
-    // 自定义适配器：只要它是 agent_defs() 里配置过的 keyword 就放行
-    agent_defs()
+    // 自定义 / 自动发现的 Agent：只要它是扫描列表里配置过的 keyword 就放行
+    crate::scan_agent_defs()
         .iter()
         .any(|def| def.keyword.eq_ignore_ascii_case(&base))
 }

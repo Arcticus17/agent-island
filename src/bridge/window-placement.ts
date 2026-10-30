@@ -20,7 +20,7 @@ export function clampWindowPlacement(value: WindowPlacement, monitors: Placement
   if (!valid.length) throw new Error("无法读取显示器工作区域");
   const monitor = valid.find(m => value.x >= m.workArea.position.x && value.x < m.workArea.position.x + m.workArea.size.width && value.y >= m.workArea.position.y && value.y < m.workArea.position.y + m.workArea.size.height) ?? valid[0];
   const { position, size } = monitor.workArea;
-  const width = Math.min(Math.max(360, value.width), 744, size.width / monitor.scaleFactor);
+  const width = Math.min(Math.max(80, value.width), 744, size.width / monitor.scaleFactor);
   return {
     width,
     x: Math.round(Math.max(position.x, Math.min(value.x, position.x + size.width - width * monitor.scaleFactor))),

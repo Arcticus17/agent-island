@@ -14,6 +14,11 @@ pub(crate) struct CatalogAgent {
 
 pub(crate) const CATALOG: &[CatalogAgent] = &[
     CatalogAgent {
+        name: "Pi",
+        program: "pi",
+        description: "Pi coding agent",
+    },
+    CatalogAgent {
         name: "Gemini CLI",
         program: "gemini",
         description: "Google Gemini CLI",
@@ -89,3 +94,21 @@ pub(crate) const CATALOG: &[CatalogAgent] = &[
         description: "Warp Agent CLI",
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::CATALOG;
+
+    #[test]
+    fn catalog_programs_are_unique_and_include_pi() {
+        let mut programs = std::collections::HashSet::new();
+        for entry in CATALOG {
+            assert!(
+                programs.insert(entry.program.to_ascii_lowercase()),
+                "duplicate catalog program: {}",
+                entry.program
+            );
+        }
+        assert!(CATALOG.iter().any(|entry| entry.program == "pi"));
+    }
+}

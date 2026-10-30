@@ -1,15 +1,18 @@
-<script lang="ts">
+﻿<script lang="ts">
   import { tick } from "svelte";
   import { filterCommands, moveSelection, type PaletteCommand } from "../../palette/commands";
+  import type { Appearance } from "../../themes/theme-style";
 
   let {
     commands,
     onRun,
     onClose,
+    appearance = "dark",
   }: {
     commands: readonly PaletteCommand[];
     onRun: (command: PaletteCommand) => void;
     onClose: () => void;
+    appearance?: Appearance;
   } = $props();
 
   let query = $state("");
@@ -45,7 +48,7 @@
   }
 </script>
 
-<div class="palette-backdrop" role="presentation" onpointerdown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+<div class="palette-backdrop" data-theme-style={appearance} role="presentation" onpointerdown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
   <div class="palette" role="dialog" aria-modal="true" aria-label="命令面板" data-testid="palette">
     <input
       bind:this={input}
@@ -88,15 +91,54 @@
 </div>
 
 <style>
-  .palette-backdrop { position: fixed; inset: 0; z-index: var(--z-overlay, 40); display: flex; align-items: flex-start; justify-content: center; padding-top: 56px; background: color-mix(in srgb, var(--surface-base) 55%, transparent); }
-  .palette { width: min(360px, calc(100% - 32px)); display: grid; gap: 8px; padding: 10px; border: 1px solid var(--island-border-subtle); border-radius: 14px; background: var(--surface-base); box-shadow: var(--island-event-shadow); }
-  .search { min-height: 34px; padding: 6px 10px; border: 1px solid var(--island-border-subtle); border-radius: 10px; color: var(--island-text-primary); background: var(--island-control-surface); font-size: 13px; }
-  .search:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 1px; }
-  .results { margin: 0; padding: 0; display: grid; gap: 2px; max-height: 260px; overflow-y: auto; list-style: none; }
-  .results li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 9px; border-radius: 9px; color: var(--island-text-secondary); font-size: 12px; cursor: pointer; }
-  .results li.active { color: var(--island-text-primary); background: var(--surface-hover); }
+  /* 命令面板：整块板上的一个浮层，遮罩用主题里的 scrim，不用模糊 */
+  .palette-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-overlay, 40);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 56px;
+    background: var(--scrim);
+  }
+  .palette {
+    width: min(380px, calc(100% - 32px));
+    display: grid;
+    gap: 6px;
+    padding: 10px 12px 8px;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius-event);
+    background: var(--ground-raised);
+  }
+  .search {
+    min-height: 34px;
+    padding: 6px 9px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    color: var(--ink);
+    background: var(--field);
+    font: 400 var(--fs-sm)/1.4 var(--font-ui);
+  }
+  .search::placeholder { color: var(--ink-3); }
+  .search:focus-visible { outline: 1px solid var(--ink-2); outline-offset: 1px; }
+  .results { margin: 0; padding: 0; display: grid; gap: 0; max-height: 280px; overflow-y: auto; list-style: none; }
+  .results li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 7px 8px;
+    border-top: 1px solid var(--rule);
+    border-radius: 0;
+    color: var(--ink-2);
+    font-size: var(--fs-xs);
+    cursor: pointer;
+  }
+  .results li:first-child { border-top: 0; }
+  .results li.active { color: var(--ink); background: var(--field); }
   .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .hint { flex: 0 0 auto; color: var(--island-text-tertiary); font-size: 10px; }
-  .empty, .footer { margin: 0; color: var(--island-text-tertiary); font-size: 10px; }
-  .footer { text-align: right; }
+  .hint { flex: 0 0 auto; color: var(--ink-3); font-size: var(--fs-2xs); }
+  .empty, .footer { margin: 0; color: var(--ink-3); font-size: var(--fs-2xs); }
+  .footer { padding-top: 6px; border-top: 1px solid var(--rule); text-align: right; }
 </style>

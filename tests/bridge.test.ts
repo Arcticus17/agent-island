@@ -281,7 +281,8 @@ describe("Agent Island bridge contract", () => {
     tauri.onResized.mockRejectedValueOnce(new Error("listener failed"));
     try {
       await expect(createTauriBridge().initializeWindowPlacement?.()).rejects.toThrow("listener failed");
-      expect(tauri.setPosition).toHaveBeenCalledWith(expect.objectContaining({ x: 1320, y: 980 }));
+      // 贴边刘海：水平方向仍按保存的位置夹取，垂直方向永远钉在工作区顶边
+    expect(tauri.setPosition).toHaveBeenCalledWith(expect.objectContaining({ x: 1320, y: 0 }));
       expect(moved).toHaveBeenCalledOnce();
     } finally { vi.unstubAllGlobals(); }
   });

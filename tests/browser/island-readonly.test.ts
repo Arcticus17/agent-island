@@ -1,4 +1,4 @@
-﻿import { mount, unmount } from "svelte";
+import { mount, unmount } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 
@@ -287,22 +287,26 @@ describe("read-only Agent Island", () => {
     const toggle = target.querySelector<HTMLButtonElement>('[data-testid="compact-toggle"]')!;
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     await waitFor(() => bridge.windowSizes().length > 0);
-    expect(bridge.windowSizes().at(-1)).toEqual({ width: window.innerWidth, height: 60 });
+    // 折叠态是贴边刘海：高度 40，宽度跟着内容走（远窄于 360 的视口）
+    const compactSize = bridge.windowSizes().at(-1)!;
+    expect(compactSize.height).toBe(40);
+    expect(compactSize.width).toBeGreaterThan(60);
+    expect(compactSize.width).toBeLessThan(240);
     toggle.focus();
     await userEvent.keyboard("{Enter}");
     await waitFor(() => toggle.getAttribute("aria-expanded") === "true");
-    await waitFor(() => (bridge.windowSizes().at(-1)?.height ?? 0) > 60);
+    await waitFor(() => (bridge.windowSizes().at(-1)?.height ?? 0) > 40);
     // 展开会把窗口放宽到均衡宽度（560），收起再还原
     expect(bridge.windowSizes().some((size) => size.width === 560)).toBe(true);
     const island = target.querySelector<HTMLElement>('[data-testid="agent-island"]')!;
     const renderedHeight = Math.ceil(Math.max(island.scrollHeight, island.getBoundingClientRect().height));
     // 展开面板有高度上限：内容再多也不让窗口无限变长（超出部分在岛内滚动）。
     const availableHeight = window.screen.availHeight || renderedHeight;
-    const heightCap = Math.max(60, Math.min(560, Math.floor(availableHeight * 0.78)));
-    // 展开后窗口宽度是 max(当前宽度, 560)
+    const heightCap = Math.max(40, Math.min(560, Math.floor(availableHeight * 0.78)));
+    // 展开后窗口固定放宽到 560，高度按内容并受上限约束
     expect(bridge.windowSizes().at(-1)).toEqual({
-      width: Math.max(Math.round(window.innerWidth), 560),
-      height: Math.min(Math.max(60, renderedHeight), heightCap),
+      width: 560,
+      height: Math.min(Math.max(40, renderedHeight), heightCap),
     });
     expect(getComputedStyle(island).overflowY).toBe("auto");
     expect(island.scrollWidth).toBeLessThanOrEqual(island.clientWidth);
@@ -318,7 +322,7 @@ describe("read-only Agent Island", () => {
       });
     }
     toggle.click();
-    await waitFor(() => bridge.windowSizes().at(-1)?.height === 60);
+    await waitFor(() => bridge.windowSizes().at(-1)?.height === 40);
   });
 });
 
@@ -671,12 +675,12 @@ describe("island presence: hidden → hover peek → click expand", () => {
     expect(island().getAttribute("data-presence")).toBe("hidden");
     expect(target.querySelector('[data-testid="idle-notch"]')).not.toBeNull();
     expect(target.querySelector('[data-testid="compact-toggle"]')).toBeNull();
-    await waitFor(() => bridge.windowSizes().at(-1)?.height === 13);
+    await waitFor(() => bridge.windowSizes().at(-1)?.height === 8);
 
-    // 2. 悬停 → 胶囊态（窗口回到 60px）
+    // 2. 悬停 → 刘海态（窗口回到 40px）
     document.body.dispatchEvent(new Event("pointerenter"));
     await waitFor(() => island().getAttribute("data-presence") === "peek");
-    await waitFor(() => bridge.windowSizes().at(-1)?.height === 60);
+    await waitFor(() => bridge.windowSizes().at(-1)?.height === 40);
     expect(target.querySelector('[data-testid="compact-toggle"]')).not.toBeNull();
     expect(target.querySelector('[data-testid="idle-notch"]')).toBeNull();
 
@@ -690,22 +694,29 @@ describe("island presence: hidden → hover peek → click expand", () => {
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(island().getAttribute("data-presence")).toBe("expanded");
 
-    // 5. 收起 → 胶囊；再移开鼠标 → 隐藏
+    // 5. 收起 → 刘海；鼠标移开也保持常驻，只有 Esc 才隐藏
     target.querySelector<HTMLButtonElement>('[data-testid="compact-toggle"]')!.click();
     await waitFor(() => island().getAttribute("data-presence") === "peek");
     document.body.dispatchEvent(new Event("pointerleave"));
-    await waitFor(() => island().getAttribute("data-presence") === "hidden");
-    await waitFor(() => bridge.windowSizes().at(-1)?.height === 13);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(island().getAttribute("data-presence")).toBe("peek");
+    await waitFor(() => bridge.windowSizes().at(-1)?.height === 40);
   });
 
-  it("goes back to hidden when the pointer leaves the peek pill", async () => {
+  it("keeps the notch visible after the pointer leaves, and hides on Escape", async () => {
     await page.viewport(360, 700);
-    const { target } = await renderIsland([snapshot(100)], { expanded: false, peeked: false });
+    const { target, bridge } = await renderIsland([snapshot(100)], { expanded: false });
     const island = () => target.querySelector<HTMLElement>('[data-testid="agent-island"]')!;
-    document.body.dispatchEvent(new Event("pointerenter"));
+    // 默认就是刘海（常驻），不需要悬停
     await waitFor(() => island().getAttribute("data-presence") === "peek");
+    await waitFor(() => bridge.windowSizes().at(-1)?.height === 40);
     document.body.dispatchEvent(new Event("pointerleave"));
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(island().getAttribute("data-presence")).toBe("peek");
+    // Esc 是唯一的"藏起来"入口
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await waitFor(() => island().getAttribute("data-presence") === "hidden");
+    await waitFor(() => bridge.windowSizes().at(-1)?.height === 8);
   });
 });
 

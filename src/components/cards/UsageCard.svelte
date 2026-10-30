@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import type { AgentView, UsageInfo } from "../../bridge/types";
   import { formatUsd } from "../../usage/spend";
   let {
@@ -59,35 +59,48 @@
   );
 </script>
 
-<article class="card">
-  <span class="eyebrow">用量</span>
-  {#if usage}
-    <div class="metric"><strong data-testid="usage-total">{formatTokens(usage.tokens_total)}</strong><span>tokens</span></div>
-    {#if usage.used_percent !== null}
-      <div class="meter" aria-label={`额度已使用 ${usage.used_percent.toFixed(1)}%`}><span style={`width: ${Math.min(100, Math.max(0, usage.used_percent))}%`}></span></div>
+<article class="card usage-card" aria-label="用量">
+  <div class="line">
+    <span class="key">用量</span>
+    {#if usage}
+      <span class="val" data-testid="usage-total">{formatTokens(usage.tokens_total)}</span>
+      <span class="unit">tokens</span>
+      {#if usage.used_percent !== null}
+        <span class="meter" aria-label={`额度已使用 ${usage.used_percent.toFixed(1)}%`}><i style={`width: ${Math.min(100, Math.max(0, usage.used_percent))}%`}></i></span>
+      {/if}
+    {:else}
+      <span class="val unavailable">用量尚未提供</span>
     {/if}
-    <span class="detail" data-testid="usage-detail">{detail || "暂无更多用量明细"}</span>
-  {:else}
-    <strong class="unavailable">用量尚未提供</strong>
-  {/if}
-  {#if spendLabel}
-    <span class="spend" data-testid="usage-spend" data-budget-state={spendState} title="岛在线期间累计的增量，关闭应用的时间不计">{spendLabel}</span>
-  {/if}
-  <span class="freshness" data-testid="usage-freshness">{freshness}</span>
+  </div>
+  {#if usage}<span class="detail" data-testid="usage-detail">{detail || "暂无更多用量明细"}</span>{/if}
+  <div class="foot">
+    {#if spendLabel}<span class="spend" data-testid="usage-spend" data-budget-state={spendState} title="岛在线期间累计的增量，关闭应用的时间不计">{spendLabel}</span>{/if}
+    <span class="freshness" data-testid="usage-freshness">{freshness}</span>
+  </div>
 </article>
 
 <style>
-  .card { min-width: 0; display: grid; gap: 7px; padding: 13px; border: 1px solid var(--island-border-subtle); border-radius: 16px; background: var(--island-surface-raised); }
-  .eyebrow { color: var(--island-text-secondary); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
-  .metric { display: flex; align-items: baseline; gap: 7px; } .metric strong { color: var(--island-accent-primary); font-size: 22px; }
-  .metric span, .detail, .freshness { color: var(--island-text-secondary); font-size: 11px; }
-  .detail { overflow-wrap: anywhere; }
-  .freshness { justify-self: end; }
-  .spend { color: var(--island-text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; }
-  .spend[data-budget-state="near"] { color: var(--island-status-waiting); }
-  .spend[data-budget-state="over"] { color: var(--island-status-error); font-weight: 700; }
-  .unavailable { color: var(--island-text-primary); font-size: 13px; }
-  .meter { height: 4px; overflow: hidden; border-radius: 999px; background: var(--island-border-subtle); }
-  .meter span { display: block; height: 100%; border-radius: inherit; background: var(--island-status-current); }
+  .card { min-width: 0; display: grid; gap: 4px; align-content: center; }
+  .line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .key { flex: 0 0 auto; width: 30px; color: var(--ink-3); font-size: var(--fs-2xs); letter-spacing: var(--tracking-label); }
+  .val { color: var(--ink); font: 600 20px/1.1 var(--font-readout); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .val.unavailable { font: 600 var(--fs-sm)/1.4 var(--font-ui); color: var(--ink-2); }
+  .unit { color: var(--ink-3); font-size: var(--fs-2xs); }
+  .meter { flex: 1 1 auto; min-width: 24px; height: 3px; margin-left: 2px; border-radius: 2px; background: var(--rule); overflow: hidden; }
+  .meter i { display: block; height: 100%; background: var(--state-working); border-radius: inherit; }
+  .detail {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    color: var(--ink-3);
+    font-size: var(--fs-2xs);
+    line-height: 1.5;
+  }
+  .foot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+  .spend { color: var(--ink-2); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .spend[data-budget-state="near"] { color: var(--state-waiting); }
+  .spend[data-budget-state="over"] { color: var(--state-error); font-weight: 700; }
+  .freshness { color: var(--ink-3); font-size: var(--fs-2xs); white-space: nowrap; }
 </style>
-

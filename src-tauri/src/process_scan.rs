@@ -277,6 +277,18 @@ mod process_classifier_tests {
     }
 
     #[test]
+    fn finds_the_pi_managed_install_directory() {
+        // Pi 的托管安装不在 PATH 的常规位置：~/.pi/agent/bin（pi.cmd / pi / pi.ps1）。
+        let home = std::path::Path::new("C:\\Users\\me");
+        let expected = home.join(".pi/agent/bin").join("pi.cmd");
+        let paths = known_program_paths_from("pi", Some(home.to_path_buf()), |_| None);
+        assert!(
+            paths.iter().any(|path| path == &expected),
+            "managed Pi install should be a candidate: {paths:?}"
+        );
+    }
+
+    #[test]
     fn includes_scoop_and_volta_prefixes_from_the_environment() {
         let paths = known_program_paths_from("codex", None, |name| match name {
             "SCOOP" => Some(std::ffi::OsString::from("C:\\scoop")),
@@ -710,6 +722,7 @@ where
             ".bun/bin",
             ".opencode/bin",
             ".claude/local",
+            ".pi/agent/bin",
             ".npm-global/bin",
             ".hermes/bin",
             ".volta/bin",
@@ -876,16 +889,21 @@ pub(crate) struct AgentCandidate {
 /// executable actually resolves. Nothing is auto-added; the user chooses.
 #[tauri::command]
 pub(crate) fn detect_agent_candidates() -> Vec<AgentCandidate> {
-    let defs = agent_defs();
+    let defs = crate::scan_agent_defs();
     let mut candidates = Vec::new();
     for def in &defs {
         let path = resolve_agent_program(def.program());
+        let detected = def.is_detected();
         candidates.push(AgentCandidate {
             name: def.name.clone(),
             program: def.program().to_string(),
-            description: "已在岛内配置".to_string(),
+            description: if detected {
+                "自动发现（本机已安装）".to_string()
+            } else {
+                "已在岛内配置".to_string()
+            },
             installed: path.is_some(),
-            configured: true,
+            configured: !detected,
             path: path.map(|value| value.to_string_lossy().into_owned()),
             keyword: def.keyword.clone(),
         });
@@ -982,6 +1000,7 @@ pub(crate) fn add_agent_definition(name: String, program: String) -> Result<(), 
         program: program_text,
         resume_args: Vec::new(),
         send_args: Vec::new(),
+        source: "custom".into(),
     });
     save_agent_defs(&defs)?;
     reload_agent_defs();
@@ -1098,7 +1117,7 @@ pub(crate) fn scan_agents(
     let mut stats_changed = false;
 
     session.index_cache.begin_scan();
-    for def in agent_defs() {
+    for def in crate::scan_agent_defs() {
         let agent_name = &def.name;
         let agent_id = if def.log_kind.is_empty() {
             def.keyword.as_str()

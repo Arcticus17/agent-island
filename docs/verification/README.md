@@ -1,10 +1,15 @@
-# 验证记录索引
+﻿# 验证记录索引
 
 这里记录每次功能落地的验证过程：做了什么改动、**怎么验证的**、结论，以及仍未验证的部分。
 按日期倒序；新增验证记录时请同时在这里补一行。
 
 | 日期 | 主题 | 标题 |
 | --- | --- | --- |
+| 2026-10-29 | [notch-island-and-receipt](2026-10-29-notch-island-and-receipt.md) | 主岛「贴边刘海 + 工作回执」：纯图标折叠态与新窗口几何 |
+| 2026-10-30 | [detection-driven-agents](2026-10-30-detection-driven-agents.md) | 发现驱动：PATH 上已有的 Agent 自动参与快照，自动发现默认不进岛 |
+| 2026-10-30 | [first-run-empty-states](2026-10-30-first-run-empty-states.md) | 首次使用没有日志时：冷启动引导 / 无适配器降级 / 空态降噪 |
+| 2026-10-29 | [pi-agent-detection](2026-10-29-pi-agent-detection.md) | Pi 检测不到：候选目录漏项（不是环境变量检测失效） |
+| 2026-10-28 | [island-status-board-redesign](2026-10-28-island-status-board-redesign.md) | 主岛「状态板」视觉改造：信息架构重排 + 明暗两态 |
 | 2026-10-28 | [agent-detection-exactness](2026-10-28-agent-detection-exactness.md) | Agent 检测与系统一致性：只显示本机真实存在的 Agent |
 | 2026-10-28 | [agent-update-guard](2026-10-28-agent-update-guard.md) | Agent 更新保护：运行中拒绝 + 更新后校验 + 失败回滚 |
 | 2026-10-28 | [inbox-and-approval-2](2026-10-28-inbox-and-approval-2.md) | 收件箱 + 审批 2.0（v1.10） |

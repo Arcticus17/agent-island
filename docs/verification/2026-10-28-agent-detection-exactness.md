@@ -144,7 +144,7 @@ Agent 条末尾新增虚线「+」按钮（`data-testid="agent-add"`），点开
 
 ## 五、边界
 
-1. **只检测配置里的 Agent**：内置 Claude/Codex/OpenCode/Hermes + `~/.agent-island/agents.json` 自定义项；不在配置里的 CLI 不会显示（这是产品范围，不是漏检）。
+1. **只检测配置里的 Agent**（2026-10-30 已改）：现在 `scan_agent_defs()` 会把签名表里能在本机解析到的 CLI 也纳入快照（`source=detected`），自动发现的默认不进岛；见 [detection-driven-agents](2026-10-30-detection-driven-agents.md)。
 2. **桌面 App 不等于 CLI**：如果某个 Agent 只有桌面 App、没有 CLI shim，且不在已知路径里，仍可能检测不到；可在 `agents.json` 里补 `keyword`/路径，或把它加入 `known_program_paths`。
 3. **运行中的进程即使可执行文件已删除也显示**：这是「本机正在跑」的事实，不应隐藏；诊断里 `source=process`、`path=null` 可区分。
 4. **缓存 60 秒**：装/卸 Agent 后最多等 60 秒，或点「重新检测」。

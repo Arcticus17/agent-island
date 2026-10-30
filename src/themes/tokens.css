@@ -1,100 +1,136 @@
+/*
+ * 结构令牌：与主题无关的尺寸、节奏、动效、字体与桥接。
+ *
+ * 这一版的设计语言是"状态板"：
+ * - 板面由 1px 发丝分隔的连续行组成，不再是悬浮卡片（--radius-card: 0）。
+ * - 颜色是告警：没有需要处理的事时界面保持中性，只有状态带会整片亮起。
+ * - 交互色用"墨"（高反差中性），品牌不占用任何色相，色相全部留给状态。
+ *
+ * 兼容层保留 --island-* 名字，旧组件（诊断、搜索、审批、终端等）不必逐个改写也能跟随新主题。
+ */
 :root {
-  --space-card: 10px;
-  --island-inset-highlight: inset 0 1px rgba(255, 255, 255, .065);
+  /* 间距：4 的倍数，紧贴的组用 4/6，段落之间用 12/14 */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 10px;
+  --space-5: 12px;
+  --space-6: 14px;
+  --space-7: 18px;
+  --space-8: 24px;
+
+  /* 圆角：三种就够。板是无圆角的面，控件 7，事件卡 10，窗口 20。 */
+  --radius-island: 16px;
+  --radius-card: 0px;
+  --radius-control: 7px;
+  --radius-event: 10px;
+
+  /* 兼容旧令牌名（间距/圆角的旧语义） */
+  --space-card: 0px;
   --space-section: 12px;
   --space-control: 6px;
-  --radius-island: 24px;
-  --radius-card: 16px;
-  --radius-control: 9px;
-  --radius-event: 15px;
+
+  /* 字体：Windows 原生栈。数字用 Bahnschrift 读数，正文用系统中文字体，日志用等宽。 */
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-readout: "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, "Sarasa Mono SC", ui-monospace, monospace;
+
+  /* 字阶：中文不小于 11px，正文 12.5，读数 15/22 */
+  --fs-2xs: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-base: 12.5px;
+  --fs-md: 13.5px;
+  --fs-lg: 15px;
+  --fs-xl: 22px;
+
+  --tracking-label: .06em;
+
+  /* 动效：一次编排的展开，加上状态带换色的过渡 */
+  --motion-spring: cubic-bezier(0.2, 0.9, 0.25, 1);
+  --motion-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 90ms;
+  --duration-normal: 160ms;
+  --duration-slow: 260ms;
+
   --z-sticky: 7;
   --z-event: 20;
-  --motion-spring: cubic-bezier(0.22, 1, 0.36, 1);
-  --duration-fast: 100ms;
-  --duration-normal: 180ms;
-  --duration-slow: 320ms;
-  /* 原生 <select> 弹层由浏览器单独绘制：底色必须不透明、且不能依赖
-     半透明的 --control-surface，否则会变成白底白字。 */
-  --menu-surface: #14181f;
-  --menu-surface-hover: #26303d;
-  --menu-text: #f5f7fb;
-  /* 「激活紫」：表示"正在被激活/选中/进行中"的品牌色，三套主题共用。 */
-  --accent-activation: #cba6f7;
-  /* 中性四阶（终端主题与强调态共用）：底色 / 非激活 / 悬停 */
-  --surface-base: #11111b;
-  --surface-inactive: #181825;
-  --surface-hover: #313244;
 }
 
 /*
- * 岛里所有原生下拉弹层统一深色。弹层由浏览器单独绘制，不继承组件里
- * 半透明的控制面底色；组件样式是 scoped 的，所以这条放在全局，
- * 避免每个组件的 <select> 都要各自写一遍（漏一个就是白底白字）。
- * 只作用于 .agent-island，总览窗口的浅色模式不受影响。
+ * 兼容层：旧组件（诊断、搜索、审批、终端等）仍读 --island-*，这里统一桥接到新的语义令牌。
+ * 总览窗口不在此列：它有自己的三套主题（graphite / pure-black），继续读 --surface-*。
  */
-.agent-island select {
-  color-scheme: dark;
-}
-.agent-island select option {
-  color-scheme: dark;
-  color: var(--island-menu-text);
-  background-color: var(--island-menu-surface);
-}
-.agent-island select option:checked {
-  background-color: var(--island-menu-surface-hover);
-}
-
 .agent-island,
 .island-loading,
-.event-layer,
-.overview {
-  --island-surface: var(--surface-island);
-  --island-surface-card: var(--surface-card);
-  --island-surface-raised: var(--surface-raised);
-  --island-text-primary: var(--text-primary);
-  --island-text-secondary: var(--text-secondary);
-  --island-text-tertiary: var(--text-tertiary);
-  --island-border-subtle: var(--border-subtle);
-  --island-accent-primary: var(--accent-primary);
-  --island-status-idle: var(--status-idle);
-  --island-status-working: var(--status-working);
-  --island-status-error: var(--status-error);
-  --island-status-done: var(--status-done);
-  --island-status-waiting: var(--status-waiting);
-  --island-status-stopped: var(--status-stopped);
-  --island-status-current: var(--status-idle);
-  --island-status-halo: color-mix(in srgb, var(--island-status-current) 24%, transparent);
-  --island-status-glow: 0 0 18px color-mix(in srgb, var(--island-status-current) 72%, transparent);
-  --island-refresh-error-text: var(--refresh-error-text);
-  --island-refresh-error-surface: var(--refresh-error-surface);
-  --island-log-surface: var(--surface-log);
-  --island-log-divider: var(--border-log-divider);
-  --island-log-text: var(--text-log);
-  --island-log-role-default: var(--accent-primary);
-  --island-log-role-tool: var(--status-waiting);
-  --island-log-role-user: var(--log-role-user);
+.event-layer {
+  --island-surface: var(--ground);
+  --island-surface-card: var(--ground);
+  --island-surface-raised: var(--ground-raised);
+  --island-text-primary: var(--ink);
+  --island-text-secondary: var(--ink-2);
+  --island-text-tertiary: var(--ink-3);
+  --island-border-subtle: var(--rule);
+  --island-accent-primary: var(--ink);
+  --island-status-idle: var(--state-idle);
+  --island-status-working: var(--state-working);
+  --island-status-error: var(--state-error);
+  --island-status-done: var(--state-done);
+  --island-status-waiting: var(--state-waiting);
+  --island-status-stopped: var(--state-stopped);
+  --island-status-current: var(--state-idle);
+  --island-status-halo: color-mix(in srgb, var(--island-status-current) 18%, transparent);
+  --island-status-glow: none;
+  --island-refresh-error-text: var(--alarm-ink);
+  --island-refresh-error-surface: var(--alarm);
+  --island-log-surface: var(--ground-sunken);
+  --island-log-divider: var(--rule);
+  --island-log-text: var(--ink-log);
+  --island-log-role-default: var(--ink-3);
+  --island-log-role-tool: var(--state-waiting);
+  --island-log-role-user: var(--ink-2);
   --island-scrollbar-thumb: var(--scrollbar-thumb);
-  --island-scrollbar-track: var(--scrollbar-track);
-  --island-control-surface: var(--control-surface);
-  --island-control-hover: var(--control-hover);
+  --island-scrollbar-track: transparent;
+  --island-control-surface: var(--field);
+  --island-control-hover: var(--field-hover);
   --island-menu-surface: var(--menu-surface);
-  --island-menu-surface-hover: var(--menu-surface-hover);
-  --island-menu-text: var(--menu-text);
-  --island-event-surface: var(--surface-event);
-  --island-event-border: var(--border-event);
-  --island-notification-surface: var(--surface-notification);
-  --island-event-shadow: var(--elevation-event);
+  --island-menu-surface-hover: var(--menu-hover);
+  --island-menu-text: var(--ink);
+  --island-event-surface: var(--ground-raised);
+  --island-event-border: var(--rule);
+  --island-notification-surface: var(--ground-raised);
+  --island-event-shadow: none;
   --island-shadow: var(--elevation-island);
+  --island-inset-highlight: none;
   --island-space-card: var(--space-card);
   --island-radius-card: var(--radius-card);
   --island-radius-control: var(--radius-control);
+  --island-background: var(--ground);
 }
 
-.agent-island.status-working { --island-status-current: var(--status-working); }
-.agent-island.status-error { --island-status-current: var(--status-error); }
-.agent-island.status-done { --island-status-current: var(--status-done); }
-.agent-island.status-waiting { --island-status-current: var(--status-waiting); }
-.agent-island.status-stopped { --island-status-current: var(--status-stopped); }
+.agent-island.status-working { --island-status-current: var(--state-working); }
+.agent-island.status-error { --island-status-current: var(--state-error); }
+.agent-island.status-done { --island-status-current: var(--state-done); }
+.agent-island.status-waiting { --island-status-current: var(--state-waiting); }
+.agent-island.status-stopped { --island-status-current: var(--state-stopped); }
+
+/*
+ * 原生 <select> 弹层由浏览器单独绘制，不继承半透明的控件底色；
+ * 底色必须不透明，否则会出现白底白字。只作用于岛内，总览窗口不受影响。
+ */
+.agent-island select { color-scheme: dark; }
+.agent-island[data-theme-style="light"] select { color-scheme: light; }
+.agent-island select option {
+  color: var(--island-menu-text);
+  background-color: var(--island-menu-surface);
+}
+.agent-island select option:checked { background-color: var(--island-menu-surface-hover); }
+
+/* 浏览器自带的部件也要跟随设计：选区、光标、滚动条、数字。 */
+.agent-island ::selection { background: color-mix(in srgb, var(--ink) 22%, transparent); }
+.agent-island { caret-color: var(--state-working); }
+.agent-island * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+.agent-island :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
   :root {

@@ -13,6 +13,8 @@ impl AgentAdapter for ClaudeAdapter {
     fn parse(&self, text: &str) -> ParseReport {
         let mut report = ParseReport::default();
         let mut current_turns = HashMap::<String, String>::new();
+        // tool_use_id → 回执里那条工具消息的位置，用来把结果的成功/失败挂回去。
+        let mut tool_calls = HashMap::<String, usize>::new();
 
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             let Ok(record) = serde_json::from_str::<Value>(line) else {
@@ -167,15 +169,26 @@ impl AgentAdapter for ClaudeAdapter {
                 _ => {}
             }
 
+            let mut tool_messages: Vec<(Option<String>, ConversationMessage)> = Vec::new();
             if let Some(blocks) = blocks {
-                for block in blocks {
+                for (block_index, block) in blocks.iter().enumerate() {
                     match block.get("type").and_then(Value::as_str) {
-                        Some("tool_use") | Some("server_tool_use") => report.events.push(event(
-                            &session_id,
-                            &turn_id,
-                            at_ms,
-                            EventKind::ToolStarted,
-                        )),
+                        Some("tool_use") | Some("server_tool_use") => {
+                            report.events.push(event(
+                                &session_id,
+                                &turn_id,
+                                at_ms,
+                                EventKind::ToolStarted,
+                            ));
+                            // 回执要的是"做了什么"：工具名 + 一行入参（命令/文件/搜索词）。
+                            if let Some(message) = tool_message(&event_id, at_ms, block, block_index) {
+                                let call_id = block
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned);
+                                tool_messages.push((call_id, message));
+                            }
+                        }
                         Some("tool_result") => {
                             let is_error = block
                                 .get("is_error")
@@ -187,6 +200,17 @@ impl AgentAdapter for ClaudeAdapter {
                                 at_ms,
                                 EventKind::ToolFinished { success: !is_error },
                             ));
+                            // 结果通常晚于调用一个（或几个）记录到达：按 tool_use_id 回挂成功/失败。
+                            if let Some(index) = block
+                                .get("tool_use_id")
+                                .and_then(Value::as_str)
+                                .and_then(|id| tool_calls.get(id))
+                                .copied()
+                            {
+                                if let Some(message) = report.messages.get_mut(index) {
+                                    message.success = Some(!is_error);
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -204,7 +228,17 @@ impl AgentAdapter for ClaudeAdapter {
                     at_ms,
                     role,
                     text,
+                    tool: None,
+                    detail: None,
+                    success: None,
                 });
+            }
+            // 同一条记录里，工具调用排在助手正文之后，读起来才是"先说，再做"。
+            for (call_id, message) in tool_messages {
+                if let Some(call_id) = call_id {
+                    tool_calls.insert(call_id, report.messages.len());
+                }
+                report.messages.push(message);
             }
 
             if record_type == "assistant" && stop_reason == Some("end_turn") {
@@ -379,6 +413,69 @@ fn event(session_id: &str, turn_id: &str, at_ms: u64, kind: EventKind) -> Domain
     }
 }
 
+/// 把一条 tool_use block 变成回执里的一行：工具名 + 一行入参。
+fn tool_message(
+    event_id: &str,
+    at_ms: u64,
+    block: &Value,
+    block_index: usize,
+) -> Option<ConversationMessage> {
+    let tool = block
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())?;
+    let detail = tool_detail(tool, block.get("input"));
+    let text = match &detail {
+        Some(detail) => format!("{tool}({detail})"),
+        None => tool.to_owned(),
+    };
+    Some(ConversationMessage {
+        event_id: format!("{event_id}:tool{block_index}"),
+        at_ms,
+        role: MessageRole::Tool,
+        text: truncate_one_line(&text, 240),
+        tool: Some(tool.to_owned()),
+        detail,
+        success: None,
+    })
+}
+
+/// 不同工具里最有信息量的那个入参；未知工具退回常见字段。
+fn tool_detail(tool: &str, input: Option<&Value>) -> Option<String> {
+    let input = input?;
+    let field = match tool {
+        "Bash" | "BashOutput" => Some("command"),
+        "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => Some("file_path"),
+        "Grep" | "Glob" => Some("pattern"),
+        "WebFetch" => Some("url"),
+        "WebSearch" => Some("query"),
+        "Task" | "Agent" => Some("description"),
+        _ => None,
+    };
+    let value = field
+        .and_then(|field| input.get(field))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            ["command", "file_path", "path", "pattern", "query", "url", "description"]
+                .iter()
+                .find_map(|field| input.get(*field).and_then(Value::as_str))
+        })?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| truncate_one_line(value, 160))
+}
+
+/// 入参可能带换行；回执一行只留一行。
+fn truncate_one_line(text: &str, limit: usize) -> String {
+    let single = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single.chars().count() <= limit {
+        return single;
+    }
+    let mut truncated = single.chars().take(limit).collect::<String>();
+    truncated.push('…');
+    truncated
+}
+
 #[cfg(test)]
 mod tests {
     use super::ClaudeAdapter;
@@ -423,6 +520,36 @@ mod tests {
             report.events.last().unwrap().kind,
             EventKind::TurnSucceeded
         ));
+    }
+
+    #[test]
+    fn tool_calls_become_receipt_rows_with_result_success() {
+        let input = concat!(
+            r#"{"type":"user","sessionId":"claude-s3","uuid":"u1","timestamp":"2026-09-04T12:00:00Z","message":{"role":"user","content":[{"type":"text","text":"run checks"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","sessionId":"claude-s3","uuid":"a1","timestamp":"2026-09-04T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"checking"},{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"npm run check && npm run build"}}],"stop_reason":null}}"#,
+            "\n",
+            r#"{"type":"user","sessionId":"claude-s3","uuid":"u2","timestamp":"2026-09-04T12:00:09Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","is_error":false,"content":"ok"}]}}"#,
+            "\n",
+        );
+
+        let report = ClaudeAdapter.parse(input);
+        let tools = report
+            .messages
+            .iter()
+            .filter(|message| message.role == MessageRole::Tool)
+            .collect::<Vec<_>>();
+
+        assert_eq!(tools.len(), 1);
+        let tool = tools[0];
+        assert_eq!(tool.tool.as_deref(), Some("Bash"));
+        assert_eq!(tool.detail.as_deref(), Some("npm run check && npm run build"));
+        assert!(tool.text.starts_with("Bash(npm run check"));
+        // 助手正文先出现，工具调用紧跟其后
+        let roles = report.messages.iter().map(|message| message.role).collect::<Vec<_>>();
+        assert_eq!(roles, [MessageRole::User, MessageRole::Assistant, MessageRole::Tool]);
+        // 结果在后续记录里到达，成功状态要回挂到那一行
+        assert_eq!(tools[0].success, Some(true));
     }
 
     #[test]

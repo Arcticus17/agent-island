@@ -1,4 +1,4 @@
-mod adapters;
+﻿mod adapters;
 mod agent_catalog;
 mod agent_tasks;
 mod approval_review;
@@ -208,6 +208,10 @@ struct AgentDef {
     resume_args: Vec<String>,
     #[serde(default)]
     send_args: Vec<String>,
+    /// 来源：builtin（默认四个）/ custom（agents.json）/ detected（启动时从 PATH 发现）。
+    /// 旧 agents.json 没有这个字段，载入时按名字补。
+    #[serde(default)]
+    source: String,
 }
 
 impl AgentDef {
@@ -218,6 +222,15 @@ impl AgentDef {
         } else {
             program
         }
+    }
+
+    /// 去重键：同一个可执行文件只应出现一次（agents.json 与自动发现可能重复）。
+    fn dedupe_key(&self) -> String {
+        self.program().trim().to_ascii_lowercase()
+    }
+
+    fn is_detected(&self) -> bool {
+        self.source == "detected"
     }
 }
 
@@ -231,7 +244,7 @@ fn agents_path() -> PathBuf {
 static AGENT_DEFS: OnceLock<Mutex<Option<(Instant, Vec<AgentDef>)>>> = OnceLock::new();
 
 fn default_agent_defs() -> Vec<AgentDef> {
-    vec![
+    let mut defs = vec![
         AgentDef {
             name: "Claude Code".into(),
             keyword: "claude".into(),
@@ -250,6 +263,7 @@ fn default_agent_defs() -> Vec<AgentDef> {
                 "--resume".into(),
                 "{session}".into(),
             ],
+            source: "builtin".into(),
         },
         AgentDef {
             name: "Codex CLI".into(),
@@ -269,6 +283,7 @@ fn default_agent_defs() -> Vec<AgentDef> {
                 "{session}".into(),
                 "{prompt}".into(),
             ],
+            source: "builtin".into(),
         },
         AgentDef {
             name: "OpenCode".into(),
@@ -288,6 +303,7 @@ fn default_agent_defs() -> Vec<AgentDef> {
                 "{session}".into(),
                 "{prompt}".into(),
             ],
+            source: "builtin".into(),
         },
         AgentDef {
             name: "Hermes".into(),
@@ -302,20 +318,46 @@ fn default_agent_defs() -> Vec<AgentDef> {
                 "-z".into(),
                 "{prompt}".into(),
             ],
+            source: "builtin".into(),
         },
-    ]
+    ];
+    for def in &mut defs {
+        def.source = "builtin".into();
+    }
+    defs
 }
 
 fn load_agent_defs() -> Vec<AgentDef> {
     let path = agents_path();
+    let mut defs: Vec<AgentDef> = Vec::new();
     if let Ok(text) = fs::read_to_string(&path) {
-        if let Ok(defs) = serde_json::from_str::<Vec<AgentDef>>(&text) {
-            if !defs.is_empty() {
-                return defs;
-            }
+        if let Ok(parsed) = serde_json::from_str::<Vec<AgentDef>>(&text) {
+            defs = parsed;
         }
     }
-    default_agent_defs()
+    // 旧 agents.json 没有 source：按名字区分内置与自定义
+    for def in &mut defs {
+        if def.source.is_empty() {
+            def.source = if is_builtin_agent_name(&def.name) {
+                "builtin".into()
+            } else {
+                "custom".into()
+            };
+        }
+    }
+    // 文件里缺少的内置 Agent 继续保留（用户可能只写了自己的自定义项）
+    let mut seen: std::collections::HashSet<String> =
+        defs.iter().map(AgentDef::dedupe_key).collect();
+    for def in default_agent_defs() {
+        if seen.insert(def.dedupe_key()) {
+            defs.push(def);
+        }
+    }
+    defs
+}
+
+fn is_builtin_agent_name(name: &str) -> bool {
+    matches!(name, "Claude Code" | "Codex CLI" | "OpenCode" | "Hermes")
 }
 
 fn save_agent_defs(defs: &[AgentDef]) -> Result<(), String> {
@@ -357,6 +399,58 @@ fn reload_agent_defs() {
     if let Ok(mut guard) = AGENT_DEFS.get_or_init(|| Mutex::new(None)).lock() {
         *guard = None;
     }
+}
+
+/// 扫描用的 Agent 列表：显式配置 + 本机探测到的（source=detected）。
+///
+/// 自动发现的项只活在内存里，不写回 `agents.json`：用户没要求就不要替他把
+/// 配置固化下来，卸载/更新后自然消失。
+pub(crate) fn scan_agent_defs() -> Vec<AgentDef> {
+    let mut defs = agent_defs();
+    let mut seen: std::collections::HashSet<String> =
+        defs.iter().map(AgentDef::dedupe_key).collect();
+    let mut names: std::collections::HashSet<String> = defs
+        .iter()
+        .map(|def| def.name.to_ascii_lowercase())
+        .collect();
+    for entry in crate::agent_catalog::CATALOG {
+        let program = entry.program.to_ascii_lowercase();
+        if seen.contains(&program) || names.contains(&entry.name.to_ascii_lowercase()) {
+            continue;
+        }
+        if crate::process_scan::resolve_agent_program(entry.program).is_none() {
+            continue;
+        }
+        seen.insert(program);
+        names.insert(entry.name.to_ascii_lowercase());
+        defs.push(AgentDef {
+            name: entry.name.to_string(),
+            keyword: entry.program.to_string(),
+            log_kind: String::new(),
+            program: entry.program.to_string(),
+            resume_args: Vec::new(),
+            send_args: Vec::new(),
+            source: "detected".into(),
+        });
+    }
+    defs
+}
+
+/// agent_id（log_kind 优先，否则 keyword）→ (来源, 启动命令)。
+/// 给快照补 source/program 用；program 是终端里可以直接启动的命令或完整路径。
+pub(crate) fn agent_meta_map() -> std::collections::HashMap<String, (String, String)> {
+    scan_agent_defs()
+        .into_iter()
+        .map(|def| {
+            let id = if def.log_kind.is_empty() {
+                def.keyword.clone()
+            } else {
+                def.log_kind.clone()
+            };
+            let program = def.program().to_string();
+            (id, (def.source, program))
+        })
+        .collect()
 }
 
 fn fill_template(
@@ -734,6 +828,7 @@ pub fn run() {
         }
     });
 }
+
 
 
 

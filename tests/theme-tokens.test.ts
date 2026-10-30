@@ -9,54 +9,60 @@ declare const process: { cwd(): string };
 const root = process.cwd();
 
 const structuralTokens = [
-  "--space-card",
-  "--space-section",
-  "--space-control",
+  "--space-1",
+  "--space-5",
   "--radius-island",
   "--radius-card",
   "--radius-control",
   "--radius-event",
+  "--font-ui",
+  "--font-readout",
+  "--font-mono",
+  "--fs-2xs",
+  "--fs-base",
+  "--fs-xl",
   "--z-sticky",
   "--z-event",
   "--motion-spring",
+  "--motion-out",
   "--duration-fast",
   "--duration-normal",
   "--duration-slow",
 ] as const;
 
-const themedTokens = [
-  "--surface-island",
-  "--surface-card",
-  "--surface-raised",
-  "--surface-log",
-  "--surface-event",
-  "--surface-notification",
-  "--surface-sticky",
-  "--text-primary",
-  "--text-secondary",
-  "--text-tertiary",
-  "--text-log",
-  "--text-error",
-  "--border-subtle",
-  "--border-event",
-  "--border-log-divider",
-  "--accent-primary",
-  "--status-idle",
-  "--status-working",
-  "--status-error",
-  "--status-done",
-  "--status-waiting",
-  "--status-stopped",
-  "--refresh-error-text",
-  "--refresh-error-surface",
-  "--control-surface",
-  "--control-hover",
+/** 两套外观都必须完整定义同一组语义令牌：任何一边漏一个就是一块没被主题化的界面。 */
+const semanticTokens = [
+  "--ground",
+  "--ground-raised",
+  "--ground-sunken",
+  "--sticky",
+  "--ink",
+  "--ink-log",
+  "--ink-2",
+  "--ink-3",
+  "--rule",
+  "--rule-strong",
+  "--field",
+  "--field-hover",
+  "--state-idle",
+  "--state-stopped",
+  "--state-working",
+  "--state-done",
+  "--state-error",
+  "--state-waiting",
+  "--alarm",
+  "--alarm-ink",
+  "--danger",
+  "--danger-ink",
+  "--tint-working",
+  "--tint-done",
+  "--tint-idle",
   "--scrollbar-thumb",
-  "--scrollbar-track",
+  "--menu-surface",
+  "--menu-hover",
   "--elevation-island",
-  "--elevation-event",
   "--effect-backdrop",
-  "--island-background",
+  "--surface-island",
 ] as const;
 
 function source(path: string): string {
@@ -78,7 +84,29 @@ function declared(css: string, token: string): boolean {
   return new RegExp(`${token.replaceAll("-", "\\-")}\\s*:`).test(css);
 }
 
-describe("Agent Island semantic themes", () => {
+function tokenValue(css: string, token: string): string {
+  const match = css.match(new RegExp(`${token.replaceAll("-", "\\-")}\\s*:\\s*([^;]+);`));
+  if (!match) throw new Error(`missing ${token}`);
+  return match[1].trim();
+}
+
+function channel(value: number): number {
+  const normalized = value / 255;
+  return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+}
+
+function luminance(hex: string): number {
+  const value = hex.replace("#", "");
+  const [r, g, b] = [0, 2, 4].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16));
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+function contrast(foreground: string, background: string): number {
+  const [light, dark] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+  return (light + 0.05) / (dark + 0.05);
+}
+
+describe("Agent Island appearance system", () => {
   it("defines structural, motion and compatibility tokens centrally", () => {
     const css = source("src/themes/tokens.css");
     for (const token of structuralTokens) expect(declared(css, token), token).toBe(true);
@@ -87,17 +115,33 @@ describe("Agent Island semantic themes", () => {
     }
   });
 
-  it.each(["graphite", "pure-black", "terminal"])("fully defines the %s theme", (theme) => {
+  it.each(["dark", "light"])("fully defines the %s appearance", (theme) => {
     const css = source(`src/themes/${theme}.css`);
     expect(css).toContain(`[data-theme-style="${theme}"]`);
-    for (const token of themedTokens) expect(declared(css, token), `${theme}:${token}`).toBe(true);
+    for (const token of semanticTokens) expect(declared(css, token), `${theme}:${token}`).toBe(true);
   });
 
-  it("keeps pure black solid and independent of backdrop glass", () => {
-    const css = source("src/themes/pure-black.css");
-    expect(css).toMatch(/--surface-island\s*:\s*#[0-9a-f]{6}\s*;/i);
-    expect(css).toMatch(/--surface-card\s*:\s*#[0-9a-f]{6}\s*;/i);
-    expect(css).toMatch(/--effect-backdrop\s*:\s*none\s*;/i);
+  it("keeps alarm fields readable and body text above 4.5:1 in both appearances", () => {
+    for (const theme of ["dark", "light"]) {
+      const css = source(`src/themes/${theme}.css`);
+      // 告警底色是实心亮色，上面压深墨字；普通状态色只出现在字上，不占大块底色。
+      expect(contrast(tokenValue(css, "--alarm-ink"), tokenValue(css, "--alarm")), `${theme}:alarm`).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(tokenValue(css, "--danger-ink"), tokenValue(css, "--danger")), `${theme}:danger`).toBeGreaterThanOrEqual(4.5);
+      for (const token of ["--ink", "--ink-2", "--ink-3", "--ink-log"]) {
+        expect(contrast(tokenValue(css, token), tokenValue(css, "--ground")), `${theme}:${token}`).toBeGreaterThanOrEqual(4.5);
+      }
+      for (const token of ["--state-working", "--state-done", "--state-error", "--state-waiting", "--state-idle"]) {
+        expect(contrast(tokenValue(css, token), tokenValue(css, "--ground")), `${theme}:${token}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("keeps both appearances free of glass and card shadows", () => {
+    for (const theme of ["dark", "light"]) {
+      const css = source(`src/themes/${theme}.css`);
+      expect(tokenValue(css, "--effect-backdrop")).toBe("none");
+      expect(tokenValue(css, "--elevation-island")).toBe("none");
+    }
   });
 
   it("keeps theme color literals out of Svelte component styles", () => {
@@ -117,9 +161,12 @@ describe("Agent Island semantic themes", () => {
     expect(css).toMatch(/animation-iteration-count\s*:\s*1\s*!important/);
   });
 
-  it("loads the token contract and both theme definitions from the App", () => {
+  it("loads the token contract and both appearances from the island, and keeps the overview themes working", () => {
     const app = source("src/app/App.svelte");
-    for (const file of ["tokens.css", "graphite.css", "pure-black.css"]) expect(app).toContain(file);
+    for (const file of ["tokens.css", "dark.css", "light.css"]) expect(app).toContain(file);
+
+    const overview = source("src/windows/overview/OverviewApp.svelte");
+    for (const file of ["tokens.css", "graphite.css", "pure-black.css"]) expect(overview).toContain(file);
   });
 
   it("draws the island scrollbar itself so both right corners stay rounded", () => {
@@ -129,5 +176,13 @@ describe("Agent Island semantic themes", () => {
     expect(app).toMatch(/\.agent-island\.expanded::-webkit-scrollbar-thumb/);
     expect(app).toMatch(/\.agent-island\.expanded::-webkit-scrollbar-track\s*\{[^}]*margin:\s*22px 0/s);
   });
-});
 
+  it("keeps the native island window free of backdrop blur", () => {
+    // 透明原生窗口外溢的模糊层会在胶囊外留下矩形合成边缘。
+    const app = source("src/app/App.svelte");
+    expect(app).not.toMatch(/\.agent-island\s*\{[^}]*backdrop-filter/s);
+    for (const theme of ["dark", "light"]) {
+      expect(source(`src/themes/${theme}.css`)).toMatch(/--effect-backdrop\s*:\s*none/);
+    }
+  });
+});

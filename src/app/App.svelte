@@ -1,10 +1,9 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import "../themes/tokens.css";
-  import "../themes/graphite.css";
-  import "../themes/pure-black.css";
-  import "../themes/terminal.css";
-  import { THEME_LABELS, THEME_STORAGE_KEY, storedThemeStyle, type ThemeStyle } from "../themes/theme-style";
+  import "../themes/dark.css";
+  import "../themes/light.css";
+  import { APPEARANCE_STORAGE_KEY, storedAppearance, type Appearance } from "../themes/theme-style";
   import CompactIsland from "../components/island/CompactIsland.svelte";
   import ApprovalStack from "../components/approvals/ApprovalStack.svelte";
   import ApprovalRules from "../components/approvals/ApprovalRules.svelte";
@@ -29,7 +28,7 @@
   import type { ApprovalItem, CommandFailure, CommandUiState, NotificationItem } from "../components/events/types";
   import { tauriBridge } from "../bridge/tauri";
   import { tauriDiagnosticsBridge, type DiagnosticsBridge } from "../bridge/diagnostics";
-  import type { AgentIslandBridge, CommandResult, DiagnosticView, HookEvent, InboxItem, SessionView, SourceHealth, AgentDetection, AgentCandidate } from "../bridge/types";
+  import type { AgentIslandBridge, AgentView, CommandResult, DiagnosticView, HookEvent, InboxItem, SessionView, SourceHealth, AgentDetection, AgentCandidate } from "../bridge/types";
   import { loadLayout, saveLayout } from "../layout/persistence";
   import type { CardId, CardPlacement, LayoutConfigV1 } from "../layout/schema";
   import { createAgentStore, type AgentStoreState } from "../stores/agent-store";
@@ -73,7 +72,7 @@
     diagnosticsBridge = tauriDiagnosticsBridge,
     pollIntervalMs = 1_500,
     initiallyExpanded = false,
-    initiallyPeeked = false,
+  initiallyPeeked = true,
     iconStyle: initialIconStyle = storedIconStyle(),
   }: {
     bridge?: AgentIslandBridge;
@@ -143,7 +142,7 @@
         ? "quiet"
         : "off",
   );
-  let themeStyle = $state<ThemeStyle>(storedThemeStyle());
+  let appearance = $state<Appearance>(storedAppearance());
   let layout = $state<LayoutConfigV1>(loadLayout(localStorage));
   let layoutPersistenceFailed = $state(false);
   let releaseLayoutDrag: (() => void) | null = null;
@@ -188,12 +187,15 @@
   let notificationSequence = 0;
   let notificationAutoExpanded = false;
   const notificationTimers = new Map<string, { handle: number; remainingMs: number; startedAt: number; pauseCount: number }>();
-  const collapsedWindowHeight = 60;
+  /** 折叠态：贴边刘海的高度。 */
+  const collapsedWindowHeight = 40;
   /** 隐藏态：只留一条很薄的"热区"，鼠标扫过就回到胶囊态。 */
-  const hiddenWindowHeight = 13;
+  const hiddenWindowHeight = 8;
   /** 展开态的目标宽度：和高度上限 560 一起构成接近正方形的面板。 */
   const expandedWidth = 560;
   const expandedPanelHeight = 560;
+  /** 没有展开时的窗口宽度：由刘海内容量出来，窗口只比它大一圈。 */
+  let compactWindowWidth = 168;
   let restingWidth = 0;
   /** 正在请求中的窗口宽度：webview 的 innerWidth 更新滞后，同步高度时不能拿旧宽度把窗口缩回去 */
   let targetWindowWidth = 0;
@@ -212,7 +214,6 @@
   /** 冻结本次更新的目标：更新期间切换 Agent 不能把校验命令换成另一个 CLI。 */
   let updateTarget = $state<{ name: string; package: string; cli: string } | null>(null);
   let peekTimer: number | undefined;
-  let hideTimer: number | undefined;
 
   /**
    * Agent 显示模式：
@@ -267,18 +268,47 @@
   let terminalSize = { cols: 80, rows: 20 };
   /** PTY 当前的尺寸（null = 还没开或已关闭）；窗口拖动不应该改变它 */
   let ptySize: { cols: number; rows: number } | null = null;
-  function agentCliName(agent: { name: string } | null): string {
-    const map: Record<string, string> = { "Claude Code": "claude", "Codex CLI": "codex", OpenCode: "opencode", Hermes: "hermes" };
-    return (agent && map[agent.name]) ?? "Shell";
+  /** 岛内终端要启动什么：内置 Agent 跑它自己的 CLI，其它（自定义）Agent 只开系统 shell。 */
+  const TERMINAL_TARGETS: Record<string, { program: string; label: string }> = {
+    "Claude Code": { program: "claude", label: "Claude Code" },
+    "Codex CLI": { program: "codex", label: "Codex CLI" },
+    OpenCode: { program: "opencode", label: "OpenCode" },
+    Hermes: { program: "hermes", label: "Hermes" },
+  };
+  function terminalTarget(agent: { name: string; program?: string } | null): { program: string; label: string } {
+    const known = agent ? TERMINAL_TARGETS[agent.name] : undefined;
+    if (known) return known;
+    // 自定义 / 自动发现的 Agent：直接启动它自己的命令，而不是退回 shell
+    const program = agent?.program?.trim();
+    if (agent && program) return { program, label: agent.name };
+    return { program: "powershell", label: "PowerShell" };
   }
   function setAgentMode(value: AgentMode): void {
     agentMode = value;
     try { localStorage.setItem(AGENT_MODE_KEY, value); } catch { /* 存储不可用时只影响持久化 */ }
     void syncWindowSize();
   }
+  /** 自动发现的 Agent 只有"运行中 / 固定 / 最近用过"才默认进岛，其余收在「+」面板。 */
+  const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+  function recentlyUsed(agent: AgentView): boolean {
+    const times = [
+      agent.active_session?.last_active_at_ms ?? 0,
+      ...agent.history_sessions.map((session) => session.last_active_at_ms),
+    ];
+    return Math.max(...times) >= Date.now() - RECENT_WINDOW_MS;
+  }
   const visibleAgents = $derived.by(() => {
     const agents = viewState.snapshot?.agents ?? [];
-    return agentMode === "running" ? agents.filter((agent) => agent.state.process === "running") : agents;
+    if (agentMode === "running") {
+      return agents.filter((agent) => agent.state.process === "running");
+    }
+    return agents.filter(
+      (agent) =>
+        agent.source !== "detected" ||
+        agent.state.process === "running" ||
+        agent.id === pinnedAgentId ||
+        recentlyUsed(agent),
+    );
   });
   let selectedAgent = $derived.by(() => {
     const current = viewState.selectedAgent;
@@ -302,11 +332,25 @@
         ? selectedAgent?.history_sessions.find((session) => session.id === inspectedSession?.sessionId) ?? null
         : selectedAgent?.active_session ?? null),
   );
+  /**
+   * 冷启动：有日志适配器、但还没有任何会话（第一次用这个 Agent 时最常见）。
+   * 这不等于"检测失败"——需要引导用户先跑一轮，而不是甩一堆"未确认"。
+   */
+  const coldStart = $derived(
+    selectedAgent !== null && selectedAgent.has_log_adapter !== false && selectedSession === null,
+  );
+  /** 空态只是"还没有数据"（冷启动或没有日志适配器），不该长得像告警。 */
+  const quietEmpty = $derived(coldStart || selectedAgent?.has_log_adapter === false);
 
   // 显示模式过滤掉当前选中的 Agent 时，自动落到第一个可见的（都不可见则保持空态）
   $effect(() => {
     if (visibleAgents.length === 0 || selectedAgent) return;
     store.selectAgent(visibleAgents[0].id);
+  });
+
+  // 原生控件（下拉弹层、滚动条、输入光标）跟随明暗，而不是永远深色
+  $effect(() => {
+    if (typeof document !== "undefined") document.documentElement.style.colorScheme = appearance;
   });
 
   // 今日花费：把每个 Agent 的窗口累计花费按增量累加，并检查每日预算
@@ -593,7 +637,16 @@
     if (targetWindowWidth > 0 && Math.abs(Math.round(window.innerWidth) - targetWindowWidth) < 1) {
       targetWindowWidth = 0;
     }
-    const width = targetWindowWidth > 0 ? targetWindowWidth : Math.round(window.innerWidth);
+    // 折叠态：窗口宽度跟着刘海内容走（fit-content），不再用用户拖出来的宽度。
+    if (!targetExpanded) {
+      const measured = islandElement ? Math.ceil(islandElement.getBoundingClientRect().width) + 2 : 0;
+      if (measured > 40) compactWindowWidth = Math.min(360, Math.max(80, measured));
+    }
+    const width = targetWindowWidth > 0
+      ? targetWindowWidth
+      : targetExpanded
+        ? Math.round(window.innerWidth)
+        : compactWindowWidth;
     try {
       await bridge.resizeWindow?.({
         width: Math.max(1, width),
@@ -793,7 +846,7 @@
    * 只有点「关闭」或「收起终端」才真正结束 PTY。
    */
   async function startTerminal(program?: string, args: string[] = []): Promise<void> {
-    const target = program ?? agentCliName(selectedAgent);
+    const target = program ?? terminalTarget(selectedAgent).program;
     if (!bridge.terminalOpen) {
       terminalError = "当前宿主不支持内置终端";
       return;
@@ -858,6 +911,16 @@
     if (!terminalId) await startTerminal();
   }
 
+  /** 冷启动 CTA：打开岛内终端，并在里面启动这个 Agent 的 CLI。 */
+  async function launchAgentInTerminal(): Promise<void> {
+    if (!selectedAgent) return;
+    if (!terminalOpen) {
+      await toggleTerminal();
+      return;
+    }
+    if (!terminalId) await startTerminal(terminalTarget(selectedAgent).program);
+  }
+
   function windowFailure(error: unknown): void {
     if (disposed) return;    windowError = `窗口调整或保存失败：${error instanceof Error ? error.message : String(error)}`;
     expanded = true;
@@ -879,13 +942,12 @@
   }
 
   /**
-   * 展开时把窗口放宽到"纵横均衡"的宽度：420×620 太瘦长，560×≤560 接近正方形，
-   * 卡片区也顺势变成两列、少滚动。收起时回到胶囊原本的宽度。
+   * 展开时把窗口放宽成面板（560），收起时回到刘海自己的宽度。
+   * 刘海不是"用户拖出来的宽度"：它由内容决定，窗口只比内容大一圈。
    */
   function expandIsland(): void {
     selectDefaultAgent();
-    clearHideTimer();
-    if (restingWidth === 0) restingWidth = Math.round(window.innerWidth);
+    restingWidth = compactWindowWidth;
     expanded = true;
     peeked = true;
     void syncWindowSize();
@@ -905,26 +967,24 @@
     if (!disposed) void syncWindowSize();
   }
 
-  /** 完全展开 → 收起成胶囊（鼠标移开后再自动隐藏）。 */
+  /** 完全展开 → 收起成刘海（鼠标移开后再自动隐藏）。 */
   function collapseToPeek(): void {
     notificationAutoExpanded = false;
-    const restore = restingWidth;
+    const restore = restingWidth || compactWindowWidth;
     restingWidth = 0;
-    // 收起岛时退出终端放大，别让收起后的胶囊还挂着 720 宽
+    // 收起岛时退出终端放大，别让收起后的刘海还挂着 720 宽
     if (terminalMax) {
       terminalMax = false;
       widthBeforeMax = 0;
     }
     expanded = false;
     peeked = true;
-    clearHideTimer();
     if (restore > 0 && Math.round(window.innerWidth) !== restore) void applyWindowWidth(restore);
     void syncWindowSize();
   }
 
   function peekFromHidden(): void {
     if (expanded || peeked) return;
-    clearHideTimer();
     peekTimer = window.setTimeout(() => {
       peekTimer = undefined;
       if (expanded || peeked || disposed) return;
@@ -940,41 +1000,17 @@
     }
   }
 
-  function clearHideTimer(): void {
-    if (hideTimer !== undefined) {
-      window.clearTimeout(hideTimer);
-      hideTimer = undefined;
-    }
-  }
-
-  /** 鼠标离开：胶囊态过一会自动隐藏；展开态保持不动，避免打断操作。 */
-  function scheduleIdleHide(): void {
-    clearPeekTimer();
-    if (expanded || !peeked) return;
-    // 有待确认的审批时不自动隐藏：收起会把"要不要允许"藏起来
-    if (hasPendingApprovals) return;
-    clearHideTimer();
-    hideTimer = window.setTimeout(() => {
-      hideTimer = undefined;
-      if (expanded || disposed || hasPendingApprovals) return;
-      peeked = false;
-      void syncWindowSize();
-    }, 480);
-  }
-
+  /**
+   * 刘海是常驻的：鼠标离开不再自动隐藏（隐藏只保留给 Esc 与全局快捷键）。
+   * 悬停仍然能把隐藏态唤回刘海。
+   */
   function handleIslandPointerEnter(): void {
-    clearHideTimer();
     if (expanded) return;
     if (!peeked) peekFromHidden();
   }
 
-  function handleIslandPointerLeave(): void {
-    scheduleIdleHide();
-  }
-
   function hideIsland(): void {
     clearPeekTimer();
-    clearHideTimer();
     if (terminalMax) void toggleTerminalMax();
     expanded = false;
     peeked = false;
@@ -1472,9 +1508,9 @@
     }
   }
 
-  function setThemeStyle(value: ThemeStyle): void {
-    themeStyle = value;
-    localStorage.setItem(THEME_STORAGE_KEY, value);
+  function setAppearance(value: Appearance): void {
+    appearance = value;
+    localStorage.setItem(APPEARANCE_STORAGE_KEY, value);
     void syncWindowSize();
   }
 
@@ -1554,6 +1590,9 @@
   }
 
   onMount(() => {
+    // 回执里展开一条长记录会改变面板高度：让窗口重新量一次
+    const relayout = () => { void syncWindowSize(); };
+    window.addEventListener("agent-island-layout", relayout);
     try {
       if (!localStorage.getItem(INBOX_SEEN_KEY)) {
         localStorage.setItem(INBOX_SEEN_KEY, String(inboxSeenAt));
@@ -1663,7 +1702,6 @@
           blurTimer = undefined;
           if (disposed || !expanded) return;
           collapseToPeek();
-          scheduleIdleHide();
         }, 220);
       }).then((unlisten) => {
         if (disposed) unlisten();
@@ -1699,6 +1737,7 @@
     }
     return () => {
       disposed = true;
+      window.removeEventListener("agent-island-layout", relayout);
       diagnosticRequest += 1;
       diagnosticRefreshQueued = false;
       resizeRevision += 1;
@@ -1714,7 +1753,6 @@
       notificationTimers.clear();
       endLayoutInteraction();
       clearPeekTimer();
-      clearHideTimer();
       unsubscribe();
     };
   });
@@ -1744,7 +1782,6 @@
 <!-- 悬停检测放在 body 上：pointerenter 不冒泡，挂在 window 上收不到 -->
 <svelte:body
   onpointerenter={handleIslandPointerEnter}
-  onpointerleave={handleIslandPointerLeave}
 />
 
 {#if viewState.snapshot}
@@ -1756,7 +1793,7 @@
     class:privacy
     data-testid="agent-island"
     data-presence={idleHidden ? "hidden" : expanded ? "expanded" : "peek"}
-    data-theme-style={themeStyle}
+    data-theme-style={appearance}
     aria-label="Agent Island"
     bind:this={islandElement}
   >
@@ -1764,9 +1801,11 @@
     {#if idleHidden}
       <div class="idle-notch" data-testid="idle-notch" data-pending={hasPendingApprovals || inboxCount > 0 ? "true" : "false"} aria-hidden="true"><span class="idle-notch-dot"></span></div>
     {:else}
-    <div class="compact-header">
-      <CompactIsland agent={selectedAgent} {expanded} onToggle={toggleExpanded} {iconStyle} pendingApprovals={hasPendingApprovals} inboxCount={inboxCount} binding={selectedAgent?.binding ?? "inferred"} />
-      {#if bridge.startWindowDrag}<button class="window-handle" aria-label="拖动窗口" title="按住并拖动窗口" onpointerdown={(event) => { if (event.button === 0) { event.preventDefault(); void windowAction(() => bridge.startWindowDrag!()); } }}>⠿</button>{/if}
+    <div class="compact-header" class:floating={!expanded}>
+      <CompactIsland agent={selectedAgent} agents={visibleAgents} {expanded} onToggle={toggleExpanded} {iconStyle} pendingApprovals={hasPendingApprovals} inboxCount={inboxCount} binding={selectedAgent?.binding ?? "inferred"} />
+      {#if expanded && bridge.startWindowDrag}<button class="window-handle" aria-label="拖动窗口" title="按住并拖动窗口" onpointerdown={(event) => { if (event.button === 0) { event.preventDefault(); void windowAction(() => bridge.startWindowDrag!()); } }}>
+        <svg viewBox="0 0 12 12" width="12" height="12" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1"/><circle cx="6" cy="3" r="1"/><circle cx="9" cy="3" r="1"/><circle cx="3" cy="6" r="1"/><circle cx="6" cy="6" r="1"/><circle cx="9" cy="6" r="1"/></svg>
+      </button>{/if}
     </div>
     {/if}
     {#if expanded}
@@ -1802,13 +1841,13 @@
             title="检测本机 Agent；没有想要的可以自己添加"
             aria-expanded={addAgentOpen}
             onclick={() => void toggleAddAgent()}
-          >+</button>
+          ><svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 2.5v7M2.5 6h7" /></svg></button>
         </nav>
         {#if addAgentOpen}
           <section class="agent-add-panel" data-testid="agent-add-panel" aria-label="检测或添加 Agent">
             <div class="add-head">
               <strong>检测 / 添加 Agent</strong>
-              <button type="button" class="add-close" aria-label="关闭" onclick={() => { addAgentOpen = false; void syncWindowSize(); }}>×</button>
+              <button type="button" class="add-close" aria-label="关闭" onclick={() => { addAgentOpen = false; void syncWindowSize(); }}><svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" /></svg></button>
             </div>
             <p class="add-hint">已检测本机已安装的 Agent；下面是结果。</p>
             {#if addAgentStatus === "loading"}
@@ -1853,6 +1892,180 @@
             {#if addAgentError}<p class="add-error" role="alert" data-testid="agent-add-error">{addAgentError}</p>{/if}
           </section>
         {/if}
+        {#if selectedAgent && selectedAgent.has_log_adapter === false}
+          <p class="adapter-note" data-testid="adapter-note" role="status">
+            「{selectedAgent.name}」是自定义 Agent：灵动岛只监控进程状态；会话、日志与用量需要对应的日志适配器。
+          </p>
+        {:else if coldStart && selectedAgent}
+          <div class="cold-start" data-testid="cold-start" role="status">
+            <p>{selectedAgent.state.process === "running"
+              ? `已检测到 ${selectedAgent.name} 在运行，正在等它写出第一条会话记录…`
+              : `还没有 ${selectedAgent.name} 的会话。灵动岛只显示能确认身份的当前会话；在终端里跑一轮，或直接在岛内启动它。`}</p>
+            {#if selectedAgent.state.process !== "running" && terminalTarget(selectedAgent).label !== "PowerShell"}
+              <button type="button" class="cold-start-action" data-testid="cold-start-launch" onclick={() => void launchAgentInTerminal()}>在岛内启动 {terminalTarget(selectedAgent).label}</button>
+            {/if}
+          </div>
+        {/if}
+        <div class="cards-region" class:terminal-open={terminalOpen}>
+        {#if selectedAgent}
+          <LayoutEditor
+            bind:layout
+            emptyCardIds={[...(!selectedSession ? ["session", "log"] as CardId[] : []), ...(!selectedAgent.usage ? ["usage"] as CardId[] : [])]}
+            onLayoutChange={persistLayout}
+            beginInteraction={beginLayoutInteraction}
+            endInteraction={endLayoutInteraction}
+          >
+            {#snippet content(placement: CardPlacement)}
+              {#if placement.id === "status"}
+                <CardBoundary cardName="状态卡片" errorCode="status_card_render_failed">
+                  <StatusCard agent={selectedAgent} session={selectedSession} inspectingHistory={viewingArchive} />
+                </CardBoundary>
+              {:else if placement.id === "usage"}
+                <CardBoundary cardName="用量卡片" errorCode="usage_card_render_failed">
+                  <UsageCard agent={selectedAgent} refreshFailed={viewState.refreshError !== null} todaySpend={dailyTotal(spend, Date.now())} budget={dailyBudget} />
+                </CardBoundary>
+              {:else if placement.id === "session"}
+                <CardBoundary cardName="会话卡片" errorCode="session_card_render_failed">
+                  {#if selectedSession}<SessionCard session={selectedSession} {privacy} binding={selectedAgent?.binding ?? "inferred"} />
+                  {:else}<div class="empty" class:quiet={quietEmpty} role="status">还没有会话：目录与会话信息会在 Agent 跑出第一条记录后出现。</div>{/if}
+                </CardBoundary>
+              {:else if placement.id === "log"}
+                <CardBoundary cardName="工作回执" errorCode="log_card_render_failed">
+                  {#if selectedSession}<LogCard session={selectedSession} />
+                  {:else}<div class="empty" class:quiet={quietEmpty} data-testid="empty-session" role="status"><strong>无法确认当前会话</strong><span>灵动岛不会用历史对话冒充当前任务；启动并跑一轮后，这里会出现工作回执。</span></div>{/if}
+                </CardBoundary>
+              {:else}
+                <article class="stats-card" aria-label="当前 Agent 统计">
+                  <div class="line">
+                    <span class="key">统计</span>
+                    <div class="stats-values">
+                      <span><strong data-testid="stats-event-count">{inspectingHistory ? "—" : selectedAgent.diagnostic?.event_count ?? "—"}</strong>事件</span>
+                      <span><strong data-testid="stats-message-count">{inspectingHistory ? selectedSession?.records.length ?? "—" : selectedAgent.diagnostic?.message_count ?? "—"}</strong>消息</span>
+                      <span><strong>{selectedAgent.history_sessions.length + (selectedAgent.active_session ? 1 : 0)}</strong>会话</span>
+                    </div>
+                  </div>
+                </article>
+              {/if}
+            {/snippet}
+          </LayoutEditor>
+          {#if layoutPersistenceFailed}
+            <p class="layout-persistence-status" data-testid="layout-persistence-status" role="status">布局已应用，但暂时未保存；下次调整时会重试。</p>
+          {/if}
+        {:else if visibleAgents.length === 0}
+          <div class="empty" data-testid="empty-agents" role="status">
+            <strong>{agentMode === "running" ? "当前没有运行中的 Agent" : "未检测到任何 Agent"}</strong>
+            <span>{agentMode === "running" ? "设置里把「显示」切成「全部检测」，即可看到已安装或有本地记录的 Agent。" : "启动一个 Agent 后会自动出现在这里。"}</span>
+          </div>
+        {:else}
+          <div class="empty" data-testid="empty-session" role="status"><strong>无法确认当前会话</strong><span>为避免串入历史对话，灵动岛不会显示其他会话内容。</span></div>
+        {/if}
+        </div>
+        {#if selectedAgent}
+          <div class="composer-slot">
+            <PromptComposer
+              agent={selectedAgent}
+              session={selectedSession}
+              runCommand={runActionCommand}
+              onLayoutChange={() => void syncWindowSize()}
+              disabledReason={viewingArchive
+                ? "正在查看本地历史记录，不能向历史会话发送指令"
+                : selectedAgent?.has_log_adapter === false
+                  ? "该 Agent 没有日志适配器，无法发送指令或读取会话"
+                  : null}
+              taskCapable={selectedAgent?.id === "codex" && !selectedAgent?.active_session}
+            />
+          </div>
+        {/if}
+        {#if selectedAgent && (selectedAgent.history_sessions.length > 0 || inspectingHistory)}
+          <label class="session-picker">查看会话
+            <select data-testid="session-picker" value={inspectingHistory ? inspectedSession?.sessionId : ""} onchange={(event) => {
+              inspectedSession = event.currentTarget.value ? { agentId: selectedAgent!.id, sessionId: event.currentTarget.value } : null;
+              void syncWindowSize();
+            }}>
+              <option value="">自动：可靠匹配的当前会话</option>
+              {#if inspectingHistory && !selectedSession}<option value={inspectedSession?.sessionId} disabled>所选记录已不可用</option>{/if}
+              {#each selectedAgent.history_sessions as session (session.id)}
+                <option value={session.id}>本地记录 · {privacy ? "内容已隐藏" : `${session.name} · ${session.id}`}</option>
+              {/each}
+            </select>
+          </label>
+        {#if bridge.bindSession && selectedAgent}
+          {#if selectedAgent.binding === "manual"}
+            <button type="button" class="link-button" data-testid="unbind-session" onclick={() => void unbindSelectedSession()}>解除绑定{selectedSession ? `（${selectedSession.id.slice(0, 8)}）` : ""}</button>
+          {:else if selectedSession}
+            <button type="button" class="link-button" data-testid="bind-session" onclick={() => void bindSelectedSession()}>绑定此会话</button>
+          {/if}
+        {/if}
+        {#if searchedSession}
+          <p class="refresh-note" role="status" data-testid="searched-session-note">
+            正在查看搜索结果（{searchedMeta?.agent ?? "会话"} · {searchedSession.name}），不代表桌面端当前任务。
+            <button type="button" class="link-button" data-testid="searched-session-close" onclick={closeSearchedSession}>返回当前会话</button>
+          </p>
+        {/if}          {#if inspectingHistory}<p class="refresh-note" role="status" data-testid="history-inspection-note">正在查看手动选择的本地会话记录，不代表桌面端当前任务。{selectedSession ? "目录和终端操作使用此会话；停止、重启和跳回已禁用。" : "该记录已不在当前快照中，请重新选择。"}</p>{/if}
+        {/if}
+        {#if viewState.refreshError}<p class="refresh-note" role="status">数据刷新暂时失败，已保留最近状态。</p>{/if}
+        {#if selectedAgent}
+          <div class="terminal-toolbar">
+            <button
+              type="button"
+              class="terminal-toggle"
+              class:active={terminalOpen}
+              data-testid="terminal-toggle"
+              aria-pressed={terminalOpen}
+              onclick={() => void toggleTerminal()}
+            >{terminalOpen ? "收起终端" : "内置终端"}</button>
+            {#if agentPackage}
+              <button
+                type="button"
+                class="update-button"
+                class:available={updateAvailable}
+                data-testid="agent-update"
+                data-update-state={updateStatus}
+                disabled={updateRunning || updateStatus === "checking"}
+                title={updateMessage
+                  ?? (updateInstalled && updateLatest
+                    ? `本地 v${updateInstalled} → npm 最新 v${updateLatest}`
+                    : "检查 Agent CLI 是否有新版本（需要联网）")}
+                onclick={() => void (updateAvailable ? runAgentUpdate() : checkAgentUpdate(true))}
+              >{updateLabel}</button>
+            {/if}
+            {#if terminalOpen}
+              <span class="terminal-hint">岛内终端：{terminalTarget(selectedAgent).label}</span>
+            {/if}
+          </div>
+          {#if updateMessage}
+            <p class="update-message" data-testid="agent-update-message" role="status">{updateMessage}</p>
+          {/if}
+          {#if terminalOpen}
+            <TerminalPanel
+              agent={selectedAgent}
+              sessionId={terminalId}
+              program={terminalProgram}
+              text={terminalText}
+              starting={terminalStarting}
+              exited={terminalExited}
+              error={terminalError}
+              maximized={terminalMax}
+              binding={selectedAgent?.binding ?? "inferred"}
+              onToggleMax={() => void toggleTerminalMax()}
+              onStart={(program) => void startTerminal(program)}
+              onStop={() => void stopTerminal()}
+              onInput={(data) => { if (terminalId) void bridge.terminalWrite?.(terminalId, data).catch(() => undefined); }}
+              onResize={(cols, rows) => {
+                terminalSize = { cols, rows };
+                if (!terminalId) return;
+                // PTY 现在的尺寸由 App 记住（面板会重挂载，不能把"已上报"存在面板里）。
+                // 尺寸没变就绝不再通知后端：ConPTY 每变一次，TUI 就把整屏重打一遍。
+                if (ptySize && ptySize.cols === cols && ptySize.rows === rows) return;
+                ptySize = { cols, rows };
+                void bridge.terminalResize?.(terminalId, cols, rows).catch(() => undefined);
+              }}
+              onLayoutChange={() => void syncWindowSize()}
+            />
+          {/if}
+        {/if}
+
+        <div class="system">
         <details class="diagnostics-drawer" data-testid="diagnostics-drawer" ontoggle={(event) => { diagnosticsOpen = event.currentTarget.open; if (diagnosticsOpen) { void loadDiagnostics(); void loadAgentDetections(); } }}>
           <summary>
             <span>诊断信息</span>
@@ -1922,155 +2135,6 @@
         {#if bridge.listApprovalRules}
           <ApprovalRules {bridge} />
         {/if}
-        {#if selectedAgent}
-          <div class="composer-slot">
-            <PromptComposer
-              agent={selectedAgent}
-              session={selectedSession}
-              runCommand={runActionCommand}
-              onLayoutChange={() => void syncWindowSize()}
-              disabledReason={viewingArchive ? "正在查看本地历史记录，不能向历史会话发送指令" : null}
-              taskCapable={selectedAgent?.id === "codex" && !selectedAgent?.active_session}
-            />
-          </div>
-        {/if}
-        {#if selectedAgent && (selectedAgent.history_sessions.length > 0 || inspectingHistory)}
-          <label class="session-picker">查看会话
-            <select data-testid="session-picker" value={inspectingHistory ? inspectedSession?.sessionId : ""} onchange={(event) => {
-              inspectedSession = event.currentTarget.value ? { agentId: selectedAgent!.id, sessionId: event.currentTarget.value } : null;
-              void syncWindowSize();
-            }}>
-              <option value="">自动：可靠匹配的当前会话</option>
-              {#if inspectingHistory && !selectedSession}<option value={inspectedSession?.sessionId} disabled>所选记录已不可用</option>{/if}
-              {#each selectedAgent.history_sessions as session (session.id)}
-                <option value={session.id}>本地记录 · {privacy ? "内容已隐藏" : `${session.name} · ${session.id}`}</option>
-              {/each}
-            </select>
-          </label>
-        {#if bridge.bindSession && selectedAgent}
-          {#if selectedAgent.binding === "manual"}
-            <button type="button" class="link-button" data-testid="unbind-session" onclick={() => void unbindSelectedSession()}>解除绑定{selectedSession ? `（${selectedSession.id.slice(0, 8)}）` : ""}</button>
-          {:else if selectedSession}
-            <button type="button" class="link-button" data-testid="bind-session" onclick={() => void bindSelectedSession()}>绑定此会话</button>
-          {/if}
-        {/if}
-        {#if searchedSession}
-          <p class="refresh-note" role="status" data-testid="searched-session-note">
-            正在查看搜索结果（{searchedMeta?.agent ?? "会话"} · {searchedSession.name}），不代表桌面端当前任务。
-            <button type="button" class="link-button" data-testid="searched-session-close" onclick={closeSearchedSession}>返回当前会话</button>
-          </p>
-        {/if}          {#if inspectingHistory}<p class="refresh-note" role="status" data-testid="history-inspection-note">正在查看手动选择的本地会话记录，不代表桌面端当前任务。{selectedSession ? "目录和终端操作使用此会话；停止、重启和跳回已禁用。" : "该记录已不在当前快照中，请重新选择。"}</p>{/if}
-        {/if}
-        {#if viewState.refreshError}<p class="refresh-note" role="status">数据刷新暂时失败，已保留最近状态。</p>{/if}
-        {#if selectedAgent}
-          <div class="terminal-toolbar">
-            <button
-              type="button"
-              class="terminal-toggle"
-              class:active={terminalOpen}
-              data-testid="terminal-toggle"
-              aria-pressed={terminalOpen}
-              onclick={() => void toggleTerminal()}
-            >{terminalOpen ? "收起终端" : "内置终端"}</button>
-            <button
-              type="button"
-              class="update-button"
-              class:available={updateAvailable}
-              data-testid="agent-update"
-              data-update-state={updateStatus}
-              disabled={!agentPackage || updateRunning || updateStatus === "checking"}
-              title={updateMessage
-                ?? (updateInstalled && updateLatest
-                  ? `本地 v${updateInstalled} → npm 最新 v${updateLatest}`
-                  : "检查 Agent CLI 是否有新版本（需要联网）")}
-              onclick={() => void (updateAvailable ? runAgentUpdate() : checkAgentUpdate(true))}
-            >{updateLabel}</button>
-            {#if terminalOpen}
-              <span class="terminal-hint">在岛内直接跑 {agentCliName(selectedAgent)}</span>
-            {/if}
-          </div>
-          {#if updateMessage}
-            <p class="update-message" data-testid="agent-update-message" role="status">{updateMessage}</p>
-          {/if}
-          {#if terminalOpen}
-            <TerminalPanel
-              agent={selectedAgent}
-              sessionId={terminalId}
-              program={terminalProgram}
-              text={terminalText}
-              starting={terminalStarting}
-              exited={terminalExited}
-              error={terminalError}
-              maximized={terminalMax}
-              binding={selectedAgent?.binding ?? "inferred"}
-              onToggleMax={() => void toggleTerminalMax()}
-              onStart={(program) => void startTerminal(program)}
-              onStop={() => void stopTerminal()}
-              onInput={(data) => { if (terminalId) void bridge.terminalWrite?.(terminalId, data).catch(() => undefined); }}
-              onResize={(cols, rows) => {
-                terminalSize = { cols, rows };
-                if (!terminalId) return;
-                // PTY 现在的尺寸由 App 记住（面板会重挂载，不能把"已上报"存在面板里）。
-                // 尺寸没变就绝不再通知后端：ConPTY 每变一次，TUI 就把整屏重打一遍。
-                if (ptySize && ptySize.cols === cols && ptySize.rows === rows) return;
-                ptySize = { cols, rows };
-                void bridge.terminalResize?.(terminalId, cols, rows).catch(() => undefined);
-              }}
-              onLayoutChange={() => void syncWindowSize()}
-            />
-          {/if}
-        {/if}
-        <div class="cards-region" class:terminal-open={terminalOpen}>
-        {#if selectedAgent}
-          <LayoutEditor
-            bind:layout
-            emptyCardIds={[...(!selectedSession ? ["session", "log"] as CardId[] : []), ...(!selectedAgent.usage ? ["usage"] as CardId[] : [])]}
-            onLayoutChange={persistLayout}
-            beginInteraction={beginLayoutInteraction}
-            endInteraction={endLayoutInteraction}
-          >
-            {#snippet content(placement: CardPlacement)}
-              {#if placement.id === "status"}
-                <CardBoundary cardName="状态卡片" errorCode="status_card_render_failed">
-                  <StatusCard agent={selectedAgent} session={selectedSession} inspectingHistory={viewingArchive} />
-                </CardBoundary>
-              {:else if placement.id === "usage"}
-                <CardBoundary cardName="用量卡片" errorCode="usage_card_render_failed">
-                  <UsageCard agent={selectedAgent} refreshFailed={viewState.refreshError !== null} todaySpend={dailyTotal(spend, Date.now())} budget={dailyBudget} />
-                </CardBoundary>
-              {:else if placement.id === "session"}
-                <CardBoundary cardName="会话卡片" errorCode="session_card_render_failed">
-                  {#if selectedSession}<SessionCard session={selectedSession} {privacy} binding={selectedAgent?.binding ?? "inferred"} />
-                  {:else}<div class="empty" role="status">尚未确认当前会话，目录信息暂不可用。</div>{/if}
-                </CardBoundary>
-              {:else if placement.id === "log"}
-                <CardBoundary cardName="日志卡片" errorCode="log_card_render_failed">
-                  {#if selectedSession}<LogCard session={selectedSession} />
-                  {:else}<div class="empty" data-testid="empty-session" role="status"><strong>无法确认当前会话</strong><span>为避免串入历史对话，灵动岛不会显示其他会话内容。可打开总览查看明确标记的历史会话。</span></div>{/if}
-                </CardBoundary>
-              {:else}
-                <article class="stats-card" aria-label="当前 Agent 统计">
-                  <span class="stats-eyebrow">当前快照统计</span>
-                  <div class="stats-values">
-                    <span><strong data-testid="stats-event-count">{inspectingHistory ? "—" : selectedAgent.diagnostic?.event_count ?? "—"}</strong>事件</span>
-                    <span><strong data-testid="stats-message-count">{inspectingHistory ? selectedSession?.records.length ?? "—" : selectedAgent.diagnostic?.message_count ?? "—"}</strong>消息</span>
-                    <span><strong>{selectedAgent.history_sessions.length + (selectedAgent.active_session ? 1 : 0)}</strong>会话</span>
-                  </div>
-                </article>
-              {/if}
-            {/snippet}
-          </LayoutEditor>
-          {#if layoutPersistenceFailed}
-            <p class="layout-persistence-status" data-testid="layout-persistence-status" role="status">布局已应用，但暂时未保存；下次调整时会重试。</p>
-          {/if}
-        {:else if visibleAgents.length === 0}
-          <div class="empty" data-testid="empty-agents" role="status">
-            <strong>{agentMode === "running" ? "当前没有运行中的 Agent" : "未检测到任何 Agent"}</strong>
-            <span>{agentMode === "running" ? "设置里把「显示」切成「全部检测」，即可看到已安装或有本地记录的 Agent。" : "启动一个 Agent 后会自动出现在这里。"}</span>
-          </div>
-        {:else}
-          <div class="empty" data-testid="empty-session" role="status"><strong>无法确认当前会话</strong><span>为避免串入历史对话，灵动岛不会显示其他会话内容。</span></div>
-        {/if}
         </div>
       </section>
       {#key JSON.stringify([selectedAgent?.id, inspectingHistory, selectedSession?.id, selectedSession?.cwd])}
@@ -2082,7 +2146,7 @@
           onLayoutChange={() => void syncWindowSize()}
           {privacy}
           {focusMode}
-          {themeStyle}
+          {appearance}
           {iconStyle}
           {agentMode}
           {hookEnabled}
@@ -2090,7 +2154,7 @@
           {hookError}
           onPrivacy={setPrivacy}
           onFocusMode={setFocusMode}
-          onThemeStyle={setThemeStyle}
+          onAppearance={setAppearance}
           budget={dailyBudget}
           onBudget={(value) => {
             dailyBudget = value;
@@ -2111,9 +2175,10 @@
   {#if expanded}
     <aside
       class="event-layer"
+      class:empty={approvals.length === 0 && notifications.length === 0 && !listenerError}
       class:privacy
       data-testid="event-layer"
-      data-theme-style={themeStyle}
+      data-theme-style={appearance}
       aria-label="紧急事件"
       bind:this={eventLayerElement}
     >
@@ -2129,10 +2194,10 @@
   {/if}
   <!-- 命令面板挂最外层：岛自身有 backdrop-filter，会给 fixed 后代建立新的包含块 -->
   {#if paletteOpen}
-    <CommandPalette commands={paletteCommands} onRun={runPaletteCommand} onClose={() => (paletteOpen = false)} />
+    <CommandPalette commands={paletteCommands} onRun={runPaletteCommand} onClose={() => (paletteOpen = false)} {appearance} />
   {/if}
 {:else}
-  <div class="island-loading" data-theme-style={themeStyle} aria-live="polite" bind:this={islandElement}>
+  <div class="island-loading" data-theme-style={appearance} aria-live="polite" bind:this={islandElement}>
     {#if viewState.refreshError}
       <span data-testid="connect-error">连接失败：{viewState.refreshError.message}</span>
     {:else}
@@ -2142,192 +2207,420 @@
 {/if}
 
 <style>
-  /* 整个岛是深色的：把文档级 color-scheme 也设成 dark，
-     <select> 的弹层、滚动条等原生控件才会按深色渲染（否则是白底白字）。 */
-  :global(html) { color-scheme: dark; }
-  .compact-header { display: flex; align-items: center; }
-  .window-handle { border: 1px solid var(--island-border-subtle); border-radius: 8px; color: var(--island-text-secondary); background: var(--island-control-surface); min-height: 30px; min-width: 30px; cursor: move; touch-action: none; }
-  .window-handle { margin-right: 10px; }
-  .window-handle:focus-visible { outline: 2px solid var(--island-accent-primary); }
-  /* 诊断默认收成一行，用时点开（"隐藏，用时弹出"） */
-  .about-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--island-border-subtle); color: var(--island-text-secondary); font-size: 11px; }
-  .about-row strong { color: var(--island-text-primary); font-variant-numeric: tabular-nums; }
-  .about-row button { min-height: 24px; padding: 2px 10px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 10px; cursor: pointer; }
-  .about-row button.primary { border-color: var(--island-accent-primary); color: var(--island-accent-primary); }
-  .about-row button:disabled { opacity: .55; cursor: progress; }
-  .about-message { color: var(--island-text-tertiary); font-size: 10px; }  .diagnostics-drawer { border-top: 1px solid var(--island-border-subtle); }
-  .diagnostics-drawer > summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; list-style: none; cursor: pointer; color: var(--island-text-secondary); font-size: 11px; }
-  .diagnostics-drawer > summary::-webkit-details-marker { display: none; }
-  .diagnostics-drawer > summary:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: -2px; }
-  .diagnostics-drawer > summary::after { content: "⌄"; margin-left: auto; color: var(--island-text-tertiary); }
-  .diagnostics-drawer[open] > summary::after { content: "⌃"; }
-  .drawer-badge { padding: 1px 7px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--island-status-waiting) 45%, transparent); background: color-mix(in srgb, var(--island-status-waiting) 16%, transparent); color: var(--island-status-waiting); font-size: 10px; font-weight: 700; }
-  .drawer-muted { color: var(--island-text-tertiary); font-size: 10px; }
-  .agent-detection { display: grid; gap: 5px; margin: 2px 12px 10px; padding: 8px; border: 1px solid var(--island-border-subtle); border-radius: 9px; background: var(--island-surface-card); }
-  .detection-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--island-text-secondary); font-size: 10px; }
-  .detection-head small { color: var(--island-text-tertiary); font-size: 9px; }
-  .detection-head button { min-height: 22px; padding: 1px 7px; border: 1px solid var(--island-border-subtle); border-radius: 6px; color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 9px; cursor: pointer; }
-  .detection-row { display: grid; grid-template-columns: 7px 74px minmax(0, 1fr) auto; align-items: center; gap: 6px; min-width: 0; color: var(--island-text-secondary); font-size: 9.5px; }
-  .detection-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--island-text-primary); font-weight: 600; }
-  .detection-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--island-status-stopped); }
-  .detection-dot.on { background: var(--island-status-done); box-shadow: 0 0 6px color-mix(in srgb, var(--island-status-done) 55%, transparent); }
-  .detection-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--island-text-tertiary); font-family: ui-monospace, "Cascadia Code", monospace; font-size: 9px; }
-  .detection-tag { padding: 1px 5px; border-radius: 4px; color: var(--island-text-tertiary); background: var(--island-control-surface); font-size: 8.5px; white-space: nowrap; }
-  .detection-empty { margin: 0; color: var(--island-text-tertiary); font-size: 9.5px; }
-  .session-picker { display: grid; gap: 5px; margin-bottom: 10px; color: var(--island-text-secondary); font-size: 11px; }
-  .session-picker select { width: 100%; min-width: 0; padding: 8px; border-radius: 8px; color-scheme: dark; color: var(--island-text-primary); background: var(--island-control-surface); border: 1px solid var(--island-border-subtle); }
-  .agent-island, .island-loading {
+  /*
+   * 岛的外壳：一块圆角矩形板，没有模糊、没有大阴影，只有一条 1px 边和一条内发丝。
+   * 面板内部由发丝线分区，不再用卡片盒子套卡片。
+   */
+  .agent-island,
+  .island-loading {
     box-sizing: border-box;
-    width: min(720px, calc(100vw - 24px));
-    color: var(--island-text-primary);
-    font: 500 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--ink);
+    font: 400 var(--fs-base)/1.5 var(--font-ui);
+    font-feature-settings: "tnum" 0;
   }
+
+  /*
+   * 贴边刘海：窗口就是这块形状本身，顶边与屏幕工作区顶边齐平，
+   * 只有下缘是圆的。收起时宽度由内容决定（fit-content），展开时占满面板宽度。
+   */
   .agent-island {
+    width: fit-content;
+    max-width: 100%;
+    margin-inline: auto;
     overflow: hidden;
-    border: 1px solid var(--island-border-subtle);
-    border-radius: var(--radius-island);
-    background: var(--island-background);
-    /* Keep the transparent native window free of an out-of-bounds blur layer. */
-    box-shadow: var(--island-inset-highlight);
+    border: 1px solid var(--rule);
+    border-top: 0;
+    border-radius: 0 0 var(--radius-island) var(--radius-island);
+    background: var(--ground);
     isolation: isolate;
   }
-  /* 自绘滚动条：原生 scrollbar-color 会让 Chromium 用"标准"滚动条，
-     那条方形轨道会盖住右上/右下两个圆角（左侧看起来是圆的、右侧是方的）。
-     这里改用 ::-webkit-scrollbar 并给轨道留出上下边距，四角才一致。 */
+
+  .agent-island.expanded { width: 100%; margin-inline: 0; }
+
+  /* 自绘滚动条：原生 scrollbar-color 会让 Chromium 用方形轨道盖住圆角 */
   .agent-island.expanded { max-height: 100vh; overflow-y: auto; background-clip: padding-box; }
   .agent-island.expanded::-webkit-scrollbar { width: 8px; background: transparent; }
   .agent-island.expanded::-webkit-scrollbar-track { margin: 22px 0; background: transparent; }
-  .agent-island.expanded::-webkit-scrollbar-thumb {
-    border-radius: 999px;
-    background: var(--island-scrollbar-thumb);
+  .agent-island.expanded::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--scrollbar-thumb); }
+
+  /* 顶部胶囊：始终吸顶；展开时它变成整块面板的抬头 */
+  .compact-header { display: flex; align-items: center; min-width: 0; }
+  .agent-island.expanded > .compact-header { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--sticky); border-bottom: 1px solid var(--rule); }
+
+  .window-handle {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    min-height: 26px;
+    margin-right: 10px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: var(--ink-3);
+    background: transparent;
+    cursor: move;
+    touch-action: none;
   }
-  /* 隐藏态：只剩一条很淡的"存在感"热区，鼠标扫过 → 胶囊，点一下 → 展开 */
+  .window-handle:hover { color: var(--ink); background: var(--field); }
+  .window-handle:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  /* 隐藏态：只剩一条可以忽略的刻度，鼠标扫过变宽 */
   .agent-island.idle-hidden {
     display: grid;
     place-items: center;
     overflow: hidden;
     border-color: transparent;
     background: transparent;
-    box-shadow: none;
     cursor: default;
   }
   .idle-notch {
     display: grid;
     place-items: center;
-    width: 104px;
-    height: 9px;
-    border: 1px solid var(--island-border-subtle);
-    border-radius: 999px;
-    background: var(--surface-sticky);
-    box-shadow: var(--island-inset-highlight);
-    opacity: .72;
-    transition: opacity var(--duration-fast) ease-out, width var(--duration-fast) ease-out;
+    width: 64px;
+    height: 3px;
+    margin-block: 2px;
+    border-radius: 2px;
+    background: var(--rule-strong);
+    opacity: .8;
+    transition: width var(--duration-normal) var(--motion-out), background var(--duration-normal) ease-out, opacity var(--duration-normal) ease-out;
   }
-  .agent-island.idle-hidden:hover .idle-notch { width: 136px; opacity: 1; }
-  /* 有审批在等：热区脉冲 + 变琥珀色，即使用户把岛收起来也不会漏掉 */
+  .agent-island.idle-hidden:hover .idle-notch { width: 104px; background: var(--ink-3); opacity: 1; }
+  .idle-notch-dot { display: none; }
   .idle-notch[data-pending="true"] {
-    width: 136px;
+    width: 104px;
+    height: 3px;
+    background: var(--alarm);
     opacity: 1;
-    border-color: var(--island-status-waiting);
-    animation: notch-attention 1.8s ease-in-out infinite;
+    animation: notch-breathe 2.4s var(--motion-out) infinite;
   }
-  .idle-notch[data-pending="true"] .idle-notch-dot { background: var(--island-status-waiting); box-shadow: 0 0 8px var(--island-status-waiting); }
-  @keyframes notch-attention {
-    0%, 100% { transform: scale(1); filter: none; }
-    50% { transform: scale(1.06); filter: drop-shadow(0 0 6px var(--island-status-waiting)); }
+  @keyframes notch-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+  @media (prefers-reduced-motion: reduce) { .idle-notch[data-pending="true"] { animation: none; } }
+
+  /* 面板：内部左右留白交给直接子元素，卡片区自己贴边（发丝线才能贯穿整块板） */
+  .adaptive-details {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    border-top: 0;
+    padding: 0 0 6px;
+    animation: details-enter 200ms var(--motion-out);
   }
-  @media (prefers-reduced-motion: reduce) {
-    .idle-notch[data-pending="true"] { animation: none; }
+  .adaptive-details > * { padding-inline: 14px; }
+  .adaptive-details > .cards-region { padding-inline: 0; }
+  .adaptive-details > .agent-strip { padding-top: 10px; padding-bottom: 4px; }
+
+  @keyframes details-enter { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+  @media (prefers-reduced-motion: reduce) { .adaptive-details { animation: none; } }
+
+  /* ---- Agent 芯片：一行可横滚的标签，不是导航栏 ---- */
+  .agent-strip { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+  .agent-strip::-webkit-scrollbar { display: none; }
+  .agent-strip button {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 26px;
+    padding: 3px 8px;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: var(--ink-3);
+    background: transparent;
+    font: 600 var(--fs-2xs)/1 var(--font-ui);
+    cursor: pointer;
+    transition: color var(--duration-fast) ease-out, background var(--duration-fast) ease-out;
   }
-  .idle-notch-dot {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: var(--island-status-current);
-    box-shadow: 0 0 6px var(--island-status-current);
+  .agent-strip button:hover { color: var(--ink-2); background: var(--field); }
+  .agent-strip button.active { color: var(--ink); background: var(--field-hover); }
+  .agent-strip button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .agent-strip .agent-add { width: 26px; justify-content: center; padding: 0; color: var(--ink-3); font-size: 14px; }
+  .agent-strip .agent-add:hover { color: var(--ink); }
+  .mini-dot { width: 5px; height: 5px; border-radius: 1px; background: var(--state-idle); }
+  .mini-dot.status-working { background: var(--state-working); }
+  .mini-dot.status-done { background: var(--state-done); }
+  .mini-dot.status-error { background: var(--state-error); }
+  .mini-dot.status-waiting { background: var(--state-waiting); }
+  .mini-dot.status-stopped { background: var(--state-stopped); }
+  .mini-dot.status-working { animation: working-blink 2.4s var(--motion-out) infinite; }
+  @keyframes working-blink { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .mini-dot.status-working { animation: none; } }
+
+  /* ---- 检测 / 添加 Agent ---- */
+  .agent-add-panel {
+    display: grid;
+    gap: 8px;
+    margin: 6px 0 10px;
+    padding: 10px 0 0;
+    border-top: 1px solid var(--rule);
   }
-  .agent-island.expanded > .compact-header { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface-sticky); backdrop-filter: var(--effect-backdrop); }
-  :global(.agent-island.expanded > .action-bar) { position: sticky; bottom: 0; z-index: var(--z-sticky); background: var(--surface-sticky); backdrop-filter: var(--effect-backdrop); }
-  .adaptive-details { min-width: 0; border-top: 1px solid var(--island-border-subtle); padding: 12px; }
-  /* 内置终端：开终端时把卡片区收起，面板高度不炸 */
-  .terminal-toolbar { display: flex; align-items: center; gap: 8px; margin: 8px 0 6px; }
-  .terminal-toggle { min-height: 28px; padding: 4px 10px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 11px; cursor: pointer; }
-  .terminal-toggle.active { color: var(--island-accent-primary); border-color: var(--island-accent-primary); }
-  .terminal-toggle:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
-  .update-button { min-height: 28px; padding: 4px 10px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 11px; cursor: pointer; }
-  .update-button.available { color: var(--island-accent-primary); border-color: var(--island-accent-primary); background: color-mix(in srgb, var(--island-accent-primary) 12%, transparent); font-weight: 700; }
-  .update-button:disabled { opacity: .55; cursor: progress; }
-  .update-button:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
-  .update-message { margin: -2px 0 6px; color: var(--island-text-tertiary); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
-  .terminal-hint { color: var(--island-text-tertiary); font-size: 10px; }
+  .add-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .add-head strong { font-size: var(--fs-xs); font-weight: 650; }
+  .add-close { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; color: var(--ink-3); background: transparent; cursor: pointer; }
+  .add-close:hover { color: var(--ink); background: var(--field); }
+  .add-hint, .add-empty { margin: 0; color: var(--ink-3); font-size: var(--fs-2xs); line-height: 1.6; }
+  .candidate-list { display: grid; gap: 0; max-height: 150px; overflow-y: auto; }
+  .candidate { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--rule); }
+  .candidate:first-child { border-top: 0; }
+  .candidate-main { min-width: 0; display: grid; gap: 1px; }
+  .candidate-main strong { overflow: hidden; font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+  .candidate-path, .detection-path { overflow: hidden; color: var(--ink-3); font: 400 var(--fs-2xs)/1.5 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+  .candidate-tag { color: var(--state-done); font-size: var(--fs-2xs); }
+  .candidate button, .manual-add button, .detection-head button {
+    min-height: 24px;
+    padding: 2px 8px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    color: var(--ink-2);
+    background: transparent;
+    font-size: var(--fs-2xs);
+    cursor: pointer;
+  }
+  .candidate button:hover, .manual-add button:hover, .detection-head button:hover { color: var(--ink); border-color: var(--rule-strong); }
+  .manual-add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto; gap: 6px; align-items: center; padding-top: 8px; border-top: 1px solid var(--rule); }
+  .manual-add strong { grid-column: 1 / -1; color: var(--ink-3); font-size: var(--fs-2xs); font-weight: 600; }
+  .manual-add input {
+    min-width: 0;
+    height: 26px;
+    padding: 3px 7px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    color: var(--ink);
+    background: var(--field);
+    font-size: var(--fs-2xs);
+  }
+  .manual-add input::placeholder { color: var(--ink-3); }
+  .manual-add input:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .add-error { margin: 0; color: var(--state-error); font-size: var(--fs-2xs); }
+
+  /* ---- 系统区：诊断、版本、搜索、审批规则。它们是设置，不是状态。 ---- */
+  .system { display: flex; flex-direction: column; margin-top: 8px; border-top: 1px solid var(--rule); padding-top: 0; }
+  .system > * { padding-block: 0; }
+
+  .diagnostics-drawer { border-top: 1px solid var(--rule); }
+  .diagnostics-drawer > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    list-style: none;
+    cursor: pointer;
+    color: var(--ink-3);
+    font-size: var(--fs-2xs);
+  }
+  .diagnostics-drawer > summary::-webkit-details-marker { display: none; }
+  .diagnostics-drawer > summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .diagnostics-drawer > summary::after { content: ""; width: 7px; height: 7px; margin-left: auto; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(45deg) translateY(-2px); transition: transform var(--duration-fast) ease-out; }
+  .diagnostics-drawer[open] > summary { color: var(--ink-2); }
+  .diagnostics-drawer[open] > summary::after { transform: rotate(225deg) translateY(-1px); }
+  .drawer-badge { padding: 1px 6px; border-radius: 3px; background: var(--alarm); color: var(--alarm-ink); font: 600 var(--fs-2xs)/1.5 var(--font-readout); }
+  .drawer-muted { color: var(--ink-3); font-size: var(--fs-2xs); }
+
+  .agent-detection { display: grid; gap: 6px; margin: 0 0 10px; padding: 8px 0 0; border-top: 1px solid var(--rule); }
+  .detection-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink-3); font-size: var(--fs-2xs); }
+  .detection-head small { color: var(--ink-3); font-size: var(--fs-2xs); }
+  .detection-row { display: grid; grid-template-columns: 6px 76px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; color: var(--ink-3); font-size: var(--fs-2xs); }
+  .detection-row strong { overflow: hidden; color: var(--ink-2); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .detection-dot { width: 5px; height: 5px; border-radius: 1px; background: var(--state-stopped); }
+  .detection-dot.on { background: var(--state-done); }
+  .detection-tag { padding: 0 4px; border-radius: 3px; color: var(--ink-3); background: var(--field); font-size: 9px; white-space: nowrap; }
+  .detection-empty { margin: 0; color: var(--ink-3); font-size: var(--fs-2xs); }
+
+  /* 版本与更新：一行元信息，不抢戏 */
+  .about-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 0;
+    border-top: 1px solid var(--rule);
+    color: var(--ink-3);
+    font-size: var(--fs-2xs);
+  }
+  .about-row strong { color: var(--ink-2); font: 500 var(--fs-2xs)/1 var(--font-readout); font-variant-numeric: tabular-nums; }
+  .about-row button {
+    min-height: 22px;
+    padding: 1px 7px;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    color: var(--ink-3);
+    background: transparent;
+    font-size: var(--fs-2xs);
+    cursor: pointer;
+  }
+  .about-row button:hover:not(:disabled) { color: var(--ink); border-color: var(--rule-strong); }
+  .about-row button.primary { color: var(--ink); border-color: var(--ink-2); }
+  .about-row button:disabled { opacity: .5; cursor: progress; }
+  .about-message { color: var(--ink-3); font-size: var(--fs-2xs); }
+
+  /* ---- 查看会话 / 绑定 ---- */
+  .session-picker { display: grid; gap: 5px; margin: 4px 0 8px; color: var(--ink-3); font-size: var(--fs-2xs); }
+  .session-picker select {
+    width: 100%;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-control);
+    color: var(--ink);
+    background: var(--field);
+    font: 400 var(--fs-2xs)/1.4 var(--font-ui);
+  }
+  .session-picker select:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  :global(.link-button) { color: var(--ink-2); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--rule-strong); font-size: var(--fs-2xs); background: none; border: 0; padding: 0; cursor: pointer; }
+  :global(.link-button:hover) { color: var(--ink); text-decoration-color: var(--ink-2); }
+
+  /* ---- 内置终端 ---- */
+  .terminal-toolbar { display: flex; align-items: center; gap: 8px; margin: 4px 0 6px; }
+  .terminal-toggle, .update-button {
+    min-height: 26px;
+    padding: 3px 9px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-control);
+    color: var(--ink-2);
+    background: transparent;
+    font-size: var(--fs-2xs);
+    cursor: pointer;
+  }
+  .terminal-toggle:hover, .update-button:hover:not(:disabled) { color: var(--ink); border-color: var(--rule-strong); }
+  .terminal-toggle.active { color: var(--ground); background: var(--ink); border-color: transparent; font-weight: 650; }
+  .update-button.available { color: var(--state-working); border-color: var(--state-working); }
+  .update-button:disabled { opacity: .5; cursor: progress; }
+  .terminal-toggle:focus-visible, .update-button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .terminal-hint { color: var(--ink-3); font-size: var(--fs-2xs); }
+  .update-message { margin: -2px 0 6px; color: var(--ink-3); font-size: var(--fs-2xs); line-height: 1.5; overflow-wrap: anywhere; }
   .cards-region.terminal-open { display: none; }
-  /* 终端放大：把诊断、指令输入、会话选择、卡片都让位给终端 */
+  .cards-region > .empty,
+  .cards-region > .layout-persistence-status { margin-inline: 14px; }
   .adaptive-details.terminal-max .diagnostics-drawer,
   .adaptive-details.terminal-max .composer-slot,
   .adaptive-details.terminal-max .session-picker,
   .adaptive-details.terminal-max .cards-region,
   .adaptive-details.terminal-max .refresh-note.note { display: none; }
-  .agent-strip { display: flex; gap: 7px; padding: 0 0 11px; overflow-x: auto; scrollbar-width: none; }
-  .agent-strip button { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid transparent; border-radius: 999px; color: var(--island-text-secondary); background: transparent; cursor: pointer; }
-  .agent-strip button.active { color: var(--island-text-primary); border-color: var(--island-border-subtle); background: var(--island-surface-raised); }
-  .agent-strip button:focus-visible { outline: 2px solid var(--island-accent-primary); }
-  .agent-strip .agent-add { flex: 0 0 auto; width: 28px; height: 28px; margin-left: 2px; padding: 0; justify-content: center; border: 1px dashed var(--island-border-subtle); border-radius: 999px; color: var(--island-text-secondary); font-size: 16px; line-height: 1; }
-  .agent-strip .agent-add:hover { border-color: var(--island-accent-primary); color: var(--island-accent-primary); background: var(--island-control-surface); }
-  .agent-add-panel { display: grid; gap: 7px; margin: 0 0 10px; padding: 10px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-card); background: var(--island-surface-card); }
-  .add-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .add-head strong { font-size: 11px; color: var(--island-text-primary); }
-  .add-close { width: 24px; height: 24px; padding: 0; border: 1px solid var(--island-border-subtle); border-radius: 7px; color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 14px; cursor: pointer; }
-  .add-hint { margin: 0; color: var(--island-text-tertiary); font-size: 9.5px; line-height: 1.5; }
-  .add-empty { margin: 0; padding: 6px 0; color: var(--island-text-tertiary); font-size: 9.5px; }
-  .candidate-list { display: grid; gap: 4px; max-height: 150px; overflow-y: auto; }
-  .candidate { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 7px; border-radius: 7px; background: var(--island-log-surface); }
-  .candidate-main { min-width: 0; display: grid; gap: 1px; }
-  .candidate-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--island-text-primary); font-size: 10px; }
-  .candidate-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--island-text-tertiary); font-family: ui-monospace, "Cascadia Code", monospace; font-size: 8.5px; }
-  .candidate-tag { color: var(--island-status-done); font-size: 9px; }
-  .candidate button, .manual-add button { min-height: 25px; padding: 2px 8px; border: 1px solid var(--island-border-subtle); border-radius: 6px; color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 9.5px; cursor: pointer; }
-  .candidate button:hover, .manual-add button:hover { color: var(--island-text-primary); border-color: var(--island-accent-primary); }
-  .manual-add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) auto; gap: 5px; align-items: center; padding-top: 4px; border-top: 1px solid var(--island-border-subtle); }
-  .manual-add strong { grid-column: 1 / -1; color: var(--island-text-secondary); font-size: 9.5px; font-weight: 600; }
-  .manual-add input { min-width: 0; height: 27px; padding: 3px 7px; border: 1px solid var(--island-border-subtle); border-radius: 6px; color: var(--island-text-primary); background: var(--island-control-surface); font-size: 9.5px; }
-  .manual-add input:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 1px; }
-  .add-error { margin: 0; color: var(--island-status-error); font-size: 9.5px; }
-  .mini-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--island-status-idle); }
-  .mini-dot.status-working { background: var(--island-status-working); }
-  .mini-dot.status-error { background: var(--island-status-error); }
-  .mini-dot.status-done { background: var(--island-status-done); }
-  .mini-dot.status-waiting { background: var(--island-status-waiting); }
-  .mini-dot.status-stopped { background: var(--island-status-stopped); }
-  .mini-dot.status-working { animation: working-pulse 1.8s ease-in-out infinite; }
-  .adaptive-details { animation: details-enter 180ms ease-out; }
-  .agent-strip button { transition: background 140ms, border-color 140ms, transform 140ms; }
-  .agent-strip button:hover { background: var(--island-control-hover); }
-  .agent-strip button:active { transform: scale(.96); }
-  @keyframes working-pulse { 50% { opacity: .45; transform: scale(.8); } }
-  @keyframes details-enter { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
-  @media (prefers-reduced-motion: reduce) { .mini-dot.status-working, .adaptive-details { animation: none; } .agent-strip button { transition: none; } }
+
+  /* ---- 提示与空态 ---- */
+  /* 自定义 Agent：只有进程状态，用一条中性说明代替满屏"未确认" */
+  .adapter-note {
+    margin: 0 0 10px;
+    padding: 8px 10px;
+    border-radius: var(--radius-control);
+    color: var(--ink-2);
+    background: var(--field);
+    font-size: var(--fs-2xs);
+    line-height: 1.6;
+  }
+  /* 冷启动：有适配器但还没有会话，给一条引导 + 一个就地启动的入口 */
+  .cold-start {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 10px;
+    padding: 8px 10px;
+    border-radius: var(--radius-control);
+    background: var(--field);
+  }
+  .cold-start p {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    color: var(--ink-2);
+    font-size: var(--fs-2xs);
+    line-height: 1.6;
+  }
+  .cold-start-action {
+    flex: 0 0 auto;
+    min-height: 24px;
+    padding: 2px 9px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 4px;
+    color: var(--ink);
+    background: transparent;
+    font-size: var(--fs-2xs);
+    cursor: pointer;
+  }
+  .cold-start-action:hover { background: var(--field-hover); }
+  .cold-start-action:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   .refresh-note,
-  .layout-persistence-status { margin: 0 0 10px; padding: 7px 10px; border-radius: 10px; color: var(--island-refresh-error-text); background: var(--island-refresh-error-surface); font-size: 12px; overflow-wrap: anywhere; }
+  .layout-persistence-status {
+    margin: 0 0 10px;
+    padding: 7px 10px;
+    border-radius: var(--radius-control);
+    color: var(--alarm-ink);
+    background: var(--alarm);
+    font-size: var(--fs-2xs);
+    overflow-wrap: anywhere;
+  }
+  .refresh-note :global(.link-button) { color: var(--alarm-ink); text-decoration-color: currentColor; }
   .layout-persistence-status { margin: 10px 0 0; }
-  .empty { display: grid; gap: 5px; padding: 8px 4px; text-align: left; color: var(--island-text-secondary); font-size: 12px; }
-  .empty strong { color: var(--island-text-primary); }
-  .stats-card { min-width: 0; height: 100%; box-sizing: border-box; display: grid; align-content: center; gap: 10px; }
-  .stats-eyebrow { color: var(--island-text-secondary); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
-  .stats-values { min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
-  .stats-values span { min-width: 0; display: grid; gap: 2px; color: var(--island-text-secondary); font-size: 10px; }
-  .stats-values strong { overflow: hidden; color: var(--island-accent-primary); font-size: 18px; text-overflow: ellipsis; }
-  :global(.adaptive-details .layout-card .card) { width: 100%; height: 100%; box-sizing: border-box; border: 0; padding: 0; background: transparent; }
+  .empty { display: grid; gap: 4px; padding: 10px 0; color: var(--ink-3); font-size: var(--fs-2xs); line-height: 1.6; }
+  .empty strong { color: var(--ink-2); font-size: var(--fs-xs); font-weight: 650; }
+  /* 冷启动 / 无适配器：空态只是"还没有数据"，压到和正文同一档 */
+  .empty.quiet { padding-block: 6px; }
+  .empty.quiet strong { color: var(--ink-3); font-size: var(--fs-2xs); font-weight: 600; }
+
+  /* ---- 统计卡：三个数字，横排，等宽 ---- */
+  .stats-card { min-width: 0; height: 100%; box-sizing: border-box; display: grid; align-content: center; gap: 6px; }
+  .stats-card .line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  .stats-card .key { flex: 0 0 auto; width: 30px; color: var(--ink-3); font-size: var(--fs-2xs); letter-spacing: var(--tracking-label); }
+  .stats-values { min-width: 0; display: flex; flex-wrap: wrap; gap: 16px; }
+  .stats-values span { min-width: 0; display: flex; align-items: baseline; gap: 4px; color: var(--ink-3); font-size: var(--fs-2xs); }
+  .stats-values strong { color: var(--ink); font: 600 18px/1 var(--font-readout); font-variant-numeric: tabular-nums; }
+
+  /* ---- 事件层：审批与通知是头顶滑下来的一条托盘，托盘内才放卡片 ---- */
+  .event-layer {
+    position: fixed;
+    top: 55px;
+    left: 0;
+    right: 0;
+    z-index: var(--z-event);
+    max-height: calc(100dvh - 66px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    pointer-events: auto;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--rule);
+    border-top: 0;
+    border-radius: 0 0 12px 12px;
+    background: var(--ground);
+    filter: drop-shadow(0 14px 26px var(--shadow-color));
+  }
+  /* 没有待处理事件时不留空托盘：它会盖住下面板面 */
+  .event-layer.empty { display: none; }
+  .listener-error {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    border-radius: var(--radius-control);
+    color: var(--alarm-ink);
+    background: var(--alarm);
+    font-size: var(--fs-2xs);
+  }
+  :global(.privacy .sensitive) { filter: blur(5px); user-select: none; pointer-events: none; }
+
+  .island-loading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    background: var(--ground);
+    color: var(--ink-2);
+    font-size: var(--fs-xs);
+  }
+  .island-loading::before { content: ""; width: 5px; height: 5px; border-radius: 1px; background: var(--state-working); animation: working-blink 1.8s var(--motion-out) infinite; }
+
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
   :global(.adaptive-details .layout-card.custom-height .log-card) { display: flex; flex-direction: column; }
   :global(.adaptive-details .layout-card.custom-height .log) { height: auto; flex: 1; min-height: 0; }
-  :global(.adaptive-details .layout-card .session-card),
-  :global(.adaptive-details .layout-card .log-card) { grid-column: auto; }
   :global(.adaptive-details .layout-card .log) { height: var(--layout-log-height, 164px); }
-  .event-layer { position: fixed; top: 66px; left: 50%; z-index: var(--z-event); width: min(696px, calc(100vw - 48px)); max-height: calc(100dvh - 78px); overflow-y: auto; overscroll-behavior: contain; transform: translateX(-50%); pointer-events: auto; scrollbar-color: var(--island-scrollbar-thumb) transparent; }
-  .listener-error { margin: 7px 0 0; padding: 10px 12px; border: 1px solid var(--island-border-subtle); border-radius: 12px; color: var(--island-refresh-error-text); background: var(--island-refresh-error-surface); font-size: 11px; }
-  :global(.privacy .sensitive) { filter: blur(5px); user-select: none; pointer-events: none; }
-  .island-loading { padding: 12px 18px; border: 1px solid var(--island-border-subtle); border-radius: 999px; background: var(--island-surface); }
-  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-  @media (max-width: 420px) { .agent-island, .island-loading { width: calc(100vw - 16px); } .agent-island { border-radius: 20px; } .event-layer { width: calc(100vw - 32px); } .adaptive-details { padding: 10px; } .stats-values { grid-template-columns: minmax(0, 1fr); } }
+  :global(.adaptive-details .layout-card .card.log-card) { height: 100%; }
+
+  @media (max-width: 420px) {
+    .agent-island { border-radius: 0 0 14px 14px; }
+    .adaptive-details > * { padding-inline: 12px; }
+    .event-layer { top: 55px; padding-inline: 10px; }
+    .stats-values { gap: 12px; }
+  }
 </style>
 
 

@@ -63,6 +63,16 @@ pub struct AgentView {
     /// 会话身份的可信来源：launched（岛内终端后代）/ hooked（Agent 自报）/ inferred（推断）
     #[serde(default)]
     pub binding: crate::launcher::SessionBinding,
+    /// 是否有日志适配器（内置 Claude/Codex/OpenCode/Hermes 为 true）。
+    /// 自定义 Agent 只有进程状态：会话、日志、用量都不可用。
+    #[serde(default)]
+    pub has_log_adapter: bool,
+    /// 来源：builtin / custom / detected。
+    #[serde(default)]
+    pub source: String,
+    /// 终端里可直接启动的命令或完整路径（由 def 带出，随快照下发）。
+    #[serde(default)]
+    pub program: String,
 }
 
 /// Structured turn identity for downstream transition consumers; never inferred from text.
@@ -134,10 +144,24 @@ pub fn build_snapshot(
         .map(|process| build_agent_view(now_ms, process, session_candidates, None))
         .collect();
 
-    AgentViewSnapshot {
+    let mut snapshot = AgentViewSnapshot {
         schema_version: 1,
         generated_at_ms: now_ms,
         agents,
+    };
+    attach_agent_meta(&mut snapshot);
+    snapshot
+}
+
+/// 给每个 Agent 标注来源与启动命令（builtin / custom / detected），前端据此决定
+/// "自动发现的"要不要默认进岛、终端里该启动什么。只影响展示，不持久化。
+fn attach_agent_meta(snapshot: &mut AgentViewSnapshot) {
+    let meta = crate::agent_meta_map();
+    for agent in &mut snapshot.agents {
+        if let Some((source, program)) = meta.get(&agent.id) {
+            agent.source = source.clone();
+            agent.program = program.clone();
+        }
     }
 }
 
@@ -147,7 +171,7 @@ pub fn build_snapshot_with_acquisition(
     session_candidates: &[SessionCandidate],
     acquisition_issues: &[DiagnosticView],
 ) -> AgentViewSnapshot {
-    AgentViewSnapshot {
+    let mut snapshot = AgentViewSnapshot {
         schema_version: 1,
         generated_at_ms: now_ms,
         agents: process_facts
@@ -163,7 +187,9 @@ pub fn build_snapshot_with_acquisition(
                 )
             })
             .collect(),
-    }
+    };
+    attach_agent_meta(&mut snapshot);
+    snapshot
 }
 
 fn build_agent_view(
@@ -263,6 +289,10 @@ fn build_agent_view(
         freshness,
         usage: None,
         binding: crate::launcher::SessionBinding::Inferred,
+        has_log_adapter: crate::adapters::has_log_adapter(&process.identity.agent_id),
+        // 由 attach_agent_meta 填充；测试里没有来源信息时按 builtin 处理
+        source: String::new(),
+        program: String::new(),
     }
 }
 

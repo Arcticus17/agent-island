@@ -1,0 +1,57 @@
+﻿/*
+ * 深色：夜里的桌面。房间里只有显示器在亮，岛浮在编辑器上方，
+ * 底色比编辑器略深一档，靠 1px 发丝和字重分层，不靠模糊与渐变。
+ *
+ * 色相只属于状态：工作中=青，已完成=绿，等待确认=琥珀，报错=朱红。
+ * 交互色是"墨"，没有品牌色相。
+ */
+.agent-island[data-theme-style="dark"],
+.island-loading[data-theme-style="dark"],
+.event-layer[data-theme-style="dark"],
+.palette-backdrop[data-theme-style="dark"] {
+  color-scheme: dark;
+
+  --ground: #101318;
+  --ground-raised: #171b21;
+  --ground-sunken: #0b0d11;
+  --sticky: #101318;
+
+  --ink: #eef1f5;
+  --ink-log: #c8cfd9;
+  --ink-2: #a5aebc;
+  --ink-3: #7c8593;
+
+  --rule: rgba(255, 255, 255, .085);
+  --rule-strong: rgba(255, 255, 255, .18);
+
+  --field: rgba(255, 255, 255, .055);
+  --field-hover: rgba(255, 255, 255, .1);
+
+  --state-idle: #8792a2;
+  --state-stopped: #6b7480;
+  --state-working: #38c6a5;
+  --state-done: #5ec27f;
+  --state-error: #ff6a5e;
+  --state-waiting: #f2b43c;
+
+  /* 「需要你」时才整片亮起的告警色：亮底 + 深墨字，对比度 > 7:1 */
+  --alarm: #f2b43c;
+  --alarm-ink: #1a1206;
+  --danger: #ff6a5e;
+  --danger-ink: #1c0705;
+
+  /* 状态带在工作/完成时的极淡染色，仍然只作为"状态"的第二通道 */
+  --tint-working: color-mix(in srgb, var(--state-working) 9%, transparent);
+  --tint-done: color-mix(in srgb, var(--state-done) 9%, transparent);
+  --tint-idle: color-mix(in srgb, var(--state-idle) 7%, transparent);
+
+  --scrollbar-thumb: rgba(255, 255, 255, .16);
+  --scrim: rgba(0, 0, 0, .62);
+  --shadow-color: rgba(0, 0, 0, .34);
+  --menu-surface: #171b21;
+  --menu-hover: #232a33;
+
+  --elevation-island: none;
+  --effect-backdrop: none;
+  --surface-island: var(--ground);
+}

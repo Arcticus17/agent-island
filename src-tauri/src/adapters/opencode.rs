@@ -42,6 +42,9 @@ impl AgentAdapter for OpenCodeAdapter {
                 at_ms,
                 role: MessageRole::Assistant,
                 text: truncate(message, 240),
+                tool: None,
+                detail: None,
+                success: None,
             });
             // Text can explain a diagnostic, but only structured evidence may finish a turn.
             if let Some(code) = text_signal_code(message) {

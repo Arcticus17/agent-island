@@ -22,6 +22,12 @@ export interface ConversationMessage {
   at_ms: number;
   role: MessageRole;
   text: string;
+  /** 工具名（Bash / Edit / Read …）；普通消息没有。 */
+  tool?: string | null;
+  /** 工具的一行入参（命令、文件路径、搜索词）。 */
+  detail?: string | null;
+  /** 工具结果是否成功；结果还没到或不是工具消息时为空。 */
+  success?: boolean | null;
 }
 
 export type SessionLifecycle = "Active" | "Historical";
@@ -92,6 +98,12 @@ export interface AgentView {
   usage: UsageInfo | null;
   /** 会话身份的可信来源：launched（岛内终端后代）/ hooked（Agent 自报）/ inferred（推断） */
   binding?: "launched" | "hooked" | "inferred" | "manual";
+  /** 是否有日志适配器；自定义 Agent（如 Pi）只有进程状态 */
+  has_log_adapter?: boolean;
+  /** 来源：builtin（默认四个）/ custom（用户添加）/ detected（本机自动发现） */
+  source?: "builtin" | "detected" | "custom";
+  /** 终端里可直接启动的命令或完整路径 */
+  program?: string;
 }
 
 /** Rust's serialized `AgentViewSnapshot`. The bridge narrows the version to 1. */
@@ -136,6 +148,11 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
+/** 可选字段：后端会跳过空值，读回来可能是 undefined。 */
+function isOptionalString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === "string";
+}
+
 function isEnumValue<T extends string>(
   value: unknown,
   values: readonly T[],
@@ -167,7 +184,10 @@ function isConversationMessage(value: unknown): value is ConversationMessage {
     typeof value.event_id === "string" &&
     isNonnegativeInteger(value.at_ms) &&
     isEnumValue(value.role, MESSAGE_ROLES) &&
-    typeof value.text === "string"
+    typeof value.text === "string" &&
+    isOptionalString(value.tool) &&
+    isOptionalString(value.detail) &&
+    (value.success === undefined || value.success === null || typeof value.success === "boolean")
   );
 }
 
@@ -248,7 +268,13 @@ function isAgentView(value: unknown): value is AgentView {
     value.history_sessions.every(isSessionView) &&
     (value.diagnostic === null || isDiagnosticView(value.diagnostic)) &&
     isFreshness(value.freshness) &&
-    (value.usage === null || isUsageInfo(value.usage))
+    (value.usage === null || isUsageInfo(value.usage)) &&
+    (value.has_log_adapter === undefined || typeof value.has_log_adapter === "boolean") &&
+    (value.source === undefined ||
+      value.source === "builtin" ||
+      value.source === "detected" ||
+      value.source === "custom") &&
+    (value.program === undefined || typeof value.program === "string")
   );
 }
 

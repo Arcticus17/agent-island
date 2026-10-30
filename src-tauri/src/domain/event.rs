@@ -50,4 +50,13 @@ pub struct ConversationMessage {
     pub at_ms: u64,
     pub role: MessageRole,
     pub text: String,
+    /// 工具名（Bash / Edit / Read …）；普通消息为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// 工具的关键入参（命令、文件路径、搜索词），回执里当一行摘要用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// 工具结果是否成功；结果还没到或不是工具消息时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success: Option<bool>,
 }

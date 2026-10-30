@@ -1,11 +1,11 @@
-﻿<script lang="ts">
+<script lang="ts">
   import type { CommandFailure, CommandUiState } from "../events/types";
-  import { THEME_LABELS, THEME_STYLES, type ThemeStyle } from "../../themes/theme-style";
+  import { APPEARANCE_LABELS, APPEARANCES, type Appearance } from "../../themes/theme-style";
 
   let {
     privacy,
     focusMode,
-    themeStyle,
+    appearance,
     iconStyle,
     agentMode,
     hookEnabled,
@@ -17,7 +17,7 @@
     onTogglePin,
     onPrivacy,
     onFocusMode,
-    onThemeStyle,
+    onAppearance,
     onIconStyle,
     onAgentMode,
     onHookToggle,
@@ -28,7 +28,7 @@
   }: {
     privacy: boolean;
     focusMode: "off" | "errors" | "quiet";
-    themeStyle: ThemeStyle;
+    appearance: Appearance;
     iconStyle: "dot" | "pixel";
     agentMode: "all" | "running";
     hookEnabled: boolean | null;
@@ -42,7 +42,7 @@
     onTogglePin?: () => void;
     onPrivacy: (value: boolean) => void;
     onFocusMode: (value: "off" | "errors" | "quiet") => void;
-    onThemeStyle: (value: ThemeStyle) => void;
+    onAppearance: (value: Appearance) => void;
     onIconStyle: (value: "dot" | "pixel") => void;
     onAgentMode: (value: "all" | "running") => void;
     onHookToggle: () => void;
@@ -76,7 +76,7 @@
     {#if hookError}<p class="setting-error sensitive" role="alert"><strong>{hookError.code}</strong> · {hookError.message}</p>{/if}
     <label><span>隐私遮罩</span><input type="checkbox" checked={privacy} onchange={(event) => onPrivacy(event.currentTarget.checked)} /></label>
     <label><span>专注模式</span><select value={focusMode} onchange={(event) => onFocusMode(event.currentTarget.value as "off" | "errors" | "quiet")}><option value="off">全部状态</option><option value="errors">聚焦错误</option><option value="quiet">静音通知</option></select></label>
-    <label><span>外观</span><select value={themeStyle} onchange={(event) => onThemeStyle(event.currentTarget.value as ThemeStyle)}>{#each THEME_STYLES as style (style)}<option value={style}>{THEME_LABELS[style]}</option>{/each}</select></label>
+    <label><span>外观</span><select value={appearance} onchange={(event) => onAppearance(event.currentTarget.value as Appearance)}>{#each APPEARANCES as style (style)}<option value={style}>{APPEARANCE_LABELS[style]}</option>{/each}</select></label>
     <label><span>图标</span><select value={iconStyle} onchange={(event) => onIconStyle(event.currentTarget.value as "dot" | "pixel")}><option value="pixel">像素吉祥物</option><option value="dot">圆点</option></select></label>
     {#if onTogglePin}
       <div class="setting-row">
@@ -110,38 +110,84 @@
     <div class="setting-feedback" role="status" aria-live="polite" data-testid="settings-feedback">
       <p>{privacy ? "隐私遮罩已开启：会话文本和路径已模糊。" : "隐私遮罩已关闭：会话内容正常显示。"}</p>
       <p>{focusMode === "errors" ? "聚焦错误：优先选择异常 Agent，并隐藏普通通知。" : focusMode === "quiet" ? "静音通知：隐藏普通通知，审批请求仍会显示。" : "全部状态：正常显示任务通知与审批。"}</p>
-      <p>当前外观：{themeStyle === "graphite" ? "石墨玻璃" : themeStyle === "pure-black" ? "纯黑" : "终端"}；图标：{iconStyle === "pixel" ? "像素吉祥物" : "圆点"}；显示：{agentMode === "running" ? "仅运行中" : "全部检测"}。</p>
+      <p>当前外观：{APPEARANCE_LABELS[appearance]}；图标：{iconStyle === "pixel" ? "像素吉祥物" : "圆点"}；显示：{agentMode === "running" ? "仅运行中" : "全部检测"}。</p>
     </div>
   </div>
 </details>
 
 <style>
-  .settings { position: relative; }
+  .settings { position: relative; flex: 0 0 auto; }
   .settings[open] { flex: 1 0 100%; min-width: 0; }
   .settings[open] summary { width: fit-content; margin-left: auto; }
-  /* 下拉弹层的深色样式统一在 tokens.css 的 .agent-island select option 里 */
-  summary { min-height: 30px; display: grid; place-items: center; padding: 5px 10px; border: 1px solid var(--island-border-subtle); border-radius: 9px; color: var(--island-text-secondary); background: var(--island-control-surface); cursor: pointer; list-style: none; }
+  summary {
+    min-height: 28px;
+    display: grid;
+    place-items: center;
+    padding: 4px 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    color: var(--ink-2);
+    background: transparent;
+    font: 600 var(--fs-xs)/1 var(--font-ui);
+    cursor: pointer;
+    list-style: none;
+  }
   summary::-webkit-details-marker { display: none; }
-  summary:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
-  .popover { position: static; width: auto; margin-top: 8px; display: grid; gap: 10px; padding: 12px; border: 1px solid var(--island-event-border); border-radius: 14px; background: var(--island-event-surface); }
-  label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--island-text-secondary); font-size: 11px; }
-  .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--island-text-secondary); font-size: 11px; }
+  summary:hover { color: var(--ink); background: var(--field); }
+  summary:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  /* 设置是一张从底部展开的薄纸，不是再叠一个卡片盒子 */
+  .popover {
+    position: static;
+    width: auto;
+    margin-top: 8px;
+    display: grid;
+    gap: 8px;
+    padding: 10px 0 0;
+    border-top: 1px solid var(--rule-strong);
+    background: transparent;
+    max-height: min(300px, 40dvh);
+    overflow-y: auto;
+  }
+
+  label, .setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--ink-2);
+    font-size: var(--fs-xs);
+  }
   .width-controls { display: flex; align-items: center; gap: 6px; }
-  .width-controls button { min-width: 32px; padding: 4px 8px; }
-  select, button { min-width: 100px; min-height: 32px; padding: 5px 7px; border: 1px solid var(--island-border-subtle); border-radius: 8px; color: var(--island-text-primary); background: var(--island-control-surface); }
+
+  select, button {
+    min-width: 106px;
+    min-height: 28px;
+    padding: 3px 7px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-control);
+    color: var(--ink);
+    background: var(--field);
+    font: inherit;
+    font-size: var(--fs-xs);
+  }
   button { cursor: pointer; }
   button:disabled { opacity: .55; cursor: wait; }
-  .setting-feedback { display: grid; gap: 5px; padding-top: 8px; border-top: 1px solid var(--island-border-subtle); color: var(--island-text-secondary); font-size: 10px; line-height: 1.5; }
+  select:hover, button:hover:not(:disabled) { border-color: var(--rule-strong); background: var(--field-hover); }
+  input[type="checkbox"] { accent-color: var(--ink); width: 15px; height: 15px; }
+  .width-controls button { min-width: 34px; }
+
+  .setting-feedback {
+    display: grid;
+    gap: 4px;
+    padding-top: 8px;
+    border-top: 1px solid var(--rule);
+    color: var(--ink-3);
+    font-size: var(--fs-2xs);
+    line-height: 1.6;
+  }
   .setting-feedback p { margin: 0; }
-  summary, button { transition: background 140ms, transform 140ms; }
-  summary:hover, button:hover:not(:disabled) { background: var(--island-control-hover); }
-  button:active:not(:disabled) { transform: scale(.97); }
-  .popover { max-height: min(280px, 35dvh); overflow-y: auto; }
+  .setting-error { margin: 0; color: var(--state-error); font-size: var(--fs-2xs); overflow-wrap: anywhere; }
+
   @media (prefers-reduced-motion: reduce) { summary, button { transition: none; } }
-  .setting-error { margin: -2px 0 0; color: var(--island-refresh-error-text); font-size: 10px; overflow-wrap: anywhere; }
 </style>
-
-
-
-
-

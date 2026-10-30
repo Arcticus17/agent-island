@@ -191,13 +191,29 @@ export function createTauriBridge(): AgentIslandBridge {
     },
     async initializeWindowPlacement(onError) {
       const window = getCurrentWindow();
+      const [monitors, size, scale] = await Promise.all([availableMonitors(), window.innerSize(), window.scaleFactor()]);
+      const height = size.height / scale;
       const saved = parseWindowPlacement(localStorage.getItem(WINDOW_PLACEMENT_KEY));
-      if (saved) {
-        const [monitors, size, scale] = await Promise.all([availableMonitors(), window.innerSize(), window.scaleFactor()]);
-        const height = size.height / scale;
-        const value = clampWindowPlacement(saved, monitors, height);
+      const primary = monitors[0];
+      // 贴边刘海：默认停在主屏工作区顶部居中。没有主屏信息时交给系统居中。
+      const compactWidth = 168;
+      const initial = saved ?? (primary
+        ? {
+            x: Math.round(primary.workArea.position.x + (primary.workArea.size.width - compactWidth * primary.scaleFactor) / 2),
+            y: primary.workArea.position.y,
+            width: compactWidth,
+          }
+        : null);
+      if (initial) {
+        const value = clampWindowPlacement(initial, monitors, height);
+        // 刘海永远贴着工作区顶边；水平位置沿用用户拖到的那块屏。
+        const monitor = monitors.find((m) => value.x >= m.workArea.position.x
+          && value.x < m.workArea.position.x + m.workArea.size.width
+          && value.y >= m.workArea.position.y
+          && value.y < m.workArea.position.y + m.workArea.size.height) ?? primary;
+        const pinnedY = monitor ? monitor.workArea.position.y : value.y;
         await window.setSize(new LogicalSize(value.width, height));
-        await window.setPosition(new PhysicalPosition(value.x, value.y));
+        await window.setPosition(new PhysicalPosition(value.x, pinnedY));
       }
       let disposed = false;
       let timer: ReturnType<typeof setTimeout> | undefined;

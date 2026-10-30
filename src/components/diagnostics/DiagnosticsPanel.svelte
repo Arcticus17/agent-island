@@ -81,7 +81,6 @@
 <section class="diagnostics" aria-labelledby="diagnostics-title">
   <header>
     <div>
-      <span class="eyebrow">SYSTEM HEALTH</span>
       <h2 id="diagnostics-title">诊断信息</h2>
     </div>
     <span class:clear={status === "ready" && issues.length === 0 && sourcesHealthy} class:unavailable={status === "failed"} class="issue-count">
@@ -193,262 +192,88 @@
 </section>
 
 <style>
-  .diagnostics {
-    display: grid;
-    gap: 11px;
-    margin: 0 12px 12px;
-    padding: 13px;
-    border: 1px solid var(--island-border-subtle);
-    border-radius: 16px;
-    color: var(--island-text-primary);
-    background: var(--island-surface-raised);
-  }
-
-  header,
-  .issue-heading,
-  .export-row {
-    display: flex;
-    align-items: center;
-  }
-
-  header {
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .eyebrow {
-    display: block;
-    margin-bottom: 2px;
-    color: var(--island-text-secondary);
-    font-size: 9px;
-    letter-spacing: .13em;
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 14px;
-    line-height: 1.2;
-  }
-
+  /* 诊断：系统区里的一段读数，不套卡片；问题与数据源都是发丝分隔的行 */
+  .diagnostics { display: grid; gap: 8px; padding: 0 0 10px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  header > div { min-width: 0; display: grid; gap: 2px; }
+  h2 { margin: 0; color: var(--ink-2); font-size: var(--fs-xs); font-weight: 650; }
   .issue-count {
     flex: 0 0 auto;
-    padding: 4px 8px;
-    border-radius: 999px;
-    color: var(--island-status-waiting);
-    background: color-mix(in srgb, var(--island-status-waiting) 12%, transparent);
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--ink-3);
+    background: var(--field);
+    font: 600 var(--fs-2xs)/1.5 var(--font-readout);
+    white-space: nowrap;
   }
+  .issue-count.clear { color: var(--state-done); background: color-mix(in srgb, var(--state-done) 12%, transparent); }
+  .issue-count.unavailable { color: var(--state-error); background: color-mix(in srgb, var(--state-error) 12%, transparent); }
 
-  .issue-count.clear {
-    color: var(--island-status-done);
-    background: color-mix(in srgb, var(--island-status-done) 12%, transparent);
-  }
-
-  .issue-count.unavailable {
-    color: var(--island-refresh-error-text);
-    background: var(--island-refresh-error-surface);
-  }
-
-  .issue-list {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    max-height: 190px;
-    overflow-y: auto;
-    padding-right: 2px;
-    overscroll-behavior: contain;
-    scrollbar-color: var(--island-scrollbar-thumb) var(--island-scrollbar-track);
-  }
-
-  .issue {
-    min-width: 0;
-    padding: 10px;
-    border: 1px solid var(--island-border-subtle);
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--island-control-surface) 82%, transparent);
-  }
-
-  .issue-heading {
-    min-width: 0;
-    gap: 7px;
-  }
-
+  .issue-list, .source-list { display: grid; gap: 0; }
+  .issue, .source { display: grid; gap: 4px; padding: 7px 0; border-top: 1px solid var(--rule); }
+  .issue-heading, .source-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; }
   .adapter {
-    flex: 0 0 auto;
-    padding: 2px 6px;
-    border-radius: 6px;
-    color: var(--island-accent-primary);
-    background: color-mix(in srgb, var(--island-accent-primary) 12%, transparent);
-    font-size: 10px;
-    font-weight: 700;
+    padding: 0 4px;
+    border-radius: 3px;
+    color: var(--ink-3);
+    background: var(--field);
+    font: 600 9px/1.6 var(--font-readout);
+    letter-spacing: .04em;
+    text-transform: uppercase;
   }
+  .issue-heading strong { color: var(--ink-2); font: 500 var(--fs-2xs)/1.5 var(--font-mono); overflow-wrap: anywhere; }
+  .freshness { color: var(--ink-3); font-size: var(--fs-2xs); }
+  .freshness.stale { color: var(--state-waiting); }
 
-  strong {
-    min-width: 0;
-    overflow: hidden;
-    font: 600 11px/1.3 ui-monospace, "Cascadia Mono", Consolas, monospace;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+  dl { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  dl div { display: flex; align-items: baseline; gap: 4px; }
+  dt { color: var(--ink-3); font-size: var(--fs-2xs); }
+  dd { margin: 0; color: var(--ink-2); font: 500 var(--fs-2xs)/1.5 var(--font-readout); font-variant-numeric: tabular-nums; }
 
-  .freshness {
-    flex: 0 0 auto;
-    margin-left: auto;
-    color: var(--island-status-done);
-    font-size: 9px;
-  }
+  .empty { margin: 0; padding: 4px 0; color: var(--ink-3); font-size: var(--fs-2xs); }
+  .unavailable-copy { color: var(--state-error); }
 
-  .freshness.stale { color: var(--island-status-waiting); }
+  .source-heading strong { color: var(--ink-2); font-size: var(--fs-2xs); font-weight: 650; }
+  .source-records, .source-status { color: var(--ink-3); font-size: var(--fs-2xs); }
+  .source-status { margin-left: auto; }
+  .source-status.warn { color: var(--state-waiting); }
+  .source-hint { margin: 0; color: var(--ink-3); font-size: var(--fs-2xs); line-height: 1.6; }
 
-  dl {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px 12px;
-    margin: 8px 0 0;
-  }
-
-  dl > div {
-    display: inline-flex;
-    min-width: 0;
-    gap: 4px;
-    font-size: 10px;
-  }
-
-  dt { color: var(--island-text-secondary); }
-  dd {
-    margin: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .empty {
-    margin: 0;
-    color: var(--island-text-secondary);
-    font-size: 11px;
-  }
-
-  .unavailable-copy { color: var(--island-refresh-error-text); }
-
-  .source-list {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .source {
-    min-width: 0;
-    padding: 9px 10px;
-    border: 1px solid var(--island-border-subtle);
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--island-control-surface) 82%, transparent);
-  }
-
-  .source-heading {
-    display: flex;
-    align-items: center;
-    min-width: 0;
-    gap: 7px;
-  }
-
-  .source-records {
-    flex: 0 0 auto;
-    color: var(--island-text-secondary);
-    font-size: 9px;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .source-status {
-    flex: 0 0 auto;
-    margin-left: auto;
-    color: var(--island-status-done);
-    font-size: 9px;
-  }
-
-  .source-status.warn { color: var(--island-status-waiting); }
-
-  .source-hint {
-    margin: 6px 0 0;
-    color: var(--island-status-waiting);
-    font-size: 9px;
-    line-height: 1.45;
-  }
-
-  .export {
-    display: grid;
-    gap: 6px;
-    padding-top: 10px;
-    border-top: 1px solid var(--island-border-subtle);
-  }
-
-  label {
-    color: var(--island-text-secondary);
-    font-size: 10px;
-  }
-
-  .export-row { gap: 7px; }
-
-  input,
-  button {
-    min-height: 34px;
-    border: 1px solid var(--island-border-subtle);
-    border-radius: 9px;
-    color: var(--island-text-primary);
-    background: var(--island-control-surface);
-    font: inherit;
-    font-size: 11px;
-  }
-
-  input {
-    min-width: 0;
+  .export { display: grid; gap: 5px; padding-top: 8px; border-top: 1px solid var(--rule); }
+  .export label { color: var(--ink-3); font-size: var(--fs-2xs); }
+  .export-row { display: flex; align-items: center; gap: 6px; }
+  .export-row input {
     flex: 1 1 auto;
-    padding: 6px 9px;
+    min-width: 0;
+    min-height: 26px;
+    padding: 3px 7px;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    color: var(--ink);
+    background: var(--field);
+    font: 400 var(--fs-2xs)/1.5 var(--font-mono);
   }
-
-  input::placeholder { color: var(--island-text-secondary); opacity: .72; }
-
-  button {
+  .export-row input::placeholder { color: var(--ink-3); }
+  .export-row input:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .export-row button {
     flex: 0 0 auto;
-    padding: 6px 11px;
+    min-height: 26px;
+    padding: 3px 9px;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    color: var(--ink-2);
+    background: transparent;
+    font-size: var(--fs-2xs);
     cursor: pointer;
-    transition:
-      background var(--duration-normal) var(--motion-spring),
-      border-color var(--duration-normal) var(--motion-spring),
-      transform var(--duration-fast) var(--motion-spring);
   }
+  .export-row button:hover:not(:disabled) { color: var(--ink); border-color: var(--rule-strong); }
+  .export-row button:disabled { opacity: .5; cursor: progress; }
+  .feedback { margin: 0; color: var(--ink-3); font-size: var(--fs-2xs); overflow-wrap: anywhere; }
+  .feedback.success { color: var(--state-done); }
+  .feedback.failure { color: var(--state-error); }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 
-  button:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--island-accent-primary) 42%, transparent);
-    background: var(--island-control-hover);
-  }
-
-  button:active:not(:disabled) { transform: scale(.97); }
-  button:disabled,
-  input:disabled { cursor: default; opacity: .48; }
-  input:focus-visible,
-  button:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
-
-  .feedback {
-    margin: 0;
-    color: var(--island-text-secondary);
-    font-size: 10px;
-  }
-
-  .feedback.success { color: var(--island-status-done); }
-  .feedback.failure { color: var(--island-refresh-error-text); }
-
-  @media (max-width: 520px) {
-    .issue-list,
-    .source-list { grid-template-columns: minmax(0, 1fr); }
-  }
-
-  @media (max-width: 380px) {
+  @media (max-width: 420px) {
     .export-row { align-items: stretch; flex-direction: column; }
-    button { width: 100%; }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    button { transition: none; }
   }
 </style>

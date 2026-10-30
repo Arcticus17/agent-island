@@ -111,25 +111,87 @@
 </details>
 
 <style>
-  .approval-rules { border-top: 1px solid var(--island-border-subtle); }
-  summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; list-style: none; cursor: pointer; color: var(--island-text-secondary); font-size: 11px; }
+  /* 审批规则：自动放行清单，系统区里的一条可展开行 */
+  .approval-rules { border-top: 1px solid var(--rule); }
+  summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    list-style: none;
+    cursor: pointer;
+    color: var(--ink-3);
+    font-size: var(--fs-2xs);
+  }
   summary::-webkit-details-marker { display: none; }
-  .badge { padding: 1px 6px; border: 1px solid var(--island-border-subtle); border-radius: 999px; background: var(--island-control-surface); color: var(--island-text-primary); font-size: 10px; font-weight: 700; }
-  .muted { color: var(--island-text-tertiary); font-size: 10px; }
-  .body { display: grid; gap: 8px; padding: 0 12px 12px; }
-  .hint { margin: 0; color: var(--island-text-tertiary); font-size: 10px; line-height: 1.5; }
-  .rules { margin: 0; padding: 0; display: grid; gap: 4px; list-style: none; }
-  .rules li { display: flex; align-items: center; gap: 8px; }
-  .rules code { flex: 1 1 auto; min-width: 0; padding: 3px 6px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); background: var(--island-log-surface); color: var(--island-text-primary); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rules button, .adder button { flex: 0 0 auto; min-height: 26px; padding: 3px 9px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); background: var(--island-control-surface); color: var(--island-text-secondary); font-size: 11px; cursor: pointer; }
+  summary::after {
+    content: "";
+    width: 7px;
+    height: 7px;
+    margin-left: auto;
+    border-right: 1px solid currentColor;
+    border-bottom: 1px solid currentColor;
+    transform: rotate(45deg) translateY(-2px);
+    transition: transform var(--duration-fast) ease-out;
+  }
+  .approval-rules[open] > summary::after { transform: rotate(225deg) translateY(-1px); }
+  summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .badge {
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--ink);
+    background: var(--field);
+    font: 600 var(--fs-2xs)/1.5 var(--font-readout);
+    font-variant-numeric: tabular-nums;
+  }
+  .muted { color: var(--ink-3); font-size: var(--fs-2xs); }
+  .body { display: grid; gap: 8px; padding: 0 0 10px; }
+  .hint { margin: 0; color: var(--ink-3); font-size: var(--fs-2xs); line-height: 1.6; }
+  .rules { margin: 0; padding: 0; display: grid; gap: 0; list-style: none; }
+  .rules li { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--rule); }
+  .rules code {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 5px 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink-2);
+    font: 400 var(--fs-2xs)/1.5 var(--font-mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .rules button, .adder button {
+    flex: 0 0 auto;
+    min-height: 24px;
+    padding: 2px 8px;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--ink-2);
+    font-size: var(--fs-2xs);
+    cursor: pointer;
+  }
+  .rules button:hover, .adder button:hover:not(:disabled) { color: var(--ink); border-color: var(--rule-strong); }
   .adder { display: flex; gap: 6px; align-items: center; }
-  .adder select, .adder input { min-height: 26px; min-width: 0; padding: 3px 6px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); background: var(--island-control-surface); color: var(--island-text-primary); font-size: 11px; }
+  .adder select, .adder input {
+    min-height: 26px;
+    min-width: 0;
+    padding: 3px 6px;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: var(--field);
+    color: var(--ink);
+    font-size: var(--fs-2xs);
+  }
   .adder select { flex: 0 0 auto; max-width: 96px; }
   .adder input { flex: 1 1 auto; }
-  .audit { display: grid; gap: 3px; }
-  .audit-title { color: var(--island-text-tertiary); font-size: 10px; }
-  .audit p { margin: 0; display: flex; gap: 6px; align-items: baseline; font-size: 10px; color: var(--island-text-secondary); }
-  .audit code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--island-text-primary); }
-  .when { flex: 0 0 auto; color: var(--island-text-tertiary); font-variant-numeric: tabular-nums; }
-  .error { margin: 0; color: var(--island-refresh-error-text); font-size: 10px; }
+  .adder input::placeholder { color: var(--ink-3); }
+  .audit { display: grid; gap: 2px; }
+  .audit-title { color: var(--ink-3); font-size: var(--fs-2xs); }
+  .audit p { margin: 0; display: flex; gap: 6px; align-items: baseline; font-size: var(--fs-2xs); color: var(--ink-3); }
+  .audit code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+  .when { flex: 0 0 auto; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .error { margin: 0; color: var(--state-error); font-size: var(--fs-2xs); }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 </style>

@@ -19,7 +19,9 @@ describe("window placement", () => {
     expect(clampWindowPlacement({ x: 3000, y: 2000, width: 900 }, monitors, 400)).toEqual({ x: 804, y: 440, width: 744 });
   });
   it("fits screens narrower than the normal minimum", () => {
-    expect(clampWindowPlacement({ x: 10, y: 20, width: 100 }, [{ scaleFactor: 2, workArea: { position: { x: 0, y: 0 }, size: { width: 600, height: 400 } } }], 500)).toEqual({ x: 0, y: 0, width: 300 });
+    // 刘海最窄可以到 80；屏幕更窄时以屏幕为准
+    expect(clampWindowPlacement({ x: 10, y: 20, width: 100 }, [{ scaleFactor: 2, workArea: { position: { x: 0, y: 0 }, size: { width: 600, height: 400 } } }], 500)).toEqual({ x: 10, y: 0, width: 100 });
+    expect(clampWindowPlacement({ x: 10, y: 20, width: 100 }, [{ scaleFactor: 2, workArea: { position: { x: 0, y: 0 }, size: { width: 120, height: 400 } } }], 500)).toEqual({ x: 0, y: 0, width: 60 });
   });
   it("fails explicitly when monitor discovery cannot establish bounds", () => {
     expect(() => clampWindowPlacement({ x: 0, y: 0, width: 420 }, [])).toThrow();

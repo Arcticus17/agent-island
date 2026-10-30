@@ -1,0 +1,52 @@
+﻿/*
+ * 浅色：白天的办公室。纸白底、墨字、同样的发丝与同一套状态色相，
+ * 只是为了让色字在浅底上仍有 4.5:1 对比度而整体压深一档。
+ */
+.agent-island[data-theme-style="light"],
+.island-loading[data-theme-style="light"],
+.event-layer[data-theme-style="light"],
+.palette-backdrop[data-theme-style="light"] {
+  color-scheme: light;
+
+  --ground: #f4f5f6;
+  --ground-raised: #ffffff;
+  --ground-sunken: #eceef0;
+  --sticky: #f4f5f6;
+
+  --ink: #14171c;
+  --ink-log: #2b3038;
+  --ink-2: #4d545e;
+  --ink-3: #656c77;
+
+  --rule: rgba(15, 20, 28, .12);
+  --rule-strong: rgba(15, 20, 28, .24);
+
+  --field: rgba(15, 20, 28, .05);
+  --field-hover: rgba(15, 20, 28, .1);
+
+  --state-idle: #5b6472;
+  --state-stopped: #6b7280;
+  --state-working: #0f7a63;
+  --state-done: #2b7a45;
+  --state-error: #b3261e;
+  --state-waiting: #8a5a00;
+
+  --alarm: #f2b43c;
+  --alarm-ink: #1a1206;
+  --danger: #c62f24;
+  --danger-ink: #ffffff;
+
+  --tint-working: color-mix(in srgb, var(--state-working) 10%, transparent);
+  --tint-done: color-mix(in srgb, var(--state-done) 10%, transparent);
+  --tint-idle: color-mix(in srgb, var(--state-idle) 8%, transparent);
+
+  --scrollbar-thumb: rgba(15, 20, 28, .22);
+  --scrim: rgba(15, 20, 28, .28);
+  --shadow-color: rgba(15, 20, 28, .18);
+  --menu-surface: #ffffff;
+  --menu-hover: #eceef0;
+
+  --elevation-island: none;
+  --effect-backdrop: none;
+  --surface-island: var(--ground);
+}

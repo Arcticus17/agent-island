@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
@@ -58,7 +58,27 @@
   /** 上一帧应用的输出长度，用来处理"历史被截断"的情况 */
   let appliedSnapshot = 0;
 
-  const agentCli = $derived(agent ? AGENT_CLI[agent.name] ?? null : null);
+  // 自定义 / 自动发现的 Agent 也能一键启动：用快照里下发的 program
+  const agentCli = $derived(
+    agent ? AGENT_CLI[agent.name] ?? (agent.program?.trim() || null) : null,
+  );
+  /** 终端抬头显示人类可读的程序名：powershell → PowerShell，cmd.exe → Shell。 */
+  const PROGRAM_LABELS: Record<string, string> = {
+    powershell: "PowerShell",
+    "powershell.exe": "PowerShell",
+    pwsh: "PowerShell",
+    "pwsh.exe": "PowerShell",
+    cmd: "Shell",
+    "cmd.exe": "Shell",
+  };
+  /** 终端抬头显示人类可读的名字：Agent 自己的命令用 Agent 名，shell 用固定文案。 */
+  const programLabel = $derived.by(() => {
+    if (!program) return null;
+    const known = PROGRAM_LABELS[program.toLowerCase()];
+    if (known) return known;
+    if (agent && agent.program?.trim() === program) return agent.name;
+    return program;
+  });
   const phase = $derived(
     error ? "error" : starting ? "starting" : sessionId ? "running" : exited ? "exited" : "idle",
   );
@@ -67,10 +87,10 @@
     const styles = getComputedStyle(node);
     const read = (name: string, fallback: string) => styles.getPropertyValue(name).trim() || fallback;
     return {
-      background: read("--island-log-surface", read("--island-surface", "#09090b")),
-      foreground: read("--island-log-text", read("--island-text-primary", "#e4e4e7")),
-      cursor: read("--island-accent-primary", "#7dd3fc"),
-      selectionBackground: read("--island-surface-raised", "#161619"),
+      background: read("--ground-sunken", "#0b0d11"),
+      foreground: read("--ink-log", "#c8cfd9"),
+      cursor: read("--state-working", "#38c6a5"),
+      selectionBackground: read("--field-hover", "rgba(255, 255, 255, .12)"),
     };
   }
 
@@ -193,7 +213,7 @@
     <span class="title">终端</span>
     <span class="phase" data-testid="terminal-phase" data-phase={phase}>
       {#if phase === "starting"}启动中…
-      {:else if phase === "running"}{program ?? "运行中"}
+      {:else if phase === "running"}{programLabel ?? "运行中"}
       {:else if phase === "exited"}已退出
       {:else if phase === "error"}出错
       {:else}未启动{/if}

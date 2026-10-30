@@ -27,7 +27,7 @@
   }: Props = $props();
 
   let draggingId = $state<CardId | null>(null);
-  const cardNames: Record<CardId, string> = { status: "状态", usage: "用量", session: "会话", log: "对话", stats: "统计" };
+  const cardNames: Record<CardId, string> = { status: "状态", usage: "用量", session: "会话", log: "回执", stats: "统计" };
   let interactionActive = false;
   let resizing = $state<{ id: CardId; pointerId: number; startY: number; startHeight: number; height: number; node: HTMLElement } | null>(null);
 
@@ -181,12 +181,16 @@
 </div>
 
 <style>
+  /*
+   * 板面：不是"两张卡片并排"，而是被 1px 发丝分成格的行。
+   * 列与列之间一条竖线，行与行之间一条横线，没有盒子、没有投影、没有圆角。
+   */
   .card-grid {
     width: 100%;
     max-width: 100%;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--island-space-card, 10px);
+    gap: 0;
     min-width: 0;
   }
 
@@ -194,72 +198,51 @@
     position: relative;
     box-sizing: border-box;
     min-width: 0;
-    min-height: 104px;
-    overflow: hidden;
-    border: 1px solid var(--island-border-subtle, ButtonBorder);
-    border-radius: var(--island-radius-card, 16px);
-    color: var(--island-text-primary, CanvasText);
-    background: var(--island-surface-card, var(--island-surface-raised, Canvas));
-  }
-
-  .layout-card.size-compact {
-    --layout-card-padding: 8px;
-    --layout-card-gap: 5px;
-    --layout-log-height: 96px;
-    min-height: 76px;
-  }
-
-  .layout-card.size-standard {
-    --layout-card-padding: 11px;
-    --layout-card-gap: 8px;
+    overflow: visible;
+    border: 0;
+    border-top: 1px solid var(--rule);
+    border-radius: 0;
+    color: var(--ink);
+    background: transparent;
+    padding: 13px 14px;
     --layout-log-height: 164px;
-    min-height: 104px;
   }
 
-  .layout-card.size-wide {
-    --layout-card-padding: 14px;
-    --layout-card-gap: 10px;
-    --layout-log-height: 240px;
-    grid-column: 1 / -1;
-    min-height: 116px;
-  }
+  .layout-card.size-compact { padding-block: 9px; --layout-log-height: 96px; }
+  .layout-card.size-wide { padding-block: 16px; grid-column: 1 / -1; --layout-log-height: 240px; }
 
-  .layout-card[draggable="true"] {
-    cursor: grab;
-  }
+  /* 两列时：左列一条竖线 + 右留白，右列左留白。整行卡片单独占满，不画竖线。 */
+  .layout-card:nth-child(odd):not(.size-wide) { padding-right: 14px; border-right: 1px solid var(--rule); }
+  .layout-card:nth-child(even):not(.size-wide) { padding-left: 14px; }
+  .layout-card:first-child { border-top: 0; }
 
-  .layout-card[draggable="true"]:active {
-    cursor: grabbing;
-  }
+  .layout-card[draggable="true"] { cursor: grab; }
+  .layout-card[draggable="true"]:active { cursor: grabbing; }
 
-  .layout-card.dragging {
-    opacity: 0.62;
-    outline: 2px solid var(--island-accent-primary, Highlight);
-    outline-offset: 2px;
-  }
+  .layout-card.dragging { opacity: .5; }
 
-  .layout-card.custom-height { min-height: 0; padding-bottom: 0; }
-  .layout-card.empty-card { min-height: 0; align-self: start; }
-  .card-grid[data-editing="true"] .layout-card { padding-bottom: 18px; }
+  .layout-card.custom-height { padding-bottom: 20px; }
+  .layout-card.empty-card { align-self: start; padding-block: 8px; }
+
   .resize-handle {
-    position: absolute; bottom: 0; left: 0; width: 100%; height: 18px;
-    padding: 0; border: 0; border-top: 1px solid var(--island-border-subtle, ButtonBorder);
-    color: var(--island-text-secondary, CanvasText); background: var(--island-control-surface, ButtonFace);
-    cursor: ns-resize; touch-action: none; font-size: 12px;
+    position: absolute; bottom: 0; left: 0; width: 100%; height: 16px;
+    padding: 0; border: 0; border-top: 1px dashed var(--rule-strong);
+    color: var(--ink-3); background: transparent;
+    cursor: ns-resize; touch-action: none; font-size: 11px;
   }
-  .resize-handle:focus-visible { outline: 2px solid var(--island-accent-primary, Highlight); outline-offset: -2px; }
+  .resize-handle:hover { color: var(--ink); background: var(--field); }
+  .resize-handle:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
 
   @media (max-width: 420px) {
-    .card-grid {
-      grid-template-columns: minmax(0, 1fr);
-    }
-
+    .card-grid { grid-template-columns: minmax(0, 1fr); }
     .layout-card,
     .layout-card.size-compact,
     .layout-card.size-standard,
     .layout-card.size-wide {
       grid-column: auto;
       max-width: 100%;
+      padding-inline: 14px;
+      border-right: 0;
     }
   }
 </style>

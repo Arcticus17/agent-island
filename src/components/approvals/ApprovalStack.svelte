@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import type { ApprovalItem } from "../events/types";
   import type { ApprovalScope } from "../../bridge/types";
   import { suggestRulePattern } from "../../approvals/rules";
@@ -82,7 +82,7 @@
         {#if item.approval.repo}<span title={item.approval.repo}>{item.approval.repo}</span>{/if}
         {#if item.approval.branch}<span> · {item.approval.branch}</span>{/if}
         {#if item.approval.cwd}<span> · {item.approval.cwd}</span>{/if}
-        <span> · {item.approval.session.slice(0, 8) || "无会话"}</span>
+        <span title={item.approval.session}> · {item.approval.session.slice(0, 8) || "无会话"}</span>
       </span>
 
       {#if item.approval.risk_reason}
@@ -160,45 +160,154 @@
 </div>
 
 <style>
+  /*
+   * 审批卡是"告警"本身：整条抬头是实心琥珀，命令与范围是深色面板上的白字，
+   * 允许是实心主按钮、拒绝是幽灵按钮。危险动作不靠颜色喊，靠层级。
+   */
   .stack { display: grid; gap: 8px; }
-  .batch { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; border: 1px solid var(--island-event-border); border-radius: 11px; color: var(--island-text-secondary); background: var(--island-event-surface); box-shadow: var(--island-event-shadow); font-size: 10px; pointer-events: auto; }
-  .batch button { min-height: 26px; padding: 2px 9px; border: 1px solid var(--island-border-subtle); border-radius: 7px; color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 10px; cursor: pointer; }
-  .approval { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--island-event-border); border-radius: 15px; color: var(--island-text-primary); background: var(--island-event-surface); box-shadow: var(--island-event-shadow); pointer-events: auto; }
-  .heading { display: flex; align-items: center; gap: 8px; }
-  .badge { color: var(--island-status-waiting); font-size: 11px; font-weight: 800; }
-  .tool { min-width: 0; color: var(--island-text-secondary); font-size: 10px; overflow-wrap: anywhere; }
-  .risk { margin-left: auto; flex: 0 0 auto; padding: 2px 7px; border: 1px solid var(--island-border-subtle); border-radius: 999px; color: var(--island-text-secondary); font-size: 9.5px; font-weight: 650; }
-  .risk[data-risk="high"] { color: var(--island-status-error); border-color: color-mix(in srgb, var(--island-status-error) 34%, transparent); background: color-mix(in srgb, var(--island-status-error) 10%, transparent); }
-  .risk[data-risk="medium"] { color: var(--island-status-waiting); border-color: color-mix(in srgb, var(--island-status-waiting) 34%, transparent); background: color-mix(in srgb, var(--island-status-waiting) 10%, transparent); }
-  .risk[data-risk="low"] { color: var(--island-status-done); border-color: color-mix(in srgb, var(--island-status-done) 30%, transparent); }
-  .command { overflow: hidden; padding: 8px; border-radius: 9px; color: var(--island-log-text); background: var(--island-log-surface); font: 500 11px/1.45 ui-monospace, "Cascadia Code", monospace; overflow-wrap: anywhere; }
-  .context { min-width: 0; color: var(--island-text-tertiary); font-size: 9.5px; overflow-wrap: anywhere; }
-  .reason-line { margin: 0; color: var(--island-text-secondary); font-size: 10px; line-height: 1.5; }
-  .diff { overflow: hidden; border: 1px solid var(--island-border-subtle); border-radius: 9px; background: var(--island-log-surface); }
-  .diff-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; border-bottom: 1px solid var(--island-border-subtle); color: var(--island-text-tertiary); font-size: 9px; }
+
+  .batch {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-event);
+    color: var(--ink-2);
+    background: var(--ground-raised);
+    font-size: var(--fs-2xs);
+    pointer-events: auto;
+  }
+  .batch button {
+    min-height: 24px;
+    padding: 2px 8px;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    color: var(--ink-2);
+    background: transparent;
+    font-size: var(--fs-2xs);
+    cursor: pointer;
+  }
+  .batch button:hover { color: var(--ink); border-color: var(--rule-strong); }
+
+  .approval {
+    display: grid;
+    gap: 8px;
+    padding: 0 0 10px;
+    overflow: hidden;
+    border: 1px solid var(--alarm);
+    border-radius: var(--radius-event);
+    color: var(--ink);
+    background: var(--ground-raised);
+    pointer-events: auto;
+  }
+
+  .heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--alarm);
+    color: var(--alarm-ink);
+  }
+  .badge { color: var(--alarm-ink); font-size: var(--fs-xs); font-weight: 700; }
+  .tool { min-width: 0; color: color-mix(in srgb, var(--alarm-ink) 78%, transparent); font-size: var(--fs-2xs); overflow-wrap: anywhere; }
+  .risk {
+    margin-left: auto;
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border: 1px solid color-mix(in srgb, var(--alarm-ink) 40%, transparent);
+    border-radius: 3px;
+    color: var(--alarm-ink);
+    font-size: 9px;
+    font-weight: 650;
+  }
+
+  .command,
+  .context,
+  .reason-line,
+  .diff,
+  .error,
+  .actions,
+  .reason-input { margin-inline: 10px; }
+
+  .command {
+    overflow: hidden;
+    padding: 7px 9px;
+    border-radius: 6px;
+    color: var(--ink-log);
+    background: var(--ground-sunken);
+    font: 400 var(--fs-2xs)/1.6 var(--font-mono);
+    overflow-wrap: anywhere;
+  }
+  .context { min-width: 0; color: var(--ink-3); font: 400 var(--fs-2xs)/1.5 var(--font-mono); overflow-wrap: anywhere; }
+  .reason-line { margin-block: 0; color: var(--ink-2); font-size: var(--fs-2xs); line-height: 1.6; }
+
+  .diff { overflow: hidden; border: 1px solid var(--rule); border-radius: 6px; background: var(--ground-sunken); }
+  .diff-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; border-bottom: 1px solid var(--rule); color: var(--ink-3); font: 400 9.5px/1.5 var(--font-mono); }
   .diff-head code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .diff-stat { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
-  .diff-stat b { color: var(--island-status-done); font-weight: 650; }
-  .diff-stat i { color: var(--island-status-error); font-style: normal; }
-  .diff-body { max-height: 168px; overflow: auto; padding: 3px 0; font-family: ui-monospace, "Cascadia Code", monospace; font-size: 9px; line-height: 1.55; }
-  .diff-body > div { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 4px; padding: 0 8px; white-space: pre; }
-  .diff-body .mark { color: var(--island-text-tertiary); user-select: none; }
-  .diff-body .add { color: var(--island-status-done); background: color-mix(in srgb, var(--island-status-done) 8%, transparent); }
-  .diff-body .del { color: var(--island-status-error); background: color-mix(in srgb, var(--island-status-error) 8%, transparent); }
-  .diff-body .ctx { color: var(--island-text-secondary); }
-  .diff-more { padding: 4px 8px; border-top: 1px solid var(--island-border-subtle); color: var(--island-text-tertiary); font-size: 9px; }
-  .reason-input { width: 100%; min-height: 48px; padding: 7px 8px; resize: vertical; border: 1px solid var(--island-border-subtle); border-radius: 8px; color: var(--island-text-primary); background: var(--island-control-surface); font: 10px/1.5 var(--island-font, ui-sans-serif); }
-  .reason-input:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 1px; }
-  .error { margin: 0; color: var(--island-refresh-error-text); font-size: 11px; }
-  .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-  .actions button { min-height: 32px; padding: 4px 10px; border: 1px solid var(--island-border-subtle); border-radius: 9px; color: var(--island-text-primary); background: var(--island-control-surface); cursor: pointer; font-size: 10.5px; }
-  .actions button.allow { border-color: var(--island-accent-primary); color: var(--island-accent-primary); }
-  .actions button.deny { color: var(--island-status-error); }
-  .actions .remember { border-style: dashed; color: var(--island-text-secondary); }
-  .actions .reason-toggle { color: var(--island-text-secondary); }
-  .scope { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--island-text-tertiary); font-size: 9px; }
-  .scope select { max-width: 88px; min-height: 28px; padding: 2px 4px; border: 1px solid var(--island-border-subtle); border-radius: 7px; color: var(--island-text-secondary); background: var(--island-control-surface); font-size: 9px; }
+  .diff-stat b { color: var(--state-done); font-weight: 650; }
+  .diff-stat i { color: var(--state-error); font-style: normal; }
+  .diff-body { max-height: 168px; overflow: auto; padding: 3px 0; font: 400 9.5px/1.6 var(--font-mono); }
+  .diff-body > div { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 5px; padding: 0 8px; white-space: pre; }
+  .diff-body .mark { color: var(--ink-3); user-select: none; }
+  .diff-body .add { color: var(--state-done); background: color-mix(in srgb, var(--state-done) 9%, transparent); }
+  .diff-body .del { color: var(--state-error); background: color-mix(in srgb, var(--state-error) 9%, transparent); }
+  .diff-body .ctx { color: var(--ink-2); }
+  .diff-more { padding: 4px 8px; border-top: 1px solid var(--rule); color: var(--ink-3); font-size: 9.5px; }
+
+  .reason-input {
+    width: calc(100% - 20px);
+    min-height: 48px;
+    padding: 6px 8px;
+    resize: vertical;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    color: var(--ink);
+    background: var(--field);
+    font: 400 var(--fs-2xs)/1.6 var(--font-ui);
+  }
+  .reason-input::placeholder { color: var(--ink-3); }
+  .reason-input:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+  .error { margin-block: 0; color: var(--state-error); font-size: var(--fs-2xs); overflow-wrap: anywhere; }
+
+  .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+  .actions button {
+    min-height: 28px;
+    padding: 3px 9px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    color: var(--ink-2);
+    background: transparent;
+    font: 600 var(--fs-2xs)/1 var(--font-ui);
+    cursor: pointer;
+  }
+  .actions button:hover:not(:disabled) { color: var(--ink); background: var(--field); }
+  .actions button.allow { color: var(--ground); background: var(--ink); font-weight: 650; }
+  .actions button.allow:hover:not(:disabled) { color: var(--ground); background: var(--ink); opacity: .88; }
+  .actions button.deny { color: var(--state-error); }
+  .actions button.deny:hover:not(:disabled) { color: var(--state-error); background: color-mix(in srgb, var(--state-error) 12%, transparent); }
+  .actions .remember { border: 0; color: var(--ink-3); }
+  .actions .reason-toggle { color: var(--ink-3); }
+  .actions .remember:hover:not(:disabled),
+  .actions .reason-toggle:hover:not(:disabled) { color: var(--ink); background: var(--field); }
+
+  .scope { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--ink-3); font-size: 9.5px; }
+  .scope select {
+    max-width: 92px;
+    min-height: 26px;
+    padding: 2px 4px;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    color: var(--ink-2);
+    background: var(--field);
+    font-size: 9.5px;
+  }
   .scope select option { color: var(--island-menu-text); background: var(--island-menu-surface); }
+
   button:disabled { opacity: .55; cursor: wait; }
-  button:focus-visible, select:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
+  button:focus-visible, select:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 </style>

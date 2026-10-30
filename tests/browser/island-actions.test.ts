@@ -860,10 +860,10 @@ describe("Agent Island display settings", () => {
     expect(target.querySelector('[data-testid="session-path"]')?.getAttribute("title")).toBeNull();
 
     const theme = settings.querySelectorAll<HTMLSelectElement>("select")[1];
-    theme.value = "pure-black";
+    theme.value = "light";
     theme.dispatchEvent(new Event("change", { bubbles: true }));
-    await waitFor(() => target.querySelector('[data-testid="agent-island"]')?.getAttribute("data-theme-style") === "pure-black");
-    expect(localStorage.getItem("agent-island-theme-style-v2")).toBe("pure-black");
+    await waitFor(() => target.querySelector('[data-testid="agent-island"]')?.getAttribute("data-theme-style") === "light");
+    expect(localStorage.getItem("agent-island-appearance-v1")).toBe("light");
   });
 
   it("persists quiet focus mode and suppresses ordinary hook notifications", async () => {
@@ -1237,6 +1237,155 @@ describe("pixel mascot motion", () => {
     expect(mascot!.classList.contains("resting")).toBe(resting);
   });
 });
+describe("auto-detected agents", () => {
+  function withDetected(state: "stopped" | "running"): AgentViewSnapshot {
+    const value = snapshot(100);
+    value.agents.push({
+      ...value.agents[0],
+      id: "pi",
+      name: "Pi",
+      source: "detected",
+      has_log_adapter: false,
+      state: {
+        process: state,
+        turn: state === "running" ? "executing" : "idle",
+        attention: "none",
+        result_at_ms: null,
+      },
+      display_status: state === "running" ? "working" : "stopped",
+      active_session: null,
+      active_turn: null,
+      history_sessions: [],
+      usage: null,
+      diagnostic: null,
+    });
+    return value;
+  }
+
+  it("keeps a stopped detected agent off the strip", async () => {
+    localStorage.removeItem("agent-island-pinned-agent");
+    const target = await renderIsland(createBridgeHarness([withDetected("stopped")]));
+    await waitFor(() => target.querySelector('[data-testid="agent-strip"]') !== null);
+    expect(target.querySelector('[data-agent-id="pi"]')).toBeNull();
+    expect(target.querySelector('[data-agent-id="alpha"]')).not.toBeNull();
+  });
+
+  it("shows a detected agent once it is running", async () => {
+    localStorage.removeItem("agent-island-pinned-agent");
+    const target = await renderIsland(createBridgeHarness([withDetected("running")]));
+    await waitFor(() => target.querySelector('[data-testid="agent-strip"]') !== null);
+    await waitFor(() => target.querySelector('[data-agent-id="pi"]') !== null);
+  });
+
+  it("shows a detected agent when the user pins it", async () => {
+    localStorage.setItem("agent-island-pinned-agent", "pi");
+    const target = await renderIsland(createBridgeHarness([withDetected("stopped")]));
+    await waitFor(() => target.querySelector('[data-testid="agent-strip"]') !== null);
+    expect(target.querySelector('[data-agent-id="pi"]')).not.toBeNull();
+    localStorage.removeItem("agent-island-pinned-agent");
+  });
+});
+
+describe("cold start: adapter agent without any session yet", () => {
+  it("guides a first-run agent to launch in the island instead of showing dead ends", async () => {
+    const value = snapshot(100, "stopped");
+    const agent = value.agents[0];
+    delete agent.has_log_adapter;
+    agent.state = { process: "stopped", turn: "idle", attention: "none", result_at_ms: null };
+    agent.display_status = "stopped";
+    agent.active_session = null;
+    agent.active_turn = null;
+    agent.history_sessions = [];
+    agent.usage = null;
+
+    const harness = createBridgeHarness([value]);
+    const target = await renderIsland(harness);
+
+    await waitFor(() => target.querySelector('[data-testid="cold-start"]') !== null);
+    const note = target.querySelector('[data-testid="cold-start"]')!;
+    expect(note.textContent).toContain("还没有 Claude Code 的会话");
+    const launch = target.querySelector<HTMLButtonElement>('[data-testid="cold-start-launch"]')!;
+    expect(launch.textContent).toContain("在岛内启动 Claude Code");
+
+    launch.click();
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
+    const open = harness.terminalCalls().find((call) => call.kind === "open")!;
+    expect(open.program).toBe("claude");
+  });
+
+  it("says it is waiting for the first record when the process is already running", async () => {
+    const value = snapshot(100, "working");
+    const agent = value.agents[0];
+    delete agent.has_log_adapter;
+    agent.active_session = null;
+    agent.active_turn = null;
+    agent.history_sessions = [];
+
+    const target = await renderIsland(createBridgeHarness([value]));
+    await waitFor(() => target.querySelector('[data-testid="cold-start"]') !== null);
+    expect(target.querySelector('[data-testid="cold-start"]')?.textContent).toContain("正在等它写出第一条会话记录");
+    expect(target.querySelector('[data-testid="cold-start-launch"]')).toBeNull();
+  });
+});
+
+describe("custom agents without a log adapter", () => {
+  it("explains the missing adapter and launches the agent's own command", async () => {
+    const value = snapshot(100);
+    const agent = value.agents[0];
+    agent.id = "pi";
+    agent.name = "Pi";
+    agent.can_restart = false;
+    agent.has_log_adapter = false;
+    agent.program = "pi";
+    agent.state = { process: "stopped", turn: "idle", attention: "none", result_at_ms: null };
+    agent.display_status = "stopped";
+    agent.active_session = null;
+    agent.active_turn = null;
+    agent.history_sessions = [];
+    agent.diagnostic = null;
+    agent.usage = null;
+
+    const harness = createBridgeHarness([value]);
+    const target = await renderIsland(harness);
+
+    // 1. 面板顶部解释"只有进程状态"
+    await waitFor(() => target.querySelector('[data-testid="adapter-note"]') !== null);
+    expect(target.querySelector('[data-testid="adapter-note"]')?.textContent).toContain("自定义 Agent");
+    // 2. 没有更新通道就不摆一个死按钮
+    expect(target.querySelector('[data-testid="agent-update"]')).toBeNull();
+    // 3. 指令框说明原因，而不是笼统的"会话未确认"
+    const prompt = target.querySelector<HTMLInputElement>('[data-testid="prompt-input"]')!;
+    expect(prompt.placeholder).toContain("日志适配器");
+
+    // 4. 点内置终端直接启动它自己的命令（不是退回 shell）
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-toggle"]')!.click();
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
+    const open = harness.terminalCalls().find((call) => call.kind === "open")!;
+    expect(open.program).toBe("pi");
+    expect(target.querySelector('[data-testid="terminal-panel"]')?.textContent).toContain("Pi");
+  });
+
+  it("falls back to PowerShell only when the agent has no launch command", async () => {
+    const value = snapshot(100);
+    const agent = value.agents[0];
+    agent.id = "custom";
+    agent.name = "My Tool";
+    agent.has_log_adapter = false;
+    agent.program = "";
+    agent.state = { process: "stopped", turn: "idle", attention: "none", result_at_ms: null };
+    agent.display_status = "stopped";
+    agent.active_session = null;
+    agent.active_turn = null;
+    agent.history_sessions = [];
+
+    const harness = createBridgeHarness([value]);
+    const target = await renderIsland(harness);
+    target.querySelector<HTMLButtonElement>('[data-testid="terminal-toggle"]')!.click();
+    await waitFor(() => harness.terminalCalls().some((call) => call.kind === "open"));
+    expect(harness.terminalCalls().find((call) => call.kind === "open")!.program).toBe("powershell");
+  });
+});
+
 describe("terminal explicit resize", () => {
   it("only tells the PTY about a size change when the user maximizes", async () => {
     const harness = createBridgeHarness([snapshot(100)]);

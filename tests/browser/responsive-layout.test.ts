@@ -235,13 +235,13 @@ describe("adaptive island responsive layout", () => {
     expect(target.querySelector('[aria-label="当前 Agent 统计"]')?.textContent).toContain("1会话");
   });
 
-  it("switches from graphite glass to a solid pure-black theme", async () => {
+  it("switches between the dark and light appearance of one design system", async () => {
     await page.viewport(520, 900);
     const { target } = await renderIsland();
     const island = target.querySelector<HTMLElement>('[data-testid="agent-island"]')!;
 
-    expect(island.dataset.themeStyle).toBe("graphite");
-    expect(getComputedStyle(island).getPropertyValue("--surface-island").trim()).not.toBe("");
+    expect(island.dataset.themeStyle).toBe("dark");
+    expect(getComputedStyle(island).getPropertyValue("--ground").trim()).toBe("#101318");
     expect(getComputedStyle(island).backdropFilter).toBe("none");
     if (import.meta.env.VITE_CAPTURE_UI === "1") {
       await page.screenshot({
@@ -253,15 +253,17 @@ describe("adaptive island responsive layout", () => {
     settings.open = true;
     settings.dispatchEvent(new Event("toggle"));
     const theme = settings.querySelectorAll<HTMLSelectElement>("select")[1];
-    theme.value = "pure-black";
+    theme.value = "light";
     theme.dispatchEvent(new Event("change", { bubbles: true }));
-    await waitFor(() => island.dataset.themeStyle === "pure-black");
+    await waitFor(() => island.dataset.themeStyle === "light");
     settings.open = false;
     settings.dispatchEvent(new Event("toggle"));
 
-    expect(getComputedStyle(island).getPropertyValue("--surface-island").trim()).toBe("#050506");
+    expect(getComputedStyle(island).getPropertyValue("--ground").trim()).toBe("#f4f5f6");
+    expect(getComputedStyle(island).getPropertyValue("--ink").trim()).toBe("#14171c");
     expect(getComputedStyle(island).backdropFilter).toBe("none");
     expect(getComputedStyle(island).backgroundImage).toBe("none");
+    expect(localStorage.getItem("agent-island-appearance-v1")).toBe("light");
     if (import.meta.env.VITE_CAPTURE_UI === "1") {
       await page.screenshot({
         path: "../../.superpowers/sdd/2026-09-04-adaptive-island-ui/task5-pure-black.png",

@@ -45,77 +45,53 @@
 </svelte:boundary>
 
 <style>
+  /* 卡片渲染失败：一条带错误色的板行，说明哪个卡片坏了、错误码是什么 */
   .card-fallback {
     min-width: 0;
-    min-height: 92px;
+    min-height: 64px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 14px;
-    padding: 13px;
-    border: 1px solid var(--island-border-subtle);
-    border-radius: 16px;
-    color: var(--island-text-primary);
-    background: var(--island-surface-raised);
+    padding: 10px 10px;
+    border: 1px solid var(--state-error);
+    border-radius: var(--radius-control);
+    color: var(--ink);
+    background: color-mix(in srgb, var(--state-error) 9%, transparent);
   }
 
-  .card-fallback.wide {
-    grid-column: 1 / -1;
-  }
+  .card-fallback.wide { grid-column: 1 / -1; }
 
-  .fallback-copy {
-    min-width: 0;
-    display: grid;
-    gap: 6px;
-  }
+  .fallback-copy { min-width: 0; display: grid; gap: 4px; }
 
-  .eyebrow {
-    color: var(--island-refresh-error-text);
-    font-size: 11px;
-    font-weight: 700;
-  }
+  .eyebrow { color: var(--state-error); font-size: var(--fs-2xs); font-weight: 650; }
 
   code {
     overflow: hidden;
-    color: var(--island-text-secondary);
-    font: 500 10px/1.4 ui-monospace, "Cascadia Code", monospace;
+    color: var(--ink-2);
+    font: 400 var(--fs-2xs)/1.5 var(--font-mono);
     overflow-wrap: anywhere;
   }
 
   button {
     flex: 0 0 auto;
-    min-height: 36px;
-    padding: 7px 11px;
-    border: 1px solid var(--island-border-subtle);
-    border-radius: 10px;
-    color: var(--island-text-primary);
-    background: var(--island-control-surface);
+    min-height: 26px;
+    padding: 3px 9px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 4px;
+    color: var(--ink);
+    background: transparent;
+    font-size: var(--fs-2xs);
     cursor: pointer;
   }
 
-  button:hover {
-    background: var(--island-control-hover);
-  }
+  button:hover { background: var(--field); }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 
-  button:focus-visible {
-    outline: 2px solid var(--island-accent-primary);
-    outline-offset: 2px;
-  }
-
-  @media (max-width: 520px) {
-    .card-fallback.wide {
-      grid-column: auto;
-    }
-  }
+  @media (max-width: 520px) { .card-fallback.wide { grid-column: auto; } }
 
   @media (max-width: 360px) {
-    .card-fallback {
-      align-items: stretch;
-      flex-direction: column;
-    }
-
-    button {
-      width: 100%;
-    }
+    .card-fallback { align-items: stretch; flex-direction: column; }
+    button { width: 100%; }
   }
 </style>

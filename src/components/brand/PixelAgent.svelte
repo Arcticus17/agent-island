@@ -35,7 +35,6 @@
   .pixel-agent {
     display: block;
     fill: var(--island-status-current, currentColor);
-    filter: drop-shadow(0 0 5px color-mix(in srgb, var(--island-status-current, currentColor) 55%, transparent));
     transform-origin: 50% 92%;
   }
   /* 静止态：3.6s 一轮的轻微上浮 + 压缩"眨眼"，像素图用 step 会显得硬，这里保持平滑 */

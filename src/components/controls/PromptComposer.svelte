@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { onDestroy } from "svelte";
   import type { AgentCommand, AgentView, CommandResult, SessionView } from "../../bridge/types";
   import type { CommandFailure } from "../events/types";
@@ -172,41 +172,56 @@
 </section>
 
 <style>
-  .composer { display: grid; gap: 6px; min-width: 0; }
+  /* 指令输入：一条贴在会话纸带下面的命令行，不是又一个表单卡片 */
+  .composer { display: grid; gap: 6px; min-width: 0; margin: 6px 0 8px; }
   .row { display: flex; gap: 6px; align-items: center; min-width: 0; }
   input {
     flex: 1 1 0;
     min-width: 0;
-    min-height: 32px;
-    padding: 6px 9px;
-    border: 1px solid var(--island-border-subtle);
-    border-radius: var(--island-radius-control);
-    color: var(--island-text-primary);
-    background: var(--island-control-surface);
-    font: inherit;
-    font-size: 12px;
+    min-height: 30px;
+    padding: 5px 9px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    color: var(--ink);
+    background: var(--field);
+    font: 400 var(--fs-2xs)/1.4 var(--font-ui);
   }
-  input::placeholder { color: var(--island-text-tertiary); }
-  input:disabled { opacity: .6; cursor: not-allowed; }
+  input::placeholder { color: var(--ink-3); }
+  input:focus-visible { outline: 1px solid var(--ink-2); outline-offset: 1px; }
+  input:disabled { opacity: .55; cursor: not-allowed; }
   button {
     flex: 0 0 auto;
-    min-height: 32px;
-    padding: 5px 11px;
-    border: 1px solid var(--island-border-subtle);
-    border-radius: var(--island-radius-control);
-    color: var(--island-text-primary);
-    background: var(--island-control-surface);
+    min-height: 30px;
+    padding: 4px 12px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    color: var(--ink-3);
+    background: transparent;
+    font: 650 var(--fs-2xs)/1 var(--font-ui);
     cursor: pointer;
   }
-  button[type="submit"]:not(:disabled) { border-color: var(--island-accent-primary); color: var(--island-accent-primary); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  button:focus-visible, input:focus-visible { outline: 2px solid var(--island-accent-primary); outline-offset: 2px; }
-  .ghost { min-height: 24px; padding: 2px 8px; font-size: 10px; }
-  .output { display: grid; gap: 4px; padding: 8px 9px; border: 1px solid var(--island-border-subtle); border-radius: var(--island-radius-control); background: var(--island-log-surface); }
-  .output-head { display: flex; align-items: center; justify-content: space-between; color: var(--island-text-secondary); font-size: 10px; }
-  .lines { margin: 0; max-height: 112px; overflow: auto; color: var(--island-log-text); font: 500 11px/1.5 ui-monospace, "Cascadia Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .waiting { margin: 0; color: var(--island-text-tertiary); font-size: 11px; }
-  .error { margin: 0; color: var(--island-refresh-error-text); font-size: 11px; overflow-wrap: anywhere; }
+  button:not(:disabled) { color: var(--ground); background: var(--ink); border-color: transparent; }
+  button:not(:disabled):hover { opacity: .88; }
+  button:disabled { cursor: not-allowed; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .ghost { min-height: 22px; padding: 2px 7px; border: 1px solid var(--rule); color: var(--ink-2); background: transparent; font-weight: 600; }
+  .ghost:hover { color: var(--ink); border-color: var(--rule-strong); }
+  .output { display: grid; gap: 4px; padding-top: 6px; border-top: 1px solid var(--rule); }
+  .output-head { display: flex; align-items: center; justify-content: space-between; color: var(--ink-3); font-size: var(--fs-2xs); }
+  .lines {
+    margin: 0;
+    max-height: 112px;
+    overflow: auto;
+    padding: 6px 8px;
+    border-radius: 5px;
+    color: var(--ink-log);
+    background: var(--ground-sunken);
+    font: 400 var(--fs-2xs)/1.6 var(--font-mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .waiting { margin: 0; color: var(--ink-3); font-size: var(--fs-2xs); }
+  .error { margin: 0; color: var(--state-error); font-size: var(--fs-2xs); overflow-wrap: anywhere; }
 </style>
 
 
