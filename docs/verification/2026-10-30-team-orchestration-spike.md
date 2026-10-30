@@ -187,7 +187,7 @@ Bash  od -c ".../E2E_OK.txt"
 
 主岛团队条与 `open_team` 已在真实 WebView2 里验证：运行中显示进度/待审批，点击后总览切到团队页。
 
-回归：Rust 268 通过（4 个 live 默认忽略）、浏览器 159 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
+回归：Rust 268 通过（4 个 live 默认忽略）、浏览器 159 通过、视觉 21 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
 
 ## 13. worktree 隔离（第三步）
 

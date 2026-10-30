@@ -104,7 +104,7 @@
 - 验证：Rust 228、Node 29（含 3 条 bridge 协议测试）、浏览器 136、视觉 24；真机 CDP 验证 allow / 10 分钟 grant / deny reason / inbox peek，并核对 Agent 检测路径与本机文件一致
 - 记录：[docs/verification/2026-10-28-inbox-and-approval-2.md](docs/verification/2026-10-28-inbox-and-approval-2.md)、[docs/verification/2026-10-28-agent-update-guard.md](docs/verification/2026-10-28-agent-update-guard.md)、[docs/verification/2026-10-28-agent-detection-exactness.md](docs/verification/2026-10-28-agent-detection-exactness.md)
 
-## v1.11：团队编排（审批 + 预算 + worktree + 并行 + 多轮 + 依赖链 + 执行级验收已完成，下一步 Codex/视觉）
+## v1.11：团队编排（审批 + 预算 + worktree + 并行 + 多轮 + 依赖链 + 验收 + 视觉基线已完成，下一步 Codex/签名/干净机器）
 
 - 主 Agent 规划：Claude `--json-schema` 输出结构化计划，先预览/可编辑，再确认执行
 - 次级 Agent 执行：独立 `--session-id`、`acceptEdits` 写文件、10 分钟超时、取消杀进程树
@@ -120,9 +120,10 @@
 - 入口：主岛展开态团队条（进度/待审批）→ 总览团队页；`open_team` 命令
 - 汇总与持久化：主 Agent 汇总、`~/.agent-island/team-runs.json` 原子写、重启把中断任务标失败
 - 进程隔离：团队 worker/验收 pid 从主岛快照过滤，应用退出 `/T /F` 清理
+- 发布硬化：团队页/团队条 5 个视觉基线（计划/验收/风险/依赖合并/团队条），`test:visual` 21 个用例通过；1.9.1 NSIS/MSI 可构建、MSI 可管理展开、release exe 可启动；安装包未签名、updater 私钥缺失导致构建退出码 1；干净机器/混合 DPI/多显示器未验
 - 真实端到端：允许→完成、拒绝→失败→重试→完成、worktree 隔离→merge、双任务并发→逐个 merge、两轮（A→合并→B）、依赖链（A→B）、验收通过/失败均跑通；详情见 [验证记录](docs/verification/2026-10-30-team-orchestration-spike.md)
 - 设计依据：[第一步设计：审批、状态与入口](docs/research/2026-10-30-team-orchestration-first-step.md)
-- 下一步：Codex/自定义 Agent 适配、视觉基线、自动合并（可选）
+- 下一步：Codex/自定义 Agent 适配、安装包签名与干净机器验收、混合 DPI/原生 WebView2 验收、自动合并（可选）
 
 ## 当前已完成
 

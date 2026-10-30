@@ -7,10 +7,16 @@ before committing them.
 
 The suite mounts the real Svelte App with a synthetic bridge, a fixed Date,
 disabled polling, disabled animation/caret, zh-CN locale, Asia/Shanghai timezone,
-dark color scheme and device scale 1. It captures seven states in both themes:
-compact idle/working/error, expanded monitoring, approval, long log and a 360px
-single-column layout. Screenshots cover the viewport, including overflow and
-the separate approval layer.
+dark color scheme and device scale 1. It captures eight island states in both
+themes: compact idle/working/error, expanded monitoring, approval, long log and
+a 360px single-column layout, plus the welcome card.
+
+`team.visual.test.ts` mounts the real `TeamBoard`/`TeamStrip` with inline
+graphite theme variables and synthetic team runs. It captures five team states:
+plan with dependency + verification command, verification pass/fail, risky
+command second confirmation, dependency chain after the first merge, and the
+expanded-island team strip with a waiting approval. It does not mount the
+overview shell header; the team surfaces are captured at 520×900 and 420×72.
 
 Baselines are platform-specific (`chromium-win32`), generated with the Chromium
 revision pinned by package-lock.json. No system-Chrome fallback is allowed.
@@ -21,5 +27,6 @@ Windows with the same locked dependencies. Browser or font updates may require
 an explicit, visually reviewed baseline update. The suite does not verify
 native Windows DPI, monitor switching, window dragging or installer behavior.
 
-Expected images live in `__screenshots__/island.visual.test.ts/`. On failure,
-Vitest writes actual/diff images under the ignored `artifacts/` directory.
+Expected images live in `__screenshots__/island.visual.test.ts/` and
+`__screenshots__/team.visual.test.ts/`. On failure, Vitest writes actual/diff
+images under the ignored `artifacts/` directory.

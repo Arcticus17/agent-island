@@ -194,7 +194,7 @@ npm run tauri build
 
 ### 视觉回归
 
-视觉回归使用 Windows 与依赖锁定的 Playwright Chromium；运行 `npm run test:visual` 比对。仅在人工检查确认界面变化后执行 `npm run test:visual:update` 更新基线。不同操作系统或字体环境的截图不能直接当作同一验收环境。
+视觉回归使用 Windows 与依赖锁定的 Playwright Chromium；运行 `npm run test:visual` 比对。当前覆盖主岛明暗 16 个状态，以及团队页/团队条 5 个状态（计划、验收通过/失败、风险二次确认、依赖合并、团队条待审批）。仅在人工检查确认界面变化后执行 `npm run test:visual:update` 更新基线。不同操作系统或字体环境的截图不能直接当作同一验收环境；Chromium 基线也不等于原生 WebView2/DPI 验收。
 
 ### 持续集成
 
