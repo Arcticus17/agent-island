@@ -203,6 +203,10 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
   let restingWidth = 0;
   /** 正在请求中的窗口宽度：webview 的 innerWidth 更新滞后，同步高度时不能拿旧宽度把窗口缩回去 */
   let targetWindowWidth = 0;
+  /** 程序化 setSize 期间忽略 onresize，避免 resize → sync → resize 的反馈循环。 */
+  let applyingWindowSize = false;
+  let lastAppliedWindowSize: { width: number; height: number } | null = null;
+  let resizeSyncTimer: number | undefined;
   /** Agent CLI 更新检查：本地版本走 Rust，最新版本走 npm registry（WebView fetch）。 */
   type UpdateStatus = "idle" | "checking" | "ready" | "error";
   type UpdatePhase = "idle" | "installing" | "verifying" | "rolling_back" | "done" | "failed";
@@ -658,6 +662,7 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
         ? Math.round(window.innerWidth)
         : compactWindowWidth;
     try {
+      applyingWindowSize = true;
       await bridge.resizeWindow?.({
         width: Math.max(1, width),
         height,
@@ -665,7 +670,28 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
       });
     } catch {
       // A browser preview or closing Tauri window may not support resizing.
+    } finally {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      lastAppliedWindowSize = { width: window.innerWidth, height: window.innerHeight };
+      applyingWindowSize = false;
     }
+  }
+
+  /** onresize 只处理用户拖拽；程序化改尺寸产生的同一尺寸事件直接忽略。 */
+  function handleWindowResize(): void {
+    if (applyingWindowSize) return;
+    if (
+      lastAppliedWindowSize &&
+      Math.abs(window.innerWidth - lastAppliedWindowSize.width) < 1.5 &&
+      Math.abs(window.innerHeight - lastAppliedWindowSize.height) < 1.5
+    ) {
+      return;
+    }
+    if (resizeSyncTimer !== undefined) window.clearTimeout(resizeSyncTimer);
+    resizeSyncTimer = window.setTimeout(() => {
+      resizeSyncTimer = undefined;
+      void syncWindowSize();
+    }, 80);
   }
 
   /** 终端放大：连窗口一起放大，还原时回到原来的宽度。 */
@@ -1765,6 +1791,7 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
     }
     return () => {
       disposed = true;
+      if (resizeSyncTimer !== undefined) window.clearTimeout(resizeSyncTimer);
       window.removeEventListener("agent-island-layout", relayout);
       diagnosticRequest += 1;
       diagnosticRefreshQueued = false;
@@ -1794,7 +1821,7 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
   });
 </script>
 <svelte:window
-  onresize={() => void syncWindowSize()}
+  onresize={handleWindowResize}
   onkeydown={(event) => {
     // Ctrl/Cmd+K：命令面板（岛可能还是隐藏态，先展开再打开）
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {

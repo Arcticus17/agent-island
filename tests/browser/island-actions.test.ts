@@ -362,6 +362,16 @@ describe("Agent Island commands", () => {
     await waitFor(() => harness.minWidths().includes(80));
   });
 
+  it("ignores resize echoes from its own setSize calls", async () => {
+    const harness = createBridgeHarness([snapshot(100)]);
+    await renderIsland(harness);
+    await waitFor(() => harness.resizeCalls().length > 0);
+    const before = harness.resizeCalls().length;
+    for (let i = 0; i < 5; i += 1) window.dispatchEvent(new Event("resize"));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(harness.resizeCalls()).toHaveLength(before);
+  });
+
   it("expands settings below the controls instead of overlaying them", async () => {
     await page.viewport(360, 740);
     const target = await renderIsland(createBridgeHarness([snapshot(100)], [{ ok: true, value: true }]));
