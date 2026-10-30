@@ -107,6 +107,15 @@ worktree 之后才开并发：
 - B 的 diff 以 A 分支 tip 为 base，只显示 B 自己的改动；A→B 合并顺序保持干净。
 - 通用 DAG、分叉链、自动合并仍不做。
 
+## 第七步：执行级验收（同日）
+
+- 计划任务可带可选的验收命令；留空就不跑，不猜项目该跑什么。
+- worker 结束后、任务标记成功前，在**同一个任务 worktree**里执行命令；记录退出码、耗时、stdout/stderr。
+- 退出码 0 才算验收通过；失败/超时的任务标失败，改动和输出保留，但 `merge_state=none`，不允许合并。
+- 超时 120 秒，输出上限 20k；验收进程注册到 active，取消运行会杀进程树。
+- 验收命令来自用户确认的计划，拥有当前用户权限；这是执行级证据，不是沙箱，也不是另一个 LLM 的评审意见。
+- 验收结果进入任务记录，后续合并 UI 和再来一轮的上下文都能看到。
+
 ## 参考
 
 - [Curating queues beats approving actions — WorkOS](https://webflow.workos.com/blog/curating-queues-beats-approving-actions)

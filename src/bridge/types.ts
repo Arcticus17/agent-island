@@ -470,6 +470,17 @@ export interface TeamPlanTask {
   prompt: string;
   depends_on: string[];
   acceptance: string;
+  /** 可选的执行级验收命令；空字符串表示不跑。 */
+  verify_command: string;
+}
+
+export interface TaskVerification {
+  command: string;
+  passed: boolean;
+  exitCode: number | null;
+  timedOut: boolean;
+  durationMs: number;
+  output: string;
 }
 
 export interface TeamTask {
@@ -480,6 +491,10 @@ export interface TeamTask {
   prompt: string;
   dependsOn: string[];
   acceptance: string;
+  /** 计划中声明的验收命令；null 表示不跑执行级验收。 */
+  verifyCommand: string | null;
+  /** 最近一次执行级验收结果。 */
+  verification: TaskVerification | null;
   state: TeamTaskState;
   startedAtMs: number | null;
   endedAtMs: number | null;

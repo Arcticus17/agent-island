@@ -22,6 +22,8 @@ function task(overrides: Partial<TeamTask> = {}): TeamTask {
     prompt: "创建 island.txt",
     dependsOn: [],
     acceptance: "文件存在",
+    verifyCommand: null,
+    verification: null,
     state: "queued",
     startedAtMs: null,
     endedAtMs: null,
@@ -404,6 +406,34 @@ describe("team board", () => {
     expect(target.querySelector('[data-testid="team-followup"]')).toBeNull();
   });
 
+  it("blocks a follow-up after a failed verification until the changes are discarded", async () => {
+    const initial = run({
+      phase: "failed",
+      summary: null,
+      tasks: [
+        task({
+          state: "failed",
+          branch: "agent-island/team-1/t1",
+          worktreePath: "C:\\worktrees\\t1",
+          changedFiles: ["b.txt"],
+          mergeState: "none",
+          verifyCommand: "exit 3",
+          verification: {
+            command: "exit 3",
+            passed: false,
+            exitCode: 3,
+            timedOut: false,
+            durationMs: 8,
+            output: "VERIFY_B",
+          },
+        }),
+      ],
+    });
+    const target = await render(harness(initial).bridge);
+    await waitFor(() => target.textContent?.includes("先合并或丢弃") === true);
+    expect(target.querySelector('[data-testid="team-followup"]')).toBeNull();
+  });
+
   it("shows a dependency and blocks the dependent merge until it is merged", async () => {
     const initial = run({
       phase: "succeeded",
@@ -487,5 +517,40 @@ describe("team board", () => {
       .find((button) => button.textContent?.trim() === "丢弃改动")!
       .click();
     await waitFor(() => target.textContent?.includes("确认丢弃（含 1 个后续任务）") === true);
+  });
+
+  it("shows a passed execution verification with its command output", async () => {
+    const initial = run({
+      phase: "succeeded",
+      tasks: [
+        task({
+          state: "succeeded",
+          verifyCommand: "echo OK",
+          verification: {
+            command: "echo OK",
+            passed: true,
+            exitCode: 0,
+            timedOut: false,
+            durationMs: 12,
+            output: "OK",
+          },
+        }),
+      ],
+    });
+    const target = await render(harness(initial).bridge);
+    await waitFor(() => target.textContent?.includes("验收通过") === true);
+    expect(target.textContent).toContain("验收通过");
+    expect(target.textContent).toContain("退出码 0");
+    expect(target.textContent).toContain("echo OK");
+  });
+
+  it("shows execution verification in the plan preview", async () => {
+    const initial = run({
+      phase: "awaiting_plan",
+      tasks: [task({ verifyCommand: "echo OK" })],
+    });
+    const target = await render(harness(initial).bridge);
+    await waitFor(() => target.textContent?.includes("验收：") === true);
+    expect(target.textContent).toContain("echo OK");
   });
 });

@@ -77,6 +77,7 @@
       prompt: task.prompt,
       depends_on: [...task.dependsOn],
       acceptance: task.acceptance,
+      verify_command: task.verifyCommand ?? "",
     }));
   }
 
@@ -222,7 +223,12 @@
 
   function hasUnresolvedMerges(value: TeamRun): boolean {
     return value.tasks.some(
-      (task) => task.mergeState === "pending" || task.mergeState === "conflict",
+      (task) =>
+        (task.mergeState === "pending" ||
+          task.mergeState === "conflict" ||
+          task.changedFiles.length > 0) &&
+        task.mergeState !== "merged" &&
+        task.mergeState !== "discarded",
     );
   }
 
@@ -431,6 +437,7 @@
         prompt: "",
         depends_on: [],
         acceptance: "",
+        verify_command: "",
       },
     ];
   }
@@ -603,8 +610,21 @@
               <span>验收标准</span>
               <input bind:value={task.acceptance} />
             </label>
+            <label class="field compact">
+              <span>验收命令（可选）</span>
+              <input
+                bind:value={task.verify_command}
+                placeholder="例：npm test -- xxx；留空不跑"
+              />
+            </label>
+            {#if task.verify_command.trim()}
+              <p class="hint">会在任务 worktree 内执行，拥有当前用户权限；退出码 0 才算通过，失败不允许合并。</p>
+            {/if}
             {#if task.depends_on.length > 0}
               <p class="depends">依赖：{task.depends_on.map(planTaskName).join(" → ")}</p>
+            {/if}
+            {#if task.verify_command.trim()}
+              <p class="depends">验收：<code>{task.verify_command}</code></p>
             {/if}
           </article>
         {/each}
@@ -645,6 +665,23 @@
               </div>
             {/if}
             {#if task.diffStat}<p class="diff-stat">{task.diffStat}</p>{/if}
+            {#if task.verification}
+              <div class="verify-row">
+                <span class={`verify-badge ${task.verification.passed ? "passed" : "failed"}`}>
+                  {task.verification.timedOut ? "验收超时" : task.verification.passed ? "验收通过" : "验收失败"}
+                </span>
+                <span class="meta">
+                  退出码 {task.verification.exitCode ?? "—"} · {task.verification.durationMs}ms
+                </span>
+              </div>
+              <details>
+                <summary>验收命令与输出</summary>
+                <code class="verify-command">{task.verification.command}</code>
+                <pre>{task.verification.output || "（无输出）"}</pre>
+              </details>
+            {:else if task.verifyCommand}
+              <p class="hint">验收命令：<code>{task.verifyCommand}</code></p>
+            {/if}
             {#if task.changedFiles.length > 0 && task.branch}
               <details ontoggle={(event) => { if (event.currentTarget.open) void ensureDiff(task); }}>
                 <summary>查看改动（{task.changedFiles.length} 个文件）</summary>
@@ -883,6 +920,11 @@
   .followup-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
   .followup-cta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
   .followup-hint { padding: 6px 8px; border-radius: 7px; background: var(--field); }
+  .verify-row { display: flex; align-items: center; gap: 7px; margin-top: 5px; }
+  .verify-badge { padding: 2px 6px; border-radius: 5px; font-size: 10px; font-weight: 600; }
+  .verify-badge.passed { color: var(--status-done); background: color-mix(in srgb, var(--status-done) 14%, transparent); }
+  .verify-badge.failed { color: var(--danger-ink); background: var(--danger); }
+  .verify-command { display: block; margin-top: 4px; padding: 5px 7px; border-radius: 5px; background: var(--field); font-size: 10px; white-space: pre-wrap; word-break: break-word; }
   .history { display: flex; flex-direction: column; gap: 4px; }
   .history-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; width: 100%; text-align: left; background: transparent; border-color: transparent; }
   .history-row.selected { background: var(--surface-raised); border-color: var(--border-subtle); }

@@ -187,7 +187,7 @@ Bash  od -c ".../E2E_OK.txt"
 
 主岛团队条与 `open_team` 已在真实 WebView2 里验证：运行中显示进度/待审批，点击后总览切到团队页。
 
-回归：Rust 262 通过（4 个 live 默认忽略）、浏览器 155 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
+回归：Rust 265 通过（4 个 live 默认忽略）、浏览器 158 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
 
 ## 13. worktree 隔离（第三步）
 
@@ -236,7 +236,19 @@ worktree 合并是手动的，不自动合并。第三步时任务必须互不�
 
 当前只支持**单依赖、线性链**，不支持一个任务依赖多个任务或分叉；通用 DAG 留到以后。
 
-## 17. 下一步
+## 17. 执行级验收（第七步）
+
+真实 git 仓库，同一轮两个独立任务，都带验收命令：
+
+- A：创建 A.txt，验收命令 `if exist A.txt (exit 0) else (exit 1)`；在 A 的 worktree 内执行，退出码 0，任务成功、可合并。
+- B：创建 B.txt，验收命令 `echo VERIFY_B && exit 3`；退出码 3，任务标失败，`merge_state=none`，不能合并；输出保留 `VERIFY_B`。
+- 验收在 main 没有 A.txt/B.txt 时仍能通过 A 的检查，说明命令跑在任务 worktree，而不是主工作区。
+- 最终 run 因 B 失败而失败；A 仍可手动合并，合并后主工作区只有 A.txt，B.txt 不在，`git status` 干净。
+- 单测覆盖：验收命令成功/非零退出/超时杀进程；超时 120 秒、输出截断；验收进程注册到 active，取消运行会一起杀掉。
+- 验收命令来自用户确认的计划，拥有当前用户权限，不是沙箱；没有命令就留空，不自动跑测试。
+- 验收失败的任务即使 `merge_state=none`，只要还有 `changedFiles`，也会阻止「再来一轮」；必须丢弃后才能基于干净的主工作区继续。
+
+## 18. 下一步
 
 1. Codex 适配器（等后端可达后再验收）、自定义 Agent 的 dispatch 模板。
 2. 视觉回归基线、混合 DPI、多显示器与安装包验收。

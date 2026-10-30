@@ -15,6 +15,8 @@ function task(id: string, state: TeamTask["state"]): TeamTask {
     prompt: "",
     dependsOn: [],
     acceptance: "",
+    verifyCommand: null,
+    verification: null,
     state,
     startedAtMs: 1,
     endedAtMs: null,

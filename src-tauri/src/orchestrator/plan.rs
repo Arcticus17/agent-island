@@ -21,6 +21,9 @@ pub(crate) struct PlanTask {
     pub depends_on: Vec<String>,
     #[serde(default)]
     pub acceptance: String,
+    /// 在任务 worktree 内执行的验收命令；通过才允许合并。
+    #[serde(default)]
+    pub verify_command: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,7 +54,8 @@ pub(crate) fn plan_schema(allowed_agents: &[String]) -> Value {
                             "type": "array",
                             "items": { "type": "string" }
                         },
-                        "acceptance": { "type": "string" }
+                        "acceptance": { "type": "string" },
+                        "verify_command": { "type": "string" }
                     },
                     "required": ["id", "title", "assignee", "prompt", "depends_on", "acceptance"],
                     "additionalProperties": false
@@ -102,6 +106,7 @@ pub(crate) fn planner_prompt(goal: &str, workspace: &Path, agents: &[String]) ->
          - 可以用 depends_on 表示先后顺序：每个任务最多一个依赖，且一个任务最多被一个后续任务依赖（线性链）；不允许多依赖或分叉。\n\
          - 彼此独立的步骤不要加依赖，能并行就并行；依赖任务会从依赖任务的分支创建 worktree，能看到依赖的改动，但 prompt 仍要写清楚背景。\n\
          - 不要安排必须等用户确认才能开始的任务；不要编造目标里没有的文件或需求。\n\
+         - 如果一个命令能验证任务（如 npm test -- xxx、cargo test xxx），填 verify_command；没有合适命令就填空字符串。验收命令会在任务 worktree 内执行，退出码 0 才算通过。\n\
          - 优先小步、可验证；每个任务都要能独立验收。\n",
         workspace = workspace.display(),
         listing = listing,
@@ -152,7 +157,8 @@ pub(crate) fn worker_prompt(goal: &str, workspace: &Path, task: &PlanTask) -> St
          - 结束时必须调用结构化输出：只有确实完成验收标准才填 completed；\n\
            权限被拒、依赖缺失或做不到，填 blocked 或 failed。\n\
          - summary 写实际做了什么；files_changed 写真实改动的文件；\n\
-           verification 写实际跑过的验证，没跑就明确写\"未验证\"。\n",
+           verification 写实际跑过的验证，没跑就明确写\"未验证\"。\n\
+         - 系统会在你结束后独立执行计划里的验收命令；不要伪造命令输出或声称已验证未运行的东西。\n",
         goal = goal.trim(),
         workspace = workspace.display(),
         title = task.title.trim(),
@@ -220,6 +226,7 @@ pub(crate) fn followup_planner_prompt(
          - 可以用 depends_on 表示先后顺序：每个任务最多一个依赖，且一个任务最多被一个后续任务依赖（线性链）；彼此独立的步骤不要加依赖。\n\
          - 依赖任务会从依赖任务的分支创建 worktree，能看到依赖的改动。\n\
          - 基于上一轮的实际结果规划；上一轮没验证的东西可以安排验证，但不要把推断写成已验证。\n\
+         - 如果一个命令能验证任务，填 verify_command；没有就填空字符串。\n\
          - 不要重复上一轮已经成功且用户已合并的改动。\n\
          - 不要安排必须等用户确认才能开始的任务。\n",
         workspace = workspace.display(),
@@ -260,6 +267,13 @@ pub(crate) fn validate_plan(plan: &TeamPlan, allowed_agents: &[String]) -> Resul
                 "任务 {id} 的负责人 {} 不在可用列表里",
                 task.assignee
             ));
+        }
+        if task
+            .verify_command
+            .as_deref()
+            .is_some_and(|command| command.chars().count() > 1_000)
+        {
+            errors.push(format!("任务 {id} 的验收命令太长（上限 1000 字）"));
         }
     }
     let mut dependents: HashMap<&str, usize> = HashMap::new();
@@ -338,6 +352,7 @@ mod tests {
             prompt: "做点具体的事".into(),
             depends_on: depends_on.iter().map(|value| (*value).to_string()).collect(),
             acceptance: "能验证".into(),
+            verify_command: None,
         }
     }
 

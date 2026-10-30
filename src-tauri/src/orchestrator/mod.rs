@@ -10,6 +10,7 @@ pub(crate) mod capability;
 pub(crate) mod plan;
 pub(crate) mod runner;
 pub(crate) mod scheduler;
+pub(crate) mod verification;
 pub(crate) mod worktree;
 
 use crate::*;
@@ -109,6 +110,12 @@ pub(crate) struct TeamTaskView {
     pub prompt: String,
     pub depends_on: Vec<String>,
     pub acceptance: String,
+    /// 计划里声明的验收命令；None 表示不跑执行级验收。
+    #[serde(default)]
+    pub verify_command: Option<String>,
+    /// 最近一次验收结果；旧记录/未配置时 None。
+    #[serde(default)]
+    pub verification: Option<verification::TaskVerification>,
     pub state: TaskState,
     pub started_at_ms: Option<u64>,
     pub ended_at_ms: Option<u64>,
@@ -501,6 +508,13 @@ fn from_plan_task(task: &PlanTask) -> TeamTaskView {
         prompt: cap_text(task.prompt.trim(), 8_000),
         depends_on: task.depends_on.iter().map(|value| value.trim().to_string()).collect(),
         acceptance: cap_text(task.acceptance.trim(), 4_000),
+        verify_command: task
+            .verify_command
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| cap_text(value, 1_000)),
+        verification: None,
         state: TaskState::Queued,
         started_at_ms: None,
         ended_at_ms: None,
@@ -605,6 +619,7 @@ fn synthesis_call(
             prompt: task.prompt.clone(),
             depends_on: task.depends_on.clone(),
             acceptance: task.acceptance.clone(),
+            verify_command: task.verify_command.clone(),
         })
         .collect();
     let results: Vec<String> = tasks
@@ -708,6 +723,7 @@ fn execute_task(
         prompt: task.prompt.clone(),
         depends_on: task.depends_on.clone(),
         acceptance: task.acceptance.clone(),
+        verify_command: task.verify_command.clone(),
     };
     let prompt = plan::worker_prompt(goal, workspace, &plan_task);
     let session_id = task.session_id.clone().unwrap_or_else(new_uuid);
@@ -811,6 +827,114 @@ fn worker_report(outcome: &ProcessOutcome) -> (TaskState, Option<String>, Option
             Some("worker 没有返回结构化任务结果，不能算完成".to_string()),
         ),
     }
+}
+
+fn run_task_verification(
+    state: &AppState,
+    run_id: &str,
+    task: &TeamTaskView,
+    workspace: &Path,
+) -> Option<verification::TaskVerification> {
+    let command = task.verify_command.as_deref()?.trim();
+    if command.is_empty() {
+        return None;
+    }
+    let key = active_key(run_id, &format!("verify:{}", task.id));
+    let pid_key = key.clone();
+    let result = verification::run(
+        command,
+        workspace,
+        Duration::from_secs(verification::VERIFY_TIMEOUT_SECS),
+        |pid| {
+            state.team.active.lock_recover().insert(pid_key.clone(), pid);
+        },
+    );
+    state.team.active.lock_recover().remove(&key);
+    Some(result)
+}
+
+fn apply_task_completion(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    run_id: &str,
+    task: &TeamTaskView,
+    outcome: &ProcessOutcome,
+    finalized: &Result<worktree::WorktreeChanges, String>,
+    verification: Option<verification::TaskVerification>,
+    ended: u64,
+) -> Option<TeamRunView> {
+    let (mut next_state, display, report_error) = worker_report(outcome);
+    let mut final_error = report_error;
+    let mut verification_blocked = false;
+    if let Some(result) = verification.as_ref() {
+        if next_state == TaskState::Succeeded && !result.passed {
+            next_state = TaskState::Failed;
+            verification_blocked = true;
+            final_error = Some(if result.timed_out {
+                format!(
+                    "验收命令超时（{}s）：{}",
+                    verification::VERIFY_TIMEOUT_SECS,
+                    cap_text(&result.output, 800)
+                )
+            } else {
+                format!(
+                    "验收命令失败（退出码 {}）：{}",
+                    result
+                        .exit_code
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "未知".to_string()),
+                    cap_text(&result.output, 800)
+                )
+            });
+        }
+    }
+    if outcome.timed_out && final_error.is_none() {
+        final_error = Some("任务超时，已终止进程树".to_string());
+    }
+    let view = state.team.update(run_id, |run| {
+        if let Some(task) = run.tasks.iter_mut().find(|item| item.id == task.id) {
+            task.state = next_state;
+            task.ended_at_ms = Some(ended);
+            task.exit_code = outcome.exit_code;
+            task.cost_usd = outcome.cost_usd;
+            task.result = display.as_deref().map(|text| cap_text(text, 8_000));
+            task.error = final_error
+                .as_deref()
+                .map(|text| cap_text(text, 2_000));
+            task.log = outcome.log.clone();
+            task.verification = verification;
+            match finalized {
+                Ok(changes) if changes.files.is_empty() => {
+                    task.changed_files.clear();
+                    task.diff_stat = None;
+                    task.merge_state = MergeState::None;
+                    task.merge_error = None;
+                }
+                Ok(changes) => {
+                    task.changed_files = changes.files.clone();
+                    task.diff_stat = Some(changes.stat.clone());
+                    task.merge_state = if next_state == TaskState::Succeeded {
+                        MergeState::Pending
+                    } else {
+                        MergeState::None
+                    };
+                    task.merge_error = verification_blocked
+                        .then(|| "验收未通过，禁止合并".to_string());
+                }
+                Err(error) => {
+                    task.changed_files.clear();
+                    task.diff_stat = None;
+                    task.merge_state = MergeState::None;
+                    task.merge_error = Some(format!("收集任务改动失败：{error}"));
+                }
+            }
+        }
+        run.spent_usd += outcome.cost_usd.unwrap_or(0.0);
+    });
+    if let Some(view) = &view {
+        emit_run(app, view);
+    }
+    view
 }
 
 fn pick_task(tasks: &[TeamTaskView]) -> Pick {
@@ -1128,50 +1252,33 @@ fn run_scheduler_serial(app: tauri::AppHandle, run_id: String) {
             return;
         }
         let finalized = worktree::finalize(&task_worktree, &task.title);
-        let ended = epoch_millis();
-        let (next_state, display, report_error) = worker_report(&outcome);
-        let Some(view) = state.team.update(&run_id, |run| {
-            if let Some(task) = run.tasks.iter_mut().find(|item| item.id == task.id) {
-                task.state = next_state;
-                task.ended_at_ms = Some(ended);
-                task.exit_code = outcome.exit_code;
-                task.cost_usd = outcome.cost_usd;
-                task.result = display.as_deref().map(|text| cap_text(text, 8_000));
-                task.error = report_error
-                    .as_deref()
-                    .map(|text| cap_text(text, 2_000))
-                    .or_else(|| {
-                        outcome
-                            .timed_out
-                            .then(|| "任务超时，已终止进程树".to_string())
-                    });
-                task.log = outcome.log.clone();
-                match &finalized {
-                    Ok(changes) if changes.files.is_empty() => {
-                        task.changed_files.clear();
-                        task.diff_stat = None;
-                        task.merge_state = MergeState::None;
-                        task.merge_error = None;
-                    }
-                    Ok(changes) => {
-                        task.changed_files = changes.files.clone();
-                        task.diff_stat = Some(changes.stat.clone());
-                        task.merge_state = MergeState::Pending;
-                        task.merge_error = None;
-                    }
-                    Err(error) => {
-                        task.changed_files.clear();
-                        task.diff_stat = None;
-                        task.merge_state = MergeState::None;
-                        task.merge_error = Some(format!("收集任务改动失败：{error}"));
-                    }
-                }
-            }
-            run.spent_usd += outcome.cost_usd.unwrap_or(0.0);
-        }) else {
-            return;
+        let verification = if worker_report(&outcome).0 == TaskState::Succeeded {
+            run_task_verification(&state, &run_id, &task, &task_workspace)
+        } else {
+            None
         };
-        emit_run(&app, &view);
+        if state
+            .team
+            .get(&run_id)
+            .is_some_and(|run| run.phase == RunPhase::Cancelled)
+        {
+            return;
+        }
+        let ended = epoch_millis();
+        if apply_task_completion(
+            &app,
+            &state,
+            &run_id,
+            &task,
+            &outcome,
+            &finalized,
+            verification,
+            ended,
+        )
+        .is_none()
+        {
+            return;
+        }
     }
 
     // 所有任务结束：有失败就不汇总，明确报告失败；全成功才让主 Agent 汇总。
@@ -1433,6 +1540,17 @@ fn previous_round_context(run: &TeamRunView) -> String {
             task.title,
             cap_text(outcome, 1_500)
         ));
+        if let Some(verification) = &task.verification {
+            text.push_str(&format!(
+                "  验收：{}（退出码 {}）：{}\n",
+                if verification.passed { "通过" } else { "失败" },
+                verification
+                    .exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "—".to_string()),
+                cap_text(&verification.output, 500)
+            ));
+        }
     }
     text
 }
@@ -1466,7 +1584,11 @@ pub(crate) fn team_continue_run(
     let unresolved: Vec<String> = parent
         .tasks
         .iter()
-        .filter(|task| matches!(task.merge_state, MergeState::Pending | MergeState::Conflict))
+        .filter(|task| {
+            (matches!(task.merge_state, MergeState::Pending | MergeState::Conflict)
+                || !task.changed_files.is_empty())
+                && !matches!(task.merge_state, MergeState::Merged | MergeState::Discarded)
+        })
         .map(|task| task.title.clone())
         .collect();
     if !unresolved.is_empty() {
@@ -1641,6 +1763,7 @@ pub(crate) fn team_retry_run(
                 task.result = None;
                 task.error = None;
                 task.cost_usd = None;
+                task.verification = None;
                 task.log.clear();
                 task.session_id = None;
                 task.pending_approval = None;
@@ -1899,6 +2022,8 @@ mod tests {
             prompt: "做事".into(),
             depends_on: depends_on.iter().map(|value| (*value).to_string()).collect(),
             acceptance: "可验收".into(),
+            verify_command: None,
+            verification: None,
             state,
             started_at_ms: None,
             ended_at_ms: None,
@@ -2165,6 +2290,7 @@ mod tests {
                 .into(),
             depends_on: Vec::new(),
             acceptance: "File exists with LIVE_OK".into(),
+            verify_command: None,
         };
         let prompt = plan::worker_prompt("Write a marker file", &dir, &task);
         let session_id = new_uuid();

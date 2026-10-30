@@ -342,49 +342,29 @@ fn spawn_worker(
                 return;
             }
             let finalized = worktree::finalize(&task_worktree, &task.title);
-            let ended = epoch_millis();
-            let (next_state, display, report_error) = worker_report(&outcome);
-            if let Some(view) = state.team.update(&run_id, |run| {
-                if let Some(task) = run.tasks.iter_mut().find(|item| item.id == task.id) {
-                    task.state = next_state;
-                    task.ended_at_ms = Some(ended);
-                    task.exit_code = outcome.exit_code;
-                    task.cost_usd = outcome.cost_usd;
-                    task.result = display.as_deref().map(|text| cap_text(text, 8_000));
-                    task.error = report_error
-                        .as_deref()
-                        .map(|text| cap_text(text, 2_000))
-                        .or_else(|| {
-                            outcome
-                                .timed_out
-                                .then(|| "任务超时，已终止进程树".to_string())
-                        });
-                    task.log = outcome.log.clone();
-                    match &finalized {
-                        Ok(changes) if changes.files.is_empty() => {
-                            task.changed_files.clear();
-                            task.diff_stat = None;
-                            task.merge_state = MergeState::None;
-                            task.merge_error = None;
-                        }
-                        Ok(changes) => {
-                            task.changed_files = changes.files.clone();
-                            task.diff_stat = Some(changes.stat.clone());
-                            task.merge_state = MergeState::Pending;
-                            task.merge_error = None;
-                        }
-                        Err(error) => {
-                            task.changed_files.clear();
-                            task.diff_stat = None;
-                            task.merge_state = MergeState::None;
-                            task.merge_error = Some(format!("收集任务改动失败：{error}"));
-                        }
-                    }
-                }
-                run.spent_usd += outcome.cost_usd.unwrap_or(0.0);
-            }) {
-                emit_run(&app, &view);
+            let verification = if worker_report(&outcome).0 == TaskState::Succeeded {
+                run_task_verification(&state, &run_id, &task, &task_workspace)
+            } else {
+                None
+            };
+            if state
+                .team
+                .get(&run_id)
+                .is_some_and(|run| run.phase == RunPhase::Cancelled)
+            {
+                return;
             }
+            let ended = epoch_millis();
+            let _ = apply_task_completion(
+                &app,
+                &state,
+                &run_id,
+                &task,
+                &outcome,
+                &finalized,
+                verification,
+                ended,
+            );
         }));
         if result.is_err() {
             log_event("ERROR", "team", &format!("worker panicked task={task_id}"));
