@@ -1711,6 +1711,14 @@ fn classify_blocks_dangerous_commands() {
 }
 
 #[test]
+fn classify_allows_read_only_verification_commands() {
+    assert!(classify_command("od -c E2E_OK.txt"));
+    assert!(classify_command("Get-ChildItem"));
+    assert!(classify_command("Test-Path E2E_OK.txt"));
+    assert!(classify_command("Get-FileHash E2E_OK.txt"));
+}
+
+#[test]
 fn hooks_merge_preserves_user_settings_and_secrets() {
     let dir = std::env::temp_dir().join(format!("agent-island-test-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
@@ -1730,6 +1738,13 @@ fn hooks_merge_preserves_user_settings_and_secrets() {
     assert!(text.contains("PreToolUse"));
     assert!(text.contains("PermissionRequest"));
     assert!(text.contains("hook-bridge.mjs"));
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let command = &parsed["hooks"]["PreToolUse"][0]["hooks"][0]["command"];
+    assert!(
+        command.is_string(),
+        "Claude Code 2.1.x 只执行字符串形式的 hook command；数组会被静默忽略"
+    );
+    assert!(command.as_str().unwrap().contains("hook-bridge.mjs"));
     assert!(text.contains("\"model\": \"sonnet\""), "merge must preserve unrelated top-level settings");
 
     remove_hooks_settings(&settings).unwrap();
@@ -1739,6 +1754,34 @@ fn hooks_merge_preserves_user_settings_and_secrets() {
     assert!(!text.contains("PreToolUse"));
     assert!(!text.contains("PermissionRequest"));
     assert!(!text.contains("hook-bridge.mjs"));
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn hooks_remove_legacy_array_commands() {
+    let dir = std::env::temp_dir().join(format!("agent-island-test-legacy-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let settings = dir.join("settings.json");
+    fs::write(
+        &settings,
+        r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": ["node", "C:\\Users\\x\\.agent-island\\hook-bridge.mjs"] }
+        ]
+      }
+    ]
+  }
+}"#,
+    )
+    .unwrap();
+    remove_hooks_settings(&settings).unwrap();
+    let text = fs::read_to_string(&settings).unwrap();
+    assert!(!text.contains("PreToolUse"), "legacy array hooks must be removable");
+    assert!(!text.contains("hook-bridge"), "legacy array hooks must not leave orphans");
     fs::remove_dir_all(&dir).ok();
 }
 

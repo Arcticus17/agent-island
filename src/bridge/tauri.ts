@@ -33,6 +33,9 @@ import {
   type CommandResult,
   type HookApproval,
   type HookEvent,
+  type TeamCapability,
+  type TeamPlanTask,
+  type TeamRun,
 } from "./types";
 
 function commandInvocation(command: AgentCommand): {
@@ -449,6 +452,27 @@ export function createTauriBridge(): AgentIslandBridge {
           unlistenData();
         }
       };
+    },
+    async teamCapabilities() {
+      return await invoke<TeamCapability[]>("team_capabilities");
+    },
+    async startTeamPlan(goal, workspace) {
+      return await invoke<TeamRun>("team_start_plan", { goal, workspace });
+    },
+    async getTeamRun(id) {
+      return await invoke<TeamRun | null>("team_get_run", { id });
+    },
+    async listTeamRuns() {
+      return await invoke<TeamRun[]>("team_list_runs");
+    },
+    async confirmTeamPlan(id, tasks: TeamPlanTask[]) {
+      return await invoke<TeamRun>("team_confirm_plan", { id, tasks });
+    },
+    async cancelTeamRun(id) {
+      return await invoke<TeamRun>("team_cancel_run", { id });
+    },
+    async listenTeamRuns(handler) {
+      return await listen<TeamRun>("team-run", (event) => handler(event.payload));
     },
   };
 }

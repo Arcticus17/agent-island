@@ -70,6 +70,17 @@ pub(crate) fn classify_command(command: &str) -> bool {
         "type ",
         "get-content ",
         "gc ",
+        "get-childitem",
+        "gci",
+        "test-path",
+        "get-item ",
+        "select-string ",
+        "measure-object ",
+        "resolve-path ",
+        "get-filehash ",
+        "od ",
+        "stat ",
+        "file ",
         "echo ",
         "pwd",
         "cd ",
@@ -121,6 +132,29 @@ pub(crate) fn classify_command(command: &str) -> bool {
     SAFE_PREFIX.iter().any(|p| c.starts_with(p))
 }
 
+/// 判断一条 hook 配置是不是 Agent Island 自己装的。
+///
+/// Claude Code 2.1.x 只执行字符串形式的 `command`；数组形式会被静默忽略。
+/// 这里同时识别两种形态，保证旧版本安装的数组 hook 在重新安装/卸载时不会变成孤儿。
+fn hook_entry_is_ours(entry: &Value) -> bool {
+    let Some(hooks) = entry.get("hooks").and_then(Value::as_array) else {
+        return false;
+    };
+    hooks.iter().any(|hook| match hook.get("command") {
+        Some(Value::String(command)) => {
+            command.contains("agent-island") && command.contains("hook-bridge")
+        }
+        Some(Value::Array(parts)) => {
+            parts.first().and_then(Value::as_str) == Some("node")
+                && parts
+                    .get(1)
+                    .and_then(Value::as_str)
+                    .is_some_and(|script| script.contains("agent-island"))
+        }
+        _ => false,
+    })
+}
+
 pub(crate) fn merge_hooks_settings(path: &Path, script_path: &Path) -> Result<(), String> {
     let text = if path.is_file() {
         fs::read_to_string(path).map_err(|e| e.to_string())?
@@ -132,8 +166,9 @@ pub(crate) fn merge_hooks_settings(path: &Path, script_path: &Path) -> Result<()
     } else {
         serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({}))
     };
-    let script = script_path.to_string_lossy().into_owned();
-    let command = vec!["node".to_string(), script];
+    let script = script_path.to_string_lossy();
+    // 字符串形式才是 Claude Code 2.1.x 认可的 hook command；数组形式会被静默忽略。
+    let command = format!("node \"{script}\"");
     let hook_entry = serde_json::json!({ "type": "command", "command": command });
 
     let hooks = root
@@ -151,23 +186,7 @@ pub(crate) fn merge_hooks_settings(path: &Path, script_path: &Path) -> Result<()
                 .entry(key.to_string())
                 .or_insert_with(|| serde_json::json!([]));
             if let Some(list) = entries.as_array_mut() {
-                list.retain(|entry| {
-                    let is_ours = entry
-                        .get("hooks")
-                        .and_then(|h| h.as_array())
-                        .and_then(|arr| arr.first())
-                        .and_then(|h| h.get("command"))
-                        .and_then(|c| c.as_array())
-                        .map(|c| {
-                            c.first().and_then(|x| x.as_str()) == Some("node")
-                                && c.get(1)
-                                    .and_then(|x| x.as_str())
-                                    .map(|s| s.contains("agent-island"))
-                                    .unwrap_or(false)
-                        })
-                        .unwrap_or(false);
-                    !is_ours
-                });
+                list.retain(|entry| !hook_entry_is_ours(entry));
                 let mut wrapper = serde_json::Map::new();
                 if let Some(m) = matcher {
                     wrapper.insert("matcher".to_string(), serde_json::json!(m));
@@ -206,23 +225,7 @@ pub(crate) fn remove_hooks_settings(path: &Path) -> Result<(), String> {
             "Notification",
         ] {
             if let Some(list) = hooks.get_mut(key).and_then(|l| l.as_array_mut()) {
-                list.retain(|entry| {
-                    let is_ours = entry
-                        .get("hooks")
-                        .and_then(|h| h.as_array())
-                        .and_then(|arr| arr.first())
-                        .and_then(|h| h.get("command"))
-                        .and_then(|c| c.as_array())
-                        .map(|c| {
-                            c.first().and_then(|x| x.as_str()) == Some("node")
-                                && c.get(1)
-                                    .and_then(|x| x.as_str())
-                                    .map(|s| s.contains("agent-island"))
-                                    .unwrap_or(false)
-                        })
-                        .unwrap_or(false);
-                    !is_ours
-                });
+                list.retain(|entry| !hook_entry_is_ours(entry));
                 if list.is_empty() {
                     hooks.remove(key);
                 }
@@ -665,6 +668,47 @@ pub(crate) fn handle_hook_conn(mut stream: std::net::TcpStream, app: tauri::AppH
         if name == "PreToolUse" || name == "PermissionRequest" {
             if !enabled {
                 write_http_json(&mut stream, "200 OK", "{\"decision\":\"ask\"}");
+                return;
+            }
+            // 团队任务无人值守：不能像用户自己的会话那样等 120 秒人工审批。
+            // 只读命令和文件编辑自动放行，其余命令立即拒绝并把原因写进通知，
+            // 让 worker 自己改道或让用户看到失败，而不是一直"执行中"。
+            if state.team.is_managed_session(&session_id) {
+                let file_edit = matches!(tool.as_str(), "Edit" | "Write" | "MultiEdit");
+                let allow = file_edit || classify_command(&command);
+                let reason = if allow {
+                    "团队任务：只读命令或文件编辑自动放行"
+                } else {
+                    "团队任务不等待人工审批，这条命令被视为危险已拒绝；请改用只读方式，或由用户手动执行"
+                };
+                if !allow {
+                    log_event(
+                        "INFO",
+                        "hook",
+                        &format!(
+                            "team denied tool={tool} session={session_id} len={}",
+                            command.len()
+                        ),
+                    );
+                    use tauri::Emitter;
+                    let _ = app.emit(
+                        "hook-event",
+                        serde_json::json!({
+                            "kind": "notification",
+                            "message": format!("团队任务已拒绝危险命令：{}", tool_display(&tool, &command, &tool_input, &review_tool(if tool.is_empty() { "Bash" } else { &tool }, &tool_input, &cwd))),
+                            "session": session_id,
+                        }),
+                    );
+                }
+                write_http_json(
+                    &mut stream,
+                    "200 OK",
+                    &serde_json::json!({
+                        "decision": if allow { "allow" } else { "deny" },
+                        "reason": reason,
+                    })
+                    .to_string(),
+                );
                 return;
             }
             let review = review_tool(if tool.is_empty() { "Bash" } else { &tool }, &tool_input, &cwd);

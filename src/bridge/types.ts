@@ -430,14 +430,86 @@ export interface SendOutput {
   lines: string[];
 }
 
+export type TeamRunPhase =
+  | "planning"
+  | "awaiting_plan"
+  | "running"
+  | "summarizing"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type TeamTaskState =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "skipped";
+
+export interface TeamCapability {
+  id: string;
+  name: string;
+  program: string;
+  installed: boolean;
+  canPlan: boolean;
+  canWork: boolean;
+  available: boolean;
+  /** 面向用户的说明：为什么可用/不可用。 */
+  detail: string;
+}
+
+/** 主 Agent 产出的计划任务；字段沿用后端 snake_case 协议。 */
+export interface TeamPlanTask {
+  id: string;
+  title: string;
+  assignee: string;
+  prompt: string;
+  depends_on: string[];
+  acceptance: string;
+}
+
+export interface TeamTask {
+  id: string;
+  title: string;
+  assignee: string;
+  assigneeName: string;
+  prompt: string;
+  dependsOn: string[];
+  acceptance: string;
+  state: TeamTaskState;
+  startedAtMs: number | null;
+  endedAtMs: number | null;
+  exitCode: number | null;
+  result: string | null;
+  error: string | null;
+  costUsd: number | null;
+  log: string[];
+  sessionId: string | null;
+}
+
+export interface TeamRun {
+  id: string;
+  goal: string;
+  workspace: string;
+  mainAgent: string;
+  mainAgentName: string;
+  phase: TeamRunPhase;
+  planSummary: string | null;
+  summary: string | null;
+  tasks: TeamTask[];
+  createdAtMs: number;
+  updatedAtMs: number;
+  error: string | null;
+  plannerSessionId: string | null;
+}
+
 export interface AgentStatsRow {
   name: string;
   total_seconds: number;
   error_count: number;
   done_count: number;
-}
-
-export interface StatsReportDay {
+}export interface StatsReportDay {
   date: string;
   agents: AgentStatsRow[];
 }
@@ -527,6 +599,16 @@ export interface AgentIslandBridge {
   detectAgentCandidates?(): Promise<AgentCandidate[]>;
   /** 把本机检测到的候选写进 ~/.agent-island/agents.json。 */
   addAgentDefinition?(name: string, program: string): Promise<void>;
+  /** 团队任务：当前可规划/可派发的 Agent 及原因。 */
+  teamCapabilities?(): Promise<TeamCapability[]>;
+  /** 团队任务：让主 Agent 生成计划；返回后通过 getTeamRun 轮询或 listenTeamRuns 接收更新。 */
+  startTeamPlan?(goal: string, workspace: string): Promise<TeamRun>;
+  getTeamRun?(id: string): Promise<TeamRun | null>;
+  listTeamRuns?(): Promise<TeamRun[]>;
+  /** 确认（可编辑的）计划并开始执行。 */
+  confirmTeamPlan?(id: string, tasks: TeamPlanTask[]): Promise<TeamRun>;
+  cancelTeamRun?(id: string): Promise<TeamRun>;
+  listenTeamRuns?(handler: (run: TeamRun) => void): Promise<() => void>;
 }
 
 export interface AppUpdateInfo {

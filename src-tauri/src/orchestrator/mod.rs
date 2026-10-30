@@ -1,0 +1,1096 @@
+//! 团队任务：主 Agent 规划、岛派发、串行执行、汇总与持久化。
+//!
+//! 设计边界（骨架阶段）：
+//! - 主 Agent 只在"规划"和"汇总"两次被调用；中间过程由岛掌控。
+//! - 同一工作区默认串行写入；任务按依赖 DAG 取第一个就绪项。
+//! - 成功 = 进程退出 0 且拿到结构化结果；否则失败/未验证，不猜。
+//! - 团队任务的子进程 pid 报告给 AppState，由主岛快照过滤掉。
+
+pub(crate) mod capability;
+pub(crate) mod plan;
+pub(crate) mod runner;
+
+use crate::*;
+use plan::{PlanTask, TeamPlan};
+use runner::{ProcessOutcome, RunnerConfig};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+const MAX_PERSISTED_RUNS: usize = 10;
+const MAX_RUNS_BYTES: usize = 2 * 1024 * 1024;
+const TASK_TIMEOUT_SECS: u64 = 600;
+const PLANNER_TIMEOUT_SECS: u64 = 240;
+const SYNTHESIS_TIMEOUT_SECS: u64 = 300;
+
+static ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn next_id(prefix: &str) -> String {
+    let counter = ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+    format!("{prefix}-{}-{counter}", epoch_millis())
+}
+
+fn cap_text(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        text.to_string()
+    } else {
+        let mut value: String = text.chars().take(limit).collect();
+        value.push('…');
+        value
+    }
+}
+
+fn new_uuid() -> String {    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(epoch_millis().to_le_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    hasher.update(ID_COUNTER.fetch_add(1, Ordering::SeqCst).to_le_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RunPhase {
+    Planning,
+    AwaitingPlan,
+    Running,
+    Summarizing,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TaskState {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+    Skipped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TeamTaskView {
+    pub id: String,
+    pub title: String,
+    pub assignee: String,
+    pub assignee_name: String,
+    pub prompt: String,
+    pub depends_on: Vec<String>,
+    pub acceptance: String,
+    pub state: TaskState,
+    pub started_at_ms: Option<u64>,
+    pub ended_at_ms: Option<u64>,
+    pub exit_code: Option<i32>,
+    pub result: Option<String>,
+    pub error: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub log: Vec<String>,
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TeamRunView {
+    pub id: String,
+    pub goal: String,
+    pub workspace: String,
+    pub main_agent: String,
+    pub main_agent_name: String,
+    pub phase: RunPhase,
+    pub plan_summary: Option<String>,
+    pub summary: Option<String>,
+    pub tasks: Vec<TeamTaskView>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub error: Option<String>,
+    pub planner_session_id: Option<String>,
+}
+
+pub(crate) struct TeamState {
+    pub runs: Mutex<HashMap<String, TeamRunView>>,
+    /// task_key（run_id:task_id）→ 子进程 pid，用于取消与主岛过滤。
+    pub active: Mutex<HashMap<String, u32>>,
+    /// 团队任务正在使用的 Claude session；hooks 用它区分"团队任务"和用户自己的会话。
+    pub managed_sessions: Mutex<HashSet<String>>,
+}
+
+fn team_runs_path() -> PathBuf {
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".agent-island")
+        .join("team-runs.json")
+}
+
+fn team_run_dir(run_id: &str) -> PathBuf {
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".agent-island")
+        .join("team-runs")
+        .join(run_id)
+}
+
+fn active_key(run_id: &str, task_id: &str) -> String {
+    format!("{run_id}:{task_id}")
+}
+
+impl TeamState {
+    pub(crate) fn load() -> Self {
+        let mut runs = HashMap::new();
+        if let Ok(text) = fs::read_to_string(team_runs_path()) {
+            if let Ok(list) = serde_json::from_str::<Vec<TeamRunView>>(&text) {
+                for run in list {
+                    runs.insert(run.id.clone(), run);
+                }
+            }
+        }
+        let mut changed = false;
+        for run in runs.values_mut() {
+            if matches!(
+                run.phase,
+                RunPhase::Planning | RunPhase::Running | RunPhase::Summarizing
+            ) {
+                run.phase = RunPhase::Failed;
+                run.error = Some("岛已退出或重启，任务中断；结果未知".to_string());
+                for task in &mut run.tasks {
+                    if matches!(task.state, TaskState::Running | TaskState::Queued) {
+                        task.state = TaskState::Failed;
+                        task.error = Some("岛已退出或重启，结果未知".to_string());
+                    }
+                }
+                changed = true;
+            }
+        }
+        let state = Self {
+            runs: Mutex::new(runs),
+            active: Mutex::new(HashMap::new()),
+            managed_sessions: Mutex::new(HashSet::new()),
+        };
+        if changed {
+            state.save();
+        }
+        state
+    }
+
+    pub(crate) fn save(&self) {
+        let mut list: Vec<TeamRunView> = self.runs.lock_recover().values().cloned().collect();
+        list.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+        list.truncate(MAX_PERSISTED_RUNS);
+        let Ok(json) = serde_json::to_string_pretty(&list) else {
+            return;
+        };
+        if json.len() > MAX_RUNS_BYTES {
+            return;
+        }
+        let path = team_runs_path();
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let temp = path.with_extension("json.tmp");
+        if fs::write(&temp, json).is_ok() {
+            let _ = fs::rename(&temp, &path);
+        }
+    }
+
+    pub(crate) fn active_pids(&self) -> HashSet<u32> {
+        self.active.lock_recover().values().copied().collect()
+    }
+
+    pub(crate) fn register_session(&self, session_id: &str) {
+        self.managed_sessions
+            .lock_recover()
+            .insert(session_id.to_string());
+    }
+
+    pub(crate) fn unregister_session(&self, session_id: &str) {
+        self.managed_sessions.lock_recover().remove(session_id);
+    }
+
+    pub(crate) fn is_managed_session(&self, session_id: &str) -> bool {
+        self.managed_sessions.lock_recover().contains(session_id)
+    }
+
+    pub(crate) fn insert(&self, run: TeamRunView) {
+        self.runs.lock_recover().insert(run.id.clone(), run);
+        self.save();
+    }
+
+    pub(crate) fn get(&self, id: &str) -> Option<TeamRunView> {
+        self.runs.lock_recover().get(id).cloned()
+    }
+
+    pub(crate) fn list(&self) -> Vec<TeamRunView> {
+        let mut list: Vec<TeamRunView> = self.runs.lock_recover().values().cloned().collect();
+        list.sort_by(|left, right| right.updated_at_ms.cmp(&left.updated_at_ms));
+        list
+    }
+
+    pub(crate) fn update(
+        &self,
+        id: &str,
+        change: impl FnOnce(&mut TeamRunView),
+    ) -> Option<TeamRunView> {
+        let view = {
+            let mut runs = self.runs.lock_recover();
+            let run = runs.get_mut(id)?;
+            change(run);
+            run.updated_at_ms = epoch_millis();
+            run.clone()
+        };
+        self.save();
+        Some(view)
+    }
+}
+
+fn emit_run(app: &tauri::AppHandle, view: &TeamRunView) {
+    use tauri::Emitter;
+    let _ = app.emit("team-run", view);
+}
+
+/// 应用正常退出时终止团队任务，避免留下仍在改文件的孤儿进程。
+pub(crate) fn shutdown(state: &AppState) {
+    let pids = state.team.active_pids();
+    for pid in pids {
+        runner::kill_process_tree(pid);
+    }
+    let running: Vec<String> = state
+        .team
+        .runs
+        .lock_recover()
+        .values()
+        .filter(|run| {
+            matches!(
+                run.phase,
+                RunPhase::Planning | RunPhase::Running | RunPhase::Summarizing
+            )
+        })
+        .map(|run| run.id.clone())
+        .collect();
+    for id in running {
+        let _ = state.team.update(&id, |run| {
+            run.phase = RunPhase::Failed;
+            run.error = Some("岛已退出，任务已中止；结果未知".to_string());
+            for task in &mut run.tasks {
+                if matches!(task.state, TaskState::Running | TaskState::Queued) {
+                    task.state = TaskState::Cancelled;
+                    task.error = Some("岛已退出，任务已中止".to_string());
+                    task.ended_at_ms = Some(epoch_millis());
+                }
+            }
+        });
+    }
+}
+
+fn normalize_workspace(input: &str) -> Result<PathBuf, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("请选择工作区目录".to_string());
+    }
+    let path = PathBuf::from(trimmed);
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| format!("工作区不存在：{}", path.display()))?;
+    if !canonical.is_dir() {
+        return Err("工作区不是目录".to_string());
+    }
+    if canonical.parent().is_none() {
+        return Err("不能把磁盘根目录作为工作区".to_string());
+    }
+    // Windows canonicalize 会加 `\\?\` 前缀；界面上显示它很吵，且 Claude 的
+    // cwd 用普通路径就够。UNC 路径要保留 `\\server\share` 形式。
+    let text = canonical.to_string_lossy();
+    let cleaned = if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        canonical
+    };
+    Ok(cleaned)
+}
+
+fn from_plan_task(task: &PlanTask) -> TeamTaskView {
+    TeamTaskView {
+        id: task.id.trim().to_string(),
+        title: task.title.trim().to_string(),
+        assignee: task.assignee.trim().to_string(),
+        assignee_name: "Claude Code".to_string(),
+        prompt: cap_text(task.prompt.trim(), 8_000),
+        depends_on: task.depends_on.iter().map(|value| value.trim().to_string()).collect(),
+        acceptance: cap_text(task.acceptance.trim(), 4_000),
+        state: TaskState::Queued,
+        started_at_ms: None,
+        ended_at_ms: None,
+        exit_code: None,
+        result: None,
+        error: None,
+        cost_usd: None,
+        log: Vec::new(),
+        session_id: None,
+    }
+}
+
+fn planner_call(goal: &str, workspace: &Path) -> Result<(TeamPlan, String, Option<f64>), String> {
+    let program = capability::claude_program()
+        .ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
+    let allowed = capability::available_agent_ids();
+    if allowed.is_empty() {
+        return Err(
+            capability::capabilities()
+                .into_iter()
+                .find(|item| item.id == "claude")
+                .map(|item| item.detail)
+                .unwrap_or_else(|| "没有可用的 Agent".to_string()),
+        );
+    }
+    let schema = plan::plan_schema(&allowed);
+    let schema_text = schema.to_string();
+    let env = capability::claude_settings_env();
+    let session_id = new_uuid();
+    let prompt = plan::planner_prompt(goal, workspace, &allowed);
+    let config = RunnerConfig {
+        program: &program,
+        cwd: workspace,
+        prompt: &prompt,
+        settings: None,
+        session_id: &session_id,
+        permission_mode: "plan",
+        max_turns: 3,
+        timeout: Duration::from_secs(PLANNER_TIMEOUT_SECS),
+        output_format: "json",
+        json_schema: Some(&schema_text),
+        env: &env,
+    };
+    let outcome = runner::run_claude(&config, |_| {});
+    if !outcome.ok {
+        return Err(outcome
+            .error
+            .unwrap_or_else(|| "主 Agent 规划失败".to_string()));
+    }
+    let value = outcome
+        .structured
+        .clone()
+        .or_else(|| {
+            outcome
+                .result
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        })
+        .ok_or_else(|| "主 Agent 没有返回结构化计划".to_string())?;
+    let team_plan: TeamPlan =
+        serde_json::from_value(value).map_err(|error| format!("计划格式不合法：{error}"))?;
+    plan::validate_plan(&team_plan, &allowed).map_err(|errors| errors.join("；"))?;
+    Ok((
+        team_plan,
+        outcome.session_id,
+        outcome.cost_usd,
+    ))
+}
+
+fn synthesis_call(
+    goal: &str,
+    workspace: &Path,
+    tasks: &[TeamTaskView],
+) -> Result<String, String> {
+    let program = capability::claude_program()
+        .ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
+    let env = capability::claude_settings_env();
+    let plan_tasks: Vec<PlanTask> = tasks
+        .iter()
+        .map(|task| PlanTask {
+            id: task.id.clone(),
+            title: task.title.clone(),
+            assignee: task.assignee.clone(),
+            prompt: task.prompt.clone(),
+            depends_on: task.depends_on.clone(),
+            acceptance: task.acceptance.clone(),
+        })
+        .collect();
+    let results: Vec<String> = tasks
+        .iter()
+        .map(|task| {
+            task.result
+                .clone()
+                .or_else(|| task.error.clone())
+                .unwrap_or_else(|| "（没有返回结果）".to_string())
+        })
+        .collect();
+    let prompt = plan::synthesis_prompt(goal, workspace, &plan_tasks, &results);
+    let session_id = new_uuid();
+    let config = RunnerConfig {
+        program: &program,
+        cwd: workspace,
+        prompt: &prompt,
+        settings: None,
+        session_id: &session_id,
+        permission_mode: "plan",
+        max_turns: 2,
+        timeout: Duration::from_secs(SYNTHESIS_TIMEOUT_SECS),
+        output_format: "json",
+        json_schema: None,
+        env: &env,
+    };
+    let outcome = runner::run_claude(&config, |_| {});
+    match (outcome.ok, outcome.result) {
+        (true, Some(text)) if !text.trim().is_empty() => Ok(text),
+        (_, _) => Err(outcome
+            .error
+            .unwrap_or_else(|| "主 Agent 汇总失败".to_string())),
+    }
+}
+
+fn worker_settings_path(run_id: &str) -> Result<PathBuf, String> {
+    let script = hook_script_path();
+    if !script.is_file() {
+        return Err("Claude 事件桥接脚本不存在；请先在设置里开启 Claude 事件".to_string());
+    }
+    let dir = team_run_dir(run_id);
+    fs::create_dir_all(&dir).map_err(|error| format!("创建团队运行目录失败：{error}"))?;
+    let hook = format!("node \"{}\"", script.display());
+    let settings = serde_json::json!({
+        "hooks": {
+            // 只拦 Bash。文件编辑由 acceptEdits 自动放行；如果也挂
+            // PermissionRequest，Write 会先被 hook 拦住等人点，在无人值守的
+            // 团队任务里就会一直"执行中"。
+            "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [{ "type": "command", "command": hook }]
+            }]
+        }
+    });
+    let path = dir.join("claude-settings.json");
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("写入团队审批设置失败：{error}"))?;
+    Ok(path)
+}
+
+fn execute_task(
+    app: &tauri::AppHandle,
+    run_id: &str,
+    task: &TeamTaskView,
+    workspace: &Path,
+    goal: &str,
+) -> ProcessOutcome {
+    let state = app.state::<AppState>();
+    let Some(program) = capability::claude_program() else {
+        return ProcessOutcome {
+            error: Some("找不到 Claude Code 可执行文件".to_string()),
+            session_id: String::new(),
+            ..ProcessOutcome::default()
+        };
+    };
+    let settings = match worker_settings_path(run_id) {
+        Ok(path) => path,
+        Err(error) => {
+            return ProcessOutcome {
+                error: Some(error),
+                session_id: String::new(),
+                ..ProcessOutcome::default()
+            }
+        }
+    };
+    let plan_task = PlanTask {
+        id: task.id.clone(),
+        title: task.title.clone(),
+        assignee: task.assignee.clone(),
+        prompt: task.prompt.clone(),
+        depends_on: task.depends_on.clone(),
+        acceptance: task.acceptance.clone(),
+    };
+    let prompt = plan::worker_prompt(goal, workspace, &plan_task);
+    let session_id = task.session_id.clone().unwrap_or_else(new_uuid);
+    let env = capability::claude_settings_env();
+    let config = RunnerConfig {
+        program: &program,
+        cwd: workspace,
+        prompt: &prompt,
+        settings: Some(&settings),
+        session_id: &session_id,
+        permission_mode: "acceptEdits",
+        max_turns: 16,
+        timeout: Duration::from_secs(TASK_TIMEOUT_SECS),
+        output_format: "stream-json",
+        json_schema: None,
+        env: &env,
+    };
+    let key = active_key(run_id, &task.id);
+    let team = &state.team;
+    team.register_session(&session_id);
+    let outcome = runner::run_claude(&config, |pid| {
+        team.active.lock_recover().insert(key.clone(), pid);
+    });
+    team.unregister_session(&session_id);
+    team.active.lock_recover().remove(&key);
+    outcome
+}
+
+fn pick_task(tasks: &[TeamTaskView]) -> Pick {
+    for (index, task) in tasks.iter().enumerate() {
+        if task.state != TaskState::Queued {
+            continue;
+        }
+        let mut ready = true;
+        for dependency in &task.depends_on {
+            match tasks
+                .iter()
+                .find(|candidate| &candidate.id == dependency)
+                .map(|candidate| candidate.state)
+            {
+                Some(TaskState::Succeeded) => {}
+                Some(TaskState::Failed | TaskState::Cancelled | TaskState::Skipped) => {
+                    return Pick::Blocked(index)
+                }
+                _ => ready = false,
+            }
+        }
+        if ready {
+            return Pick::Ready(index);
+        }
+    }
+    Pick::None
+}
+
+enum Pick {
+    Ready(usize),
+    Blocked(usize),
+    None,
+}
+
+fn run_scheduler(app: tauri::AppHandle, run_id: String) {
+    loop {
+        let state = app.state::<AppState>();
+        let Some(run) = state.team.get(&run_id) else {
+            return;
+        };
+        if matches!(
+            run.phase,
+            RunPhase::Cancelled | RunPhase::Failed | RunPhase::Succeeded
+        ) {
+            return;
+        }
+        let workspace = PathBuf::from(&run.workspace);
+        let goal = run.goal.clone();
+        let index = match pick_task(&run.tasks) {
+            Pick::Ready(index) => index,
+            Pick::Blocked(index) => {
+                let task_id = run.tasks[index].id.clone();
+                if let Some(view) = state.team.update(&run_id, |run| {
+                    if let Some(task) = run.tasks.iter_mut().find(|task| task.id == task_id) {
+                        task.state = TaskState::Skipped;
+                        task.error = Some("依赖的任务没有成功，已跳过".to_string());
+                        task.ended_at_ms = Some(epoch_millis());
+                    }
+                }) {
+                    emit_run(&app, &view);
+                }
+                continue;
+            }
+            Pick::None => {
+                let remaining = run
+                    .tasks
+                    .iter()
+                    .filter(|task| task.state == TaskState::Queued)
+                    .count();
+                if remaining > 0 {
+                    if let Some(view) = state.team.update(&run_id, |run| {
+                        for task in &mut run.tasks {
+                            if task.state == TaskState::Queued {
+                                task.state = TaskState::Skipped;
+                                task.error = Some("依赖无法满足，已跳过".to_string());
+                                task.ended_at_ms = Some(epoch_millis());
+                            }
+                        }
+                    }) {
+                        emit_run(&app, &view);
+                    }
+                }
+                break;
+            }
+        };
+
+        let session_id = new_uuid();
+        let task = run.tasks[index].clone();
+        let Some(started_view) = state.team.update(&run_id, |run| {
+            if let Some(task) = run.tasks.iter_mut().find(|item| item.id == task.id) {
+                task.state = TaskState::Running;
+                task.started_at_ms = Some(epoch_millis());
+                task.session_id = Some(session_id.clone());
+                task.error = None;
+                task.result = None;
+                task.log.clear();
+            }
+        }) else {
+            return;
+        };
+        emit_run(&app, &started_view);
+
+        let outcome = execute_task(&app, &run_id, &task, &workspace, &goal);
+        let current = state.team.get(&run_id);
+        if current.as_ref().is_some_and(|run| run.phase == RunPhase::Cancelled) {
+            return;
+        }
+        let ended = epoch_millis();
+        let Some(view) = state.team.update(&run_id, |run| {
+            if let Some(task) = run.tasks.iter_mut().find(|item| item.id == task.id) {
+                task.state = if outcome.ok {
+                    TaskState::Succeeded
+                } else {
+                    TaskState::Failed
+                };
+                task.ended_at_ms = Some(ended);
+                task.exit_code = outcome.exit_code;
+                task.cost_usd = outcome.cost_usd;
+                task.result = outcome.result.as_deref().map(|text| cap_text(text, 8_000));
+                task.error = outcome
+                    .error
+                    .as_deref()
+                    .map(|text| cap_text(text, 2_000))
+                    .or_else(|| {
+                        outcome
+                            .timed_out
+                            .then(|| "任务超时，已终止进程树".to_string())
+                    });
+                task.log = outcome.log.clone();
+            }
+        }) else {
+            return;
+        };
+        emit_run(&app, &view);
+    }
+
+    // 所有任务结束：有失败就不汇总，明确报告失败；全成功才让主 Agent 汇总。
+    let state = app.state::<AppState>();
+    let Some(run) = state.team.get(&run_id) else {
+        return;
+    };
+    if run.phase == RunPhase::Cancelled {
+        return;
+    }
+    let failed = run
+        .tasks
+        .iter()
+        .any(|task| matches!(task.state, TaskState::Failed | TaskState::Cancelled | TaskState::Skipped));
+    if failed {
+        if let Some(view) = state.team.update(&run_id, |run| {
+            run.phase = RunPhase::Failed;
+            run.error = Some("有任务失败或被跳过，未完成汇总".to_string());
+        }) {
+            emit_run(&app, &view);
+        }
+        return;
+    }
+
+    if let Some(view) = state.team.update(&run_id, |run| {
+        run.phase = RunPhase::Summarizing;
+    }) {
+        emit_run(&app, &view);
+    }
+    let synthesis = synthesis_call(&run.goal, &PathBuf::from(&run.workspace), &run.tasks);
+    if state
+        .team
+        .get(&run_id)
+        .is_some_and(|run| run.phase == RunPhase::Cancelled)
+    {
+        return;
+    }
+    let fallback: String = run
+        .tasks
+        .iter()
+        .map(|task| {
+            format!(
+                "### {}（{}）\n{}",
+                task.title,
+                task.assignee_name,
+                task.result.clone().unwrap_or_else(|| "已完成".to_string())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if let Some(view) = state.team.update(&run_id, |run| {
+        run.phase = RunPhase::Succeeded;
+        match &synthesis {
+            Ok(text) => {
+                run.summary = Some(text.clone());
+                run.error = None;
+            }
+            Err(error) => {
+                run.summary = Some(fallback);
+                run.error = Some(format!("汇总失败：{error}"));
+            }
+        }
+    }) {
+        emit_run(&app, &view);
+    }
+}
+
+#[tauri::command]
+pub(crate) fn team_capabilities() -> Vec<capability::AgentCapability> {
+    capability::capabilities()
+}
+
+#[tauri::command]
+pub(crate) fn team_start_plan(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    goal: String,
+    workspace: String,
+) -> Result<TeamRunView, String> {
+    let goal = goal.trim().to_string();
+    if goal.is_empty() {
+        return Err("请先写清楚团队目标".to_string());
+    }
+    if goal.chars().count() > 4000 {
+        return Err("目标太长，请压缩到 4000 字以内".to_string());
+    }
+    let workspace = normalize_workspace(&workspace)?;
+    let available = capability::available_agent_ids();
+    if !available.iter().any(|id| id == "claude") {
+        return Err(capability::capabilities()
+            .into_iter()
+            .find(|item| item.id == "claude")
+            .map(|item| item.detail)
+            .unwrap_or_else(|| "Claude 当前不可用".to_string()));
+    }
+    let now = epoch_millis();
+    let run = TeamRunView {
+        id: next_id("team"),
+        goal: goal.clone(),
+        workspace: workspace.to_string_lossy().into_owned(),
+        main_agent: "claude".to_string(),
+        main_agent_name: "Claude Code".to_string(),
+        phase: RunPhase::Planning,
+        plan_summary: None,
+        summary: None,
+        tasks: Vec::new(),
+        created_at_ms: now,
+        updated_at_ms: now,
+        error: None,
+        planner_session_id: None,
+    };
+    state.team.insert(run.clone());
+    emit_run(&app, &run);
+    let run_id = run.id.clone();
+    std::thread::spawn(move || {
+        let result = planner_call(&goal, &workspace);
+        let app_state = app.state::<AppState>();
+        if app_state
+            .team
+            .get(&run_id)
+            .is_some_and(|run| run.phase == RunPhase::Cancelled)
+        {
+            return;
+        }
+        match result {
+            Ok((plan, session_id, _cost)) => {
+                let tasks: Vec<TeamTaskView> = plan.tasks.iter().map(from_plan_task).collect();
+                if let Some(view) = app_state.team.update(&run_id, |run| {
+                    run.phase = RunPhase::AwaitingPlan;
+                    run.plan_summary = Some(plan.summary.clone());
+                    run.tasks = tasks;
+                    run.planner_session_id = Some(session_id);
+                    run.error = None;
+                }) {
+                    emit_run(&app, &view);
+                }
+            }
+            Err(error) => {
+                if let Some(view) = app_state.team.update(&run_id, |run| {
+                    run.phase = RunPhase::Failed;
+                    run.error = Some(error);
+                }) {
+                    emit_run(&app, &view);
+                }
+            }
+        }
+    });
+    Ok(run)
+}
+
+#[tauri::command]
+pub(crate) fn team_get_run(state: tauri::State<AppState>, id: String) -> Option<TeamRunView> {
+    state.team.get(&id)
+}
+
+#[tauri::command]
+pub(crate) fn team_list_runs(state: tauri::State<AppState>) -> Vec<TeamRunView> {
+    state.team.list()
+}
+
+#[tauri::command]
+pub(crate) fn team_confirm_plan(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    id: String,
+    tasks: Vec<PlanTask>,
+) -> Result<TeamRunView, String> {
+    let run = state
+        .team
+        .get(&id)
+        .ok_or_else(|| "团队任务不存在".to_string())?;
+    if run.phase != RunPhase::AwaitingPlan {
+        return Err("当前阶段不能确认计划".to_string());
+    }
+    if !state.hook_enabled.load(Ordering::SeqCst) {
+        return Err("团队任务需要先开启 Claude 事件（hooks），否则无法审批".to_string());
+    }
+    if state.team.active.lock_recover().values().next().is_some() {
+        return Err("已有团队任务在运行，请先等它结束或取消".to_string());
+    }
+    let allowed = capability::available_agent_ids();
+    let plan = TeamPlan {
+        summary: run.plan_summary.clone().unwrap_or_default(),
+        tasks: tasks.clone(),
+    };
+    plan::validate_plan(&plan, &allowed).map_err(|errors| errors.join("；"))?;
+    let views: Vec<TeamTaskView> = plan.tasks.iter().map(from_plan_task).collect();
+    let view = state
+        .team
+        .update(&id, |run| {
+            run.phase = RunPhase::Running;
+            run.tasks = views;
+            run.summary = None;
+            run.error = None;
+        })
+        .ok_or_else(|| "团队任务不存在".to_string())?;
+    emit_run(&app, &view);
+    let run_id = id.clone();
+    std::thread::spawn(move || run_scheduler(app, run_id));
+    Ok(view)
+}
+
+#[tauri::command]
+pub(crate) fn team_cancel_run(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    id: String,
+) -> Result<TeamRunView, String> {
+    let Some(run) = state.team.get(&id) else {
+        return Err("团队任务不存在".to_string());
+    };
+    if matches!(
+        run.phase,
+        RunPhase::Succeeded | RunPhase::Failed | RunPhase::Cancelled
+    ) {
+        return Ok(run);
+    }
+    let pids: Vec<u32> = {
+        let active = state.team.active.lock_recover();
+        active
+            .iter()
+            .filter(|(key, _)| key.starts_with(&format!("{id}:")))
+            .map(|(_, pid)| *pid)
+            .collect()
+    };
+    for pid in pids {
+        runner::kill_process_tree(pid);
+    }
+    let view = state
+        .team
+        .update(&id, |run| {
+            run.phase = RunPhase::Cancelled;
+            run.error = Some("已取消".to_string());
+            for task in &mut run.tasks {
+                match task.state {
+                    TaskState::Running => {
+                        task.state = TaskState::Cancelled;
+                        task.error = Some("已取消".to_string());
+                        task.ended_at_ms = Some(epoch_millis());
+                    }
+                    TaskState::Queued => {
+                        task.state = TaskState::Skipped;
+                        task.error = Some("运行已取消".to_string());
+                        task.ended_at_ms = Some(epoch_millis());
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .ok_or_else(|| "团队任务不存在".to_string())?;
+    emit_run(&app, &view);
+    Ok(view)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(id: &str, state: TaskState, depends_on: &[&str]) -> TeamTaskView {
+        TeamTaskView {
+            id: id.into(),
+            title: id.into(),
+            assignee: "claude".into(),
+            assignee_name: "Claude Code".into(),
+            prompt: "做事".into(),
+            depends_on: depends_on.iter().map(|value| (*value).to_string()).collect(),
+            acceptance: "可验收".into(),
+            state,
+            started_at_ms: None,
+            ended_at_ms: None,
+            exit_code: None,
+            result: None,
+            error: None,
+            cost_usd: None,
+            log: Vec::new(),
+            session_id: None,
+        }
+    }
+
+    #[test]
+    fn picks_the_first_ready_task_and_skips_blocked_dependents() {
+        let tasks = vec![
+            task("a", TaskState::Queued, &[]),
+            task("b", TaskState::Queued, &["a"]),
+        ];
+        assert!(matches!(pick_task(&tasks), Pick::Ready(0)));
+        let blocked = vec![
+            task("a", TaskState::Failed, &[]),
+            task("b", TaskState::Queued, &["a"]),
+        ];
+        assert!(matches!(pick_task(&blocked), Pick::Blocked(1)));
+    }
+
+    #[test]
+    fn uuid_is_version_four_and_unique() {
+        let first = new_uuid();
+        let second = new_uuid();
+        assert_ne!(first, second);
+        assert_eq!(first.len(), 36);
+        assert_eq!(&first[14..15], "4");
+        assert!(matches!(&first[19..20], "8" | "9" | "a" | "b"));
+    }
+
+    #[test]
+    fn managed_sessions_are_tracked_for_team_hooks() {
+        let state = TeamState {
+            runs: Mutex::new(HashMap::new()),
+            active: Mutex::new(HashMap::new()),
+            managed_sessions: Mutex::new(HashSet::new()),
+        };
+        assert!(!state.is_managed_session("s"));
+        state.register_session("s");
+        assert!(state.is_managed_session("s"));
+        state.unregister_session("s");
+        assert!(!state.is_managed_session("s"));
+    }
+
+    #[test]
+    fn workspace_display_strips_the_windows_verbatim_prefix() {
+        let dir = live_dir("workspace");
+        let normalized = normalize_workspace(&dir.to_string_lossy()).expect("workspace");
+        let text = normalized.to_string_lossy();
+        assert!(!text.starts_with(r"\\?\"), "界面不应显示 verbatim 前缀：{text}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn live_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "agent-island-live-{tag}-{}-{}",
+            std::process::id(),
+            epoch_millis()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 真实调用 Claude 的规划链路。默认忽略，手动运行：
+    /// `cargo test --lib live_planner -- --ignored --nocapture`
+    #[test]
+    #[ignore = "live Claude call; costs tokens"]
+    fn live_planner_returns_a_valid_plan() {
+        let dir = live_dir("planner");
+        let plan = planner_call(
+            "Create a file named island_live.txt containing LIVE_OK. Do not change anything else.",
+            &dir,
+        )
+        .expect("planner should return a valid plan");
+        assert!(!plan.0.tasks.is_empty());
+        assert!(plan
+            .0
+            .tasks
+            .iter()
+            .all(|task| task.assignee == "claude"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 真实调用 Claude 汇总。默认忽略，手动运行：
+    /// `cargo test --lib live_synthesis -- --ignored --nocapture`
+    #[test]
+    #[ignore = "live Claude call; costs tokens"]
+    fn live_synthesis_returns_text() {
+        let dir = live_dir("synthesis");
+        let mut finished = task("a", TaskState::Succeeded, &[]);
+        finished.title = "Create island_live.txt".into();
+        finished.result = Some("Created island_live.txt with LIVE_OK.".into());
+        let text = synthesis_call(
+            "Create a marker file and report what changed",
+            &dir,
+            &[finished],
+        )
+        .expect("synthesis should return text");
+        assert!(!text.trim().is_empty());
+        assert!(text.chars().count() > 20);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 真实调用 Claude worker 写文件。默认忽略，手动运行：
+    /// `cargo test --lib live_worker -- --ignored --nocapture`
+    #[test]
+    #[ignore = "live Claude call; costs tokens"]
+    fn live_worker_can_write_a_file() {
+        let dir = live_dir("worker");
+        let run_id = format!("live-{}", epoch_millis());
+        let settings = worker_settings_path(&run_id).expect("worker settings");
+        let program = capability::claude_program().expect("claude");
+        let env = capability::claude_settings_env();
+        let task = PlanTask {
+            id: "a".into(),
+            title: "Write the marker file".into(),
+            assignee: "claude".into(),
+            prompt: "Create island_live.txt in the current directory with exact content LIVE_OK and a trailing newline."
+                .into(),
+            depends_on: Vec::new(),
+            acceptance: "File exists with LIVE_OK".into(),
+        };
+        let prompt = plan::worker_prompt("Write a marker file", &dir, &task);
+        let session_id = new_uuid();
+        let config = RunnerConfig {
+            program: &program,
+            cwd: &dir,
+            prompt: &prompt,
+            settings: Some(&settings),
+            session_id: &session_id,
+            permission_mode: "acceptEdits",
+            max_turns: 8,
+            timeout: Duration::from_secs(180),
+            output_format: "stream-json",
+            json_schema: None,
+            env: &env,
+        };
+        let outcome = runner::run_claude(&config, |_| {});
+        assert!(outcome.ok, "worker failed: {:?}", outcome.error);
+        let content = fs::read_to_string(dir.join("island_live.txt")).expect("file");
+        assert_eq!(content.trim(), "LIVE_OK");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(team_run_dir(&run_id));
+    }
+}

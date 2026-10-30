@@ -1091,6 +1091,7 @@ pub(crate) fn scan_agents(
     launch_facts: &std::collections::HashMap<String, u64>,
     bindings: &std::collections::HashMap<String, crate::bindings::BoundSession>,
     hooked_sessions: &std::collections::HashMap<String, crate::hooked::HookedSession>,
+    managed_roots: &std::collections::HashSet<u32>,
 ) -> (
     Vec<AgentInfo>,
     interface::snapshot::AgentViewSnapshot,
@@ -1106,6 +1107,19 @@ pub(crate) fn scan_agents(
             .map(|(pid, process)| (pid.as_u32(), process.parent().map(|parent| parent.as_u32()))),
     );
     let _after_processes = Instant::now();
+    // 团队任务派生的 Claude 进程不是"用户自己的 Agent"，不能出现在主岛快照里。
+    let excluded: std::collections::HashSet<u32> = if managed_roots.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        sys.processes()
+            .keys()
+            .map(|pid| pid.as_u32())
+            .filter(|pid| {
+                managed_roots.contains(pid)
+                    || launcher::descends_from(*pid, &parents, managed_roots)
+            })
+            .collect()
+    };
     let now = Instant::now();
     let delta = now.duration_since(session.last_poll).as_secs();
     session.last_poll = now;
@@ -1124,7 +1138,10 @@ pub(crate) fn scan_agents(
         } else {
             def.log_kind.as_str()
         };
-        let processes = matching_processes(sys, &def.keyword);
+        let processes: Vec<&sysinfo::Process> = matching_processes(sys, &def.keyword)
+            .into_iter()
+            .filter(|process| !excluded.contains(&process.pid().as_u32()))
+            .collect();
         if processes.is_empty() && !program_available(def.program()) {
             // 系统上已经找不到这个 CLI（可能是装了又卸载）：不再出现在岛上，
             // 也不再扫它残留的会话日志——残留日志不能证明 Agent 还在。

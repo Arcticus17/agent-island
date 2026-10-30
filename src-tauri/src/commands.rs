@@ -213,7 +213,16 @@ pub(crate) fn collect_agent_data(
     };
     let (agents, snapshot, _diagnostics, scan_result) =
         collect_cached_with(&mut cache, Instant::now, || {
-            scan_agents(&mut sys, &mut session, &pty_roots, &launch_facts, &bindings, &hooked_sessions)
+            let managed_pids = state.team.active_pids();
+            scan_agents(
+                &mut sys,
+                &mut session,
+                &pty_roots,
+                &launch_facts,
+                &bindings,
+                &hooked_sessions,
+                &managed_pids,
+            )
         });
     session.cache = cache;
     if let Some((changed, completed_at)) = scan_result {

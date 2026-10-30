@@ -15,6 +15,7 @@
   } from "../../bridge/types";
   import { tauriBridge } from "../../bridge/tauri";
   import { createAgentStore, type AgentStoreState } from "../../stores/agent-store";
+  import TeamBoard from "./TeamBoard.svelte";
 
   let {
     bridge = tauriBridge,
@@ -50,6 +51,7 @@
   let stopConfirmationKey = $state<string | null>(null);
   let stopConfirmationTimer: number | undefined;
   let statsVisible = $state(false);
+  let teamVisible = $state(false);
   let statsDays = $state<1 | 7>(7);
   let statsState = $state<"idle" | "pending" | "ready" | "failed">("idle");
   let statsReport = $state<StatsReport | null>(null);
@@ -264,7 +266,15 @@
 
   function toggleStats(): void {
     statsVisible = !statsVisible;
-    if (statsVisible) void loadStats();
+    if (statsVisible) {
+      teamVisible = false;
+      void loadStats();
+    }
+  }
+
+  function toggleTeam(): void {
+    teamVisible = !teamVisible;
+    if (teamVisible) statsVisible = false;
   }
 
   function statsTotal(rows: AgentStatsRow[], field: "total_seconds" | "error_count" | "done_count"): number {
@@ -328,19 +338,24 @@
 
 <div class="overview" data-testid="overview-app" data-theme-style="graphite">
   <header>
-    <div><span class="eyebrow">AGENT ISLAND</span><h1>会话总览</h1></div>
+    <div><span class="eyebrow">AGENT ISLAND</span><h1>{teamVisible ? "团队任务" : "会话总览"}</h1></div>
     <div class="header-actions">
-      <span class="summary">{rows.length} 个会话</span>
+      <span class="summary">{teamVisible ? "实验功能" : `${rows.length} 个会话`}</span>
       {#if updatedAt}<time>{new Date(updatedAt).toLocaleTimeString()}</time>{/if}
+      <button data-testid="overview-team-toggle" type="button" class:active={teamVisible} onclick={toggleTeam}>团队</button>
       <button data-testid="overview-stats-toggle" type="button" class:active={statsVisible} onclick={toggleStats}>统计</button>
     </div>
   </header>
 
-  {#if viewState.refreshError && rows.length > 0}
+  {#if viewState.refreshError && rows.length > 0 && !teamVisible}
     <p class="refresh-warning" role="status">刷新暂时失败，正在显示上一次确认的数据。</p>
   {/if}
 
-  {#if statsVisible}
+  {#if teamVisible}
+    <section class="team-view">
+      <TeamBoard {bridge} />
+    </section>
+  {:else if statsVisible}
     <section class="stats" aria-label="统计报表">
       <div class="stats-toolbar">
         <h2>本地使用统计</h2>
@@ -430,6 +445,7 @@
   button,input { min-height:34px; border:1px solid var(--border); border-radius:var(--radius-control); color:var(--text); background:var(--control-surface); font:inherit; }
   button { padding:6px 11px; cursor:pointer; } button:hover:not(:disabled),button.active { background:var(--control-hover); border-color:color-mix(in srgb,var(--accent) 40%,transparent); } button:disabled { opacity:.4; cursor:default; } button:focus-visible,input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   main { min-height:0; flex:1; display:grid; grid-template-columns:minmax(210px,.8fr) minmax(0,1.4fr); }
+  .team-view { min-height:0; flex:1; display:flex; }
   .session-list { min-height:0; overflow:auto; padding:10px; border-right:1px solid var(--border); }
   .session-row { width:100%; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:9px; margin-bottom:5px; padding:10px; text-align:left; background:transparent; border-color:transparent; }
   .session-row.selected { background:var(--raised); border-color:color-mix(in srgb,var(--accent) 34%,transparent); box-shadow:inset 3px 0 var(--accent); }

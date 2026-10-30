@@ -1,4 +1,4 @@
-﻿mod adapters;
+mod adapters;
 mod agent_catalog;
 mod agent_tasks;
 mod approval_review;
@@ -15,6 +15,7 @@ mod inbox_store;
 mod launcher;
 mod logging;
 mod opencode_events;
+mod orchestrator;
 pub mod interface;
 mod process_scan;
 mod session_scan;
@@ -40,6 +41,7 @@ use hotkey::*;
 use inbox_store::*;
 use logging::*;
 use opencode_events::*;
+use orchestrator::*;
 use process_scan::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -520,6 +522,8 @@ struct AppState {
     hooked: Mutex<HashMap<String, HookedSession>>,
     /// 岛内任务模式：`codex exec --json` 的运行实例
     tasks: Mutex<HashMap<String, std::sync::Arc<std::sync::Mutex<agent_tasks::TaskRuntime>>>>,
+    /// 团队任务：主 Agent 规划 → 派发 → 汇总
+    team: TeamState,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -639,6 +643,7 @@ pub fn run() {
             bindings: Mutex::new(load_bindings(&bindings_path())),
             hooked: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
+            team: TeamState::load(),
         })
         .invoke_handler(tauri::generate_handler![
             get_agents,
@@ -674,6 +679,12 @@ pub fn run() {
             start_agent_task,
             list_agent_tasks,
             cancel_agent_task,
+            team_capabilities,
+            team_start_plan,
+            team_get_run,
+            team_list_runs,
+            team_confirm_plan,
+            team_cancel_run,
             reveal_session,
             list_approval_rules,
             add_approval_rule,
@@ -818,6 +829,7 @@ pub fn run() {
     app.run(|app_handle, event| {
         if let tauri::RunEvent::Exit = event {
             if let Some(state) = app_handle.try_state::<AppState>() {
+                orchestrator::shutdown(&state);
                 if let Ok(session) = state.session.lock() {
                     let _ = save_stats(&session.stats, &state.stats_path);
                     let _ = save_daily(&session.daily, &state.daily_path);
