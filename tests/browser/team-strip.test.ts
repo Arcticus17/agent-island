@@ -26,6 +26,13 @@ function task(id: string, state: TeamTask["state"]): TeamTask {
     sessionId: null,
     pendingApproval: null,
     approvalId: null,
+    worktreePath: null,
+    branch: null,
+    baseCommit: null,
+    changedFiles: [],
+    diffStat: null,
+    mergeState: "none",
+    mergeError: null,
   };
 }
 
@@ -46,6 +53,11 @@ function activeRun(): TeamRun {
     plannerSessionId: null,
     budgetUsd: 2,
     spentUsd: 0.12,
+    repoRoot: "C:\\work",
+    baseBranch: "main",
+    baseCommit: "abc123",
+    worktreeMode: true,
+    workspaceWarning: null,
   };
 }
 

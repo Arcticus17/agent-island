@@ -21,6 +21,11 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
   let retryArmed = $state(false);
+  let diffs = $state<Record<string, string>>({});
+  let diffLoading = $state<string | null>(null);
+  let mergeArmed = $state<string | null>(null);
+  let discardArmed = $state<string | null>(null);
+  let taskBusy = $state<string | null>(null);
   let planTasks: TeamPlanTask[] = $state([]);
   let planForRunId: string | null = null;
   let disposed = false;
@@ -72,6 +77,11 @@
 
   function applyRun(next: TeamRun | null): void {
     if (!next) return;
+    if (run && run.id !== next.id) {
+      diffs = {};
+      mergeArmed = null;
+      discardArmed = null;
+    }
     run = next;
     workspace = workspace || next.workspace;
     syncPlan(next);
@@ -192,12 +202,78 @@
     return value.tasks.some((task) => task.state !== "succeeded");
   }
 
+  function shortCommit(value: string | null): string {
+    return value ? value.slice(0, 7) : "";
+  }
+
+  async function ensureDiff(task: TeamTask): Promise<void> {
+    if (!run) return;
+    if (!bridge.teamTaskDiff) {
+      diffs = { ...diffs, [task.id]: "当前构建不支持查看 diff" };
+      return;
+    }
+    if (diffs[task.id] !== undefined) return;
+    diffLoading = task.id;
+    try {
+      diffs = { ...diffs, [task.id]: await bridge.teamTaskDiff(run.id, task.id) };
+    } catch (reason) {
+      diffs = { ...diffs, [task.id]: `读取 diff 失败：${String(reason)}` };
+    } finally {
+      if (diffLoading === task.id) diffLoading = null;
+    }
+  }
+
+  async function mergeTask(task: TeamTask): Promise<void> {
+    if (!run || !bridge.mergeTeamTask) return;
+    if (mergeArmed !== task.id) {
+      mergeArmed = task.id;
+      discardArmed = null;
+      return;
+    }
+    taskBusy = task.id;
+    error = null;
+    try {
+      applyRun(await bridge.mergeTeamTask(run.id, task.id));
+      mergeArmed = null;
+    } catch (reason) {
+      error = String(reason);
+      mergeArmed = null;
+      await refresh();
+    } finally {
+      taskBusy = null;
+    }
+  }
+
+  async function discardTask(task: TeamTask): Promise<void> {
+    if (!run || !bridge.discardTeamTask) return;
+    if (discardArmed !== task.id) {
+      discardArmed = task.id;
+      mergeArmed = null;
+      return;
+    }
+    taskBusy = task.id;
+    error = null;
+    try {
+      applyRun(await bridge.discardTeamTask(run.id, task.id));
+      discardArmed = null;
+    } catch (reason) {
+      error = String(reason);
+      discardArmed = null;
+      await refresh();
+    } finally {
+      taskBusy = null;
+    }
+  }
+
   async function selectRun(id: string): Promise<void> {
     if (!bridge.getTeamRun) return;
     error = null;
     planForRunId = null;
     planTasks = [];
     retryArmed = false;
+    diffs = {};
+    mergeArmed = null;
+    discardArmed = null;
     try {
       applyRun(await bridge.getTeamRun(id));
     } catch (reason) {
@@ -214,6 +290,9 @@
     error = null;
     retryArmed = false;
     budget = "2.00";
+    diffs = {};
+    mergeArmed = null;
+    discardArmed = null;
   }
 
   function removeTask(id: string): void {
@@ -331,7 +410,7 @@
         disabled={busy || !goal.trim() || !workspace.trim()}
         onclick={() => void generate()}
       >{busy ? "正在请主 Agent 拆解…" : "生成计划"}</button>
-      <p class="hint">主 Agent 只出计划；你确认后，岛才会派发次级 Agent 执行。</p>
+      <p class="hint">主 Agent 只出计划；需要 git 仓库（至少一次提交）。确认后每个任务在独立 worktree 执行，主工作区不会被直接修改。</p>
     </section>
   {:else}
     <section class="run-panel" aria-label="团队任务状态">
@@ -344,6 +423,10 @@
         预算 {run.budgetUsd != null ? `$${run.budgetUsd.toFixed(2)}` : "不设上限"}
         · 已用 ${run.spentUsd.toFixed(2)}
       </p>
+      {#if run.worktreeMode}
+        <p class="worktree-note">独立 worktree：{run.baseBranch ?? "HEAD"}@{shortCommit(run.baseCommit)}；主工作区不会被直接修改。</p>
+      {/if}
+      {#if run.workspaceWarning}<p class="warning" role="status">{run.workspaceWarning}</p>{/if}
       {#if run.error}<p class="error" role="alert">{run.error}</p>{/if}
       {#if activePhases.includes(run.phase)}
         <button class="danger ghost" type="button" onclick={() => void cancel()}>取消运行</button>
@@ -417,6 +500,52 @@
               <p class="waiting" role="status">
                 等待在小岛上确认：<code>{task.pendingApproval ?? "危险命令"}</code>
               </p>
+            {/if}
+            {#if task.branch || task.mergeState !== "none"}
+              <div class="worktree-row">
+                {#if task.branch}<code class="branch">{task.branch}</code>{/if}
+                {#if task.changedFiles.length > 0}<span class="file-count">{task.changedFiles.length} 个文件</span>{/if}
+                {#if task.mergeState === "pending"}<span class="merge-state pending">待合并</span>
+                {:else if task.mergeState === "merged"}<span class="merge-state merged">已合并</span>
+                {:else if task.mergeState === "discarded"}<span class="merge-state discarded">已丢弃</span>
+                {:else if task.mergeState === "conflict"}<span class="merge-state conflict">合并冲突</span>{/if}
+              </div>
+            {/if}
+            {#if task.diffStat}<p class="diff-stat">{task.diffStat}</p>{/if}
+            {#if task.changedFiles.length > 0 && task.branch}
+              <details ontoggle={(event) => { if (event.currentTarget.open) void ensureDiff(task); }}>
+                <summary>查看改动（{task.changedFiles.length} 个文件）</summary>
+                {#if diffLoading === task.id}<p class="hint">正在读取 diff…</p>
+                {:else if diffs[task.id] !== undefined}<pre>{diffs[task.id]}</pre>
+                {:else}<p class="hint">展开后读取 diff</p>{/if}
+              </details>
+            {/if}
+            {#if task.mergeError}<p class="task-error">{task.mergeError}</p>{/if}
+            {#if task.mergeState === "pending" && task.changedFiles.length > 0}
+              <div class="merge-actions">
+                {#if task.state === "succeeded"}
+                  <button class="primary" type="button" disabled={taskBusy === task.id} onclick={() => void mergeTask(task)}>
+                    {mergeArmed === task.id ? "确认合并到主工作区" : "合并"}
+                  </button>
+                {:else}
+                  <span class="hint">任务未成功；改动保留在分支，可查看或丢弃。</span>
+                {/if}
+                <button class="ghost" type="button" disabled={taskBusy === task.id} onclick={() => void discardTask(task)}>
+                  {discardArmed === task.id ? "确认丢弃改动" : "丢弃改动"}
+                </button>
+              </div>
+            {:else if task.worktreePath && task.mergeState === "none" && task.state !== "running" && task.state !== "waiting_approval"}
+              <div class="merge-actions">
+                <span class="hint">这个任务没有可合并的改动；可以清理 worktree。</span>
+                <button class="ghost" type="button" disabled={taskBusy === task.id} onclick={() => void discardTask(task)}>
+                  {discardArmed === task.id ? "确认清理 worktree" : "清理 worktree"}
+                </button>
+              </div>
+            {:else if task.mergeState === "conflict"}
+              <div class="merge-actions">
+                <span class="hint">合并冲突已 abort；分支和 worktree 保留，可手动处理或丢弃。</span>
+                <button class="ghost" type="button" disabled={taskBusy === task.id} onclick={() => void discardTask(task)}>丢弃改动</button>
+              </div>
             {/if}
             {#if task.log.length > 0}
               <details>
@@ -521,6 +650,8 @@
   .phase-cancelled { color: var(--text-secondary); }
   .goal { margin-top: 6px; font-size: 12px; line-height: 1.5; }
   .budget-line { margin-top: 4px; color: var(--text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .worktree-note { margin-top: 4px; color: var(--text-secondary); font-size: 10px; line-height: 1.45; }
+  .warning { margin-top: 6px; padding: 6px 8px; border-radius: 7px; color: var(--text-primary); background: color-mix(in srgb, var(--status-waiting) 16%, transparent); font-size: 10px; line-height: 1.45; }
   .retry-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .error { padding: 7px 9px; border-radius: 7px; color: var(--danger-ink); background: var(--danger); font-size: 11px; }
   .plan-summary { color: var(--text-secondary); font-size: 11px; line-height: 1.5; margin-bottom: 8px; }
@@ -541,6 +672,16 @@
   .task-line strong { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .state { color: var(--text-secondary); font-size: 10px; }
   .task-error { margin-top: 4px; color: var(--status-error); font-size: 10px; }
+  .worktree-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .branch { color: var(--text-secondary); font: 9px/1.4 var(--font-mono, Consolas, monospace); overflow-wrap: anywhere; }
+  .file-count { color: var(--text-secondary); font-size: 9px; }
+  .merge-state { padding: 1px 5px; border-radius: 3px; font-size: 9px; font-weight: 600; }
+  .merge-state.pending { color: var(--status-waiting); background: color-mix(in srgb, var(--status-waiting) 16%, transparent); }
+  .merge-state.merged { color: var(--status-done); background: color-mix(in srgb, var(--status-done) 16%, transparent); }
+  .merge-state.discarded { color: var(--text-secondary); background: var(--field); }
+  .merge-state.conflict { color: var(--status-error); background: color-mix(in srgb, var(--status-error) 16%, transparent); }
+  .diff-stat { margin-top: 3px; color: var(--text-secondary); font: 9px/1.45 var(--font-mono, Consolas, monospace); white-space: pre-wrap; }
+  .merge-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 6px; }
   .waiting { margin-top: 5px; padding: 6px 8px; border-radius: 7px; color: var(--text-primary); background: color-mix(in srgb, var(--status-waiting) 16%, transparent); font-size: 10px; line-height: 1.45; }
   .waiting code { font: 10px/1.4 var(--font-mono, Consolas, monospace); word-break: break-all; }
   details { margin-top: 5px; }

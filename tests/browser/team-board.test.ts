@@ -33,6 +33,13 @@ function task(overrides: Partial<TeamTask> = {}): TeamTask {
     sessionId: null,
     pendingApproval: null,
     approvalId: null,
+    worktreePath: null,
+    branch: null,
+    baseCommit: null,
+    changedFiles: [],
+    diffStat: null,
+    mergeState: "none",
+    mergeError: null,
     ...overrides,
   };
 }
@@ -54,6 +61,11 @@ function run(overrides: Partial<TeamRun> = {}): TeamRun {
     plannerSessionId: "session-1",
     budgetUsd: 2,
     spentUsd: 0,
+    repoRoot: "C:\\work",
+    baseBranch: "main",
+    baseCommit: "abc123",
+    worktreeMode: true,
+    workspaceWarning: null,
     ...overrides,
   };
 }
@@ -124,6 +136,27 @@ function harness(initial: TeamRun | null = null) {
     async retryTeamRun(id) {
       calls.push("retry");
       latest = run({ id, phase: "running", tasks: [task({ state: "running" })] });
+      return latest;
+    },
+    async teamTaskDiff() {
+      return "diff --git a/a.txt b/a.txt\n+hello";
+    },
+    async mergeTeamTask(id, taskId) {
+      calls.push("merge");
+      latest = run({
+        id,
+        phase: "succeeded",
+        tasks: [task({ id: taskId, state: "succeeded", mergeState: "merged" })],
+      });
+      return latest;
+    },
+    async discardTeamTask(id, taskId) {
+      calls.push("discard");
+      latest = run({
+        id,
+        phase: "failed",
+        tasks: [task({ id: taskId, state: "failed", mergeState: "discarded" })],
+      });
       return latest;
     },
     async listenTeamRuns() {
@@ -234,5 +267,73 @@ describe("team board", () => {
 
     await waitFor(() => calls.includes("retry"));
     expect(calls).toContain("retry");
+  });
+
+  it("reads the task diff and merges after confirmation", async () => {
+    const initial = run({
+      phase: "succeeded",
+      tasks: [
+        task({
+          state: "succeeded",
+          branch: "agent-island/team-1/t1",
+          worktreePath: "C:\\worktrees\\t1",
+          baseCommit: "abc123",
+          changedFiles: ["a.txt"],
+          diffStat: " a.txt | 1 +",
+          mergeState: "pending",
+        }),
+      ],
+    });
+    const { bridge, calls } = harness(initial);
+    const target = await render(bridge);
+    await waitFor(() => target.textContent?.includes("待合并") === true);
+
+    const diffSummary = [...target.querySelectorAll<HTMLElement>("summary")].find(
+      (summary) => summary.textContent?.includes("查看改动") === true,
+    )!;
+    diffSummary.click();
+    await waitFor(() => target.textContent?.includes("diff --git") === true);
+
+    const merge = [...target.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent?.trim() === "合并",
+    )!;
+    merge.click();
+    await waitFor(() => target.textContent?.includes("确认合并到主工作区") === true);
+    [...target.querySelectorAll<HTMLButtonElement>("button")]
+      .find((candidate) => candidate.textContent?.trim() === "确认合并到主工作区")!
+      .click();
+
+    await waitFor(() => calls.includes("merge"));
+    expect(calls).toContain("merge");
+  });
+
+  it("discards a failed task's worktree after confirmation", async () => {
+    const initial = run({
+      phase: "failed",
+      tasks: [
+        task({
+          state: "failed",
+          branch: "agent-island/team-1/t1",
+          worktreePath: "C:\\worktrees\\t1",
+          baseCommit: "abc123",
+          changedFiles: ["a.txt"],
+          mergeState: "pending",
+        }),
+      ],
+    });
+    const { bridge, calls } = harness(initial);
+    const target = await render(bridge);
+    await waitFor(() => target.textContent?.includes("任务未成功") === true);
+
+    [...target.querySelectorAll<HTMLButtonElement>("button")]
+      .find((candidate) => candidate.textContent?.trim() === "丢弃改动")!
+      .click();
+    await waitFor(() => target.textContent?.includes("确认丢弃改动") === true);
+    [...target.querySelectorAll<HTMLButtonElement>("button")]
+      .find((candidate) => candidate.textContent?.trim() === "确认丢弃改动")!
+      .click();
+
+    await waitFor(() => calls.includes("discard"));
+    expect(calls).toContain("discard");
   });
 });

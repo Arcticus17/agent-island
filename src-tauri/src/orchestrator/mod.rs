@@ -9,6 +9,7 @@
 pub(crate) mod capability;
 pub(crate) mod plan;
 pub(crate) mod runner;
+pub(crate) mod worktree;
 
 use crate::*;
 use plan::{PlanTask, TeamPlan};
@@ -86,6 +87,17 @@ pub(crate) enum TaskState {
     Skipped,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MergeState {
+    #[default]
+    None,
+    Pending,
+    Merged,
+    Discarded,
+    Conflict,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TeamTaskView {
@@ -107,6 +119,20 @@ pub(crate) struct TeamTaskView {
     pub session_id: Option<String>,
     pub pending_approval: Option<String>,
     pub approval_id: Option<String>,
+    #[serde(default)]
+    pub worktree_path: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub base_commit: Option<String>,
+    #[serde(default)]
+    pub changed_files: Vec<String>,
+    #[serde(default)]
+    pub diff_stat: Option<String>,
+    #[serde(default)]
+    pub merge_state: MergeState,
+    #[serde(default)]
+    pub merge_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +157,18 @@ pub(crate) struct TeamRunView {
     /// 已经花掉的 USD（规划 + worker + 汇总）。
     #[serde(default)]
     pub spent_usd: f64,
+    /// git worktree 模式的仓库根、基分支与基提交。
+    #[serde(default)]
+    pub repo_root: Option<String>,
+    #[serde(default)]
+    pub base_branch: Option<String>,
+    #[serde(default)]
+    pub base_commit: Option<String>,
+    #[serde(default)]
+    pub worktree_mode: bool,
+    /// 主工作区脏等需要用户知道、但不阻塞启动的提醒。
+    #[serde(default)]
+    pub workspace_warning: Option<String>,
 }
 
 pub(crate) struct TeamState {
@@ -145,6 +183,7 @@ pub(crate) struct TeamState {
 pub(crate) struct ManagedSession {
     pub run_id: String,
     pub task_id: String,
+    pub worktree_root: PathBuf,
 }
 
 fn team_runs_path() -> PathBuf {
@@ -231,12 +270,19 @@ impl TeamState {
         self.active.lock_recover().values().copied().collect()
     }
 
-    pub(crate) fn register_session(&self, session_id: &str, run_id: &str, task_id: &str) {
+    pub(crate) fn register_session(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        task_id: &str,
+        worktree_root: &Path,
+    ) {
         self.managed_sessions.lock_recover().insert(
             session_id.to_string(),
             ManagedSession {
                 run_id: run_id.to_string(),
                 task_id: task_id.to_string(),
+                worktree_root: worktree_root.to_path_buf(),
             },
         );
     }
@@ -245,15 +291,18 @@ impl TeamState {
         self.managed_sessions.lock_recover().remove(session_id);
     }
 
-    pub(crate) fn is_managed_session(&self, session_id: &str) -> bool {
-        self.managed_sessions.lock_recover().contains_key(session_id)
-    }
-
     pub(crate) fn task_for_session(&self, session_id: &str) -> Option<(String, String)> {
         self.managed_sessions
             .lock_recover()
             .get(session_id)
             .map(|session| (session.run_id.clone(), session.task_id.clone()))
+    }
+
+    pub(crate) fn session_worktree(&self, session_id: &str) -> Option<PathBuf> {
+        self.managed_sessions
+            .lock_recover()
+            .get(session_id)
+            .map(|session| session.worktree_root.clone())
     }
 
     fn update_task(
@@ -446,6 +495,13 @@ fn from_plan_task(task: &PlanTask) -> TeamTaskView {
         session_id: None,
         pending_approval: None,
         approval_id: None,
+        worktree_path: None,
+        branch: None,
+        base_commit: None,
+        changed_files: Vec::new(),
+        diff_stat: None,
+        merge_state: MergeState::None,
+        merge_error: None,
     }
 }
 
@@ -579,13 +635,18 @@ fn worker_settings_path(run_id: &str) -> Result<PathBuf, String> {
     let hook = format!("node \"{}\" --timeout=310000", script.display());
     let settings = serde_json::json!({
         "hooks": {
-            // 只拦 Bash。文件编辑由 acceptEdits 自动放行；如果也挂
-            // PermissionRequest，Write 会先被 hook 拦住等人点，在无人值守的
-            // 团队任务里就会一直"执行中"。
-            "PreToolUse": [{
-                "matcher": "Bash",
-                "hooks": [{ "type": "command", "command": hook }]
-            }]
+            // Bash 用来审批危险命令；文件工具用来阻止 worker 写到 worktree
+            // 之外（worktree 只改 cwd，绝对路径仍然可能命中主工作区）。
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [{ "type": "command", "command": hook.clone() }]
+                },
+                {
+                    "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+                    "hooks": [{ "type": "command", "command": hook.clone() }]
+                }
+            ]
         }
     });
     let path = dir.join("claude-settings.json");
@@ -602,6 +663,7 @@ fn execute_task(
     run_id: &str,
     task: &TeamTaskView,
     workspace: &Path,
+    worktree_root: &Path,
     goal: &str,
     max_budget_usd: Option<f64>,
 ) -> ProcessOutcome {
@@ -651,7 +713,7 @@ fn execute_task(
     };
     let key = active_key(run_id, &task.id);
     let team = &state.team;
-    team.register_session(&session_id, run_id, &task.id);
+    team.register_session(&session_id, run_id, &task.id, worktree_root);
     let outcome = runner::run_claude(&config, |pid| {
         team.active.lock_recover().insert(key.clone(), pid);
     });
@@ -767,6 +829,34 @@ enum Pick {
     None,
 }
 
+fn fail_task_setup(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    run_id: &str,
+    task_id: &str,
+    message: String,
+) {
+    let message = cap_text(&message, 2_000);
+    if let Some(view) = state.team.update(run_id, |run| {
+        if let Some(task) = run.tasks.iter_mut().find(|task| task.id == task_id) {
+            task.state = TaskState::Failed;
+            task.error = Some(message.clone());
+            task.ended_at_ms = Some(epoch_millis());
+        }
+        run.phase = RunPhase::Failed;
+        run.error = Some(format!("准备任务 worktree 失败：{message}"));
+        for task in &mut run.tasks {
+            if task.state == TaskState::Queued {
+                task.state = TaskState::Skipped;
+                task.error = Some("worktree 准备失败，未派发".to_string());
+                task.ended_at_ms = Some(epoch_millis());
+            }
+        }
+    }) {
+        emit_run(app, &view);
+    }
+}
+
 fn run_scheduler(app: tauri::AppHandle, run_id: String) {
     loop {
         let state = app.state::<AppState>();
@@ -779,7 +869,6 @@ fn run_scheduler(app: tauri::AppHandle, run_id: String) {
         ) {
             return;
         }
-        let workspace = PathBuf::from(&run.workspace);
         let goal = run.goal.clone();
         let remaining = run
             .budget_usd
@@ -842,8 +931,63 @@ fn run_scheduler(app: tauri::AppHandle, run_id: String) {
             }
         };
 
-        let session_id = new_uuid();
         let task = run.tasks[index].clone();
+        let Some(repo_root) = run.repo_root.clone() else {
+            fail_task_setup(
+                &app,
+                &state,
+                &run_id,
+                &task.id,
+                "这一轮不是 worktree 模式（旧记录），请新建一轮".to_string(),
+            );
+            return;
+        };
+        let Some(base_commit) = run.base_commit.clone() else {
+            fail_task_setup(
+                &app,
+                &state,
+                &run_id,
+                &task.id,
+                "这一轮缺少基准 commit，请新建一轮".to_string(),
+            );
+            return;
+        };
+        let repo_path = PathBuf::from(&repo_root);
+        let mut repo = match worktree::detect(&repo_path) {
+            Ok(repo) => repo,
+            Err(error) => {
+                fail_task_setup(&app, &state, &run_id, &task.id, error);
+                return;
+            }
+        };
+        repo.head = base_commit;
+        let task_worktree = match worktree::create(&repo, &run_id, &task.id) {
+            Ok(worktree) => worktree,
+            Err(error) => {
+                fail_task_setup(&app, &state, &run_id, &task.id, error);
+                return;
+            }
+        };
+        let relative = Path::new(&run.workspace)
+            .strip_prefix(&repo.root)
+            .unwrap_or(Path::new(""));
+        let task_workspace = if relative.as_os_str().is_empty() {
+            task_worktree.path.clone()
+        } else {
+            task_worktree.path.join(relative)
+        };
+        if !task_workspace.is_dir() {
+            fail_task_setup(
+                &app,
+                &state,
+                &run_id,
+                &task.id,
+                format!("worktree 里找不到工作子目录：{}", task_workspace.display()),
+            );
+            return;
+        }
+
+        let session_id = new_uuid();
         let Some(started_view) = state.team.update(&run_id, |run| {
             if let Some(task) = run.tasks.iter_mut().find(|item| item.id == task.id) {
                 task.state = TaskState::Running;
@@ -854,17 +998,33 @@ fn run_scheduler(app: tauri::AppHandle, run_id: String) {
                 task.log.clear();
                 task.pending_approval = None;
                 task.approval_id = None;
+                task.worktree_path = Some(task_worktree.path.to_string_lossy().into_owned());
+                task.branch = Some(task_worktree.branch.clone());
+                task.base_commit = Some(task_worktree.base_commit.clone());
+                task.changed_files.clear();
+                task.diff_stat = None;
+                task.merge_state = MergeState::None;
+                task.merge_error = None;
             }
         }) else {
             return;
         };
         emit_run(&app, &started_view);
 
-        let outcome = execute_task(&app, &run_id, &task, &workspace, &goal, remaining);
+        let outcome = execute_task(
+            &app,
+            &run_id,
+            &task,
+            &task_workspace,
+            &task_worktree.path,
+            &goal,
+            remaining,
+        );
         let current = state.team.get(&run_id);
         if current.as_ref().is_some_and(|run| run.phase == RunPhase::Cancelled) {
             return;
         }
+        let finalized = worktree::finalize(&task_worktree, &task.title);
         let ended = epoch_millis();
         let (next_state, display, report_error) = worker_report(&outcome);
         let Some(view) = state.team.update(&run_id, |run| {
@@ -883,6 +1043,26 @@ fn run_scheduler(app: tauri::AppHandle, run_id: String) {
                             .then(|| "任务超时，已终止进程树".to_string())
                     });
                 task.log = outcome.log.clone();
+                match &finalized {
+                    Ok(changes) if changes.files.is_empty() => {
+                        task.changed_files.clear();
+                        task.diff_stat = None;
+                        task.merge_state = MergeState::None;
+                        task.merge_error = None;
+                    }
+                    Ok(changes) => {
+                        task.changed_files = changes.files.clone();
+                        task.diff_stat = Some(changes.stat.clone());
+                        task.merge_state = MergeState::Pending;
+                        task.merge_error = None;
+                    }
+                    Err(error) => {
+                        task.changed_files.clear();
+                        task.diff_stat = None;
+                        task.merge_state = MergeState::None;
+                        task.merge_error = Some(format!("收集任务改动失败：{error}"));
+                    }
+                }
             }
             run.spent_usd += outcome.cost_usd.unwrap_or(0.0);
         }) else {
@@ -1001,6 +1181,11 @@ pub(crate) fn team_start_plan(
     }
     let budget_usd = normalize_budget(budget_usd)?;
     let workspace = normalize_workspace(&workspace)?;
+    let repo = worktree::detect(&workspace)?;
+    let workspace_warning = repo.dirty.then(|| {
+        "主工作区有未提交改动；worktree 从当前 HEAD 创建，任务看不到这些改动，合并前需要先提交或暂存"
+            .to_string()
+    });
     let available = capability::available_agent_ids();
     if !available.iter().any(|id| id == "claude") {
         return Err(capability::capabilities()
@@ -1026,6 +1211,11 @@ pub(crate) fn team_start_plan(
         planner_session_id: None,
         budget_usd,
         spent_usd: 0.0,
+        repo_root: Some(repo.root.to_string_lossy().into_owned()),
+        base_branch: Some(repo.branch),
+        base_commit: Some(repo.head),
+        worktree_mode: true,
+        workspace_warning,
     };
     state.team.insert(run.clone());
     emit_run(&app, &run);
@@ -1111,6 +1301,12 @@ pub(crate) fn team_confirm_plan(
     if state.team.active.lock_recover().values().next().is_some() {
         return Err("已有团队任务在运行，请先等它结束或取消".to_string());
     }
+    let workspace = PathBuf::from(&run.workspace);
+    let repo = worktree::detect(&workspace)?;
+    let workspace_warning = repo.dirty.then(|| {
+        "主工作区有未提交改动；worktree 从当前 HEAD 创建，任务看不到这些改动，合并前需要先提交或暂存"
+            .to_string()
+    });
     let allowed = capability::available_agent_ids();
     let plan = TeamPlan {
         summary: run.plan_summary.clone().unwrap_or_default(),
@@ -1125,6 +1321,11 @@ pub(crate) fn team_confirm_plan(
             run.tasks = views;
             run.summary = None;
             run.error = None;
+            run.repo_root = Some(repo.root.to_string_lossy().into_owned());
+            run.base_branch = Some(repo.branch.clone());
+            run.base_commit = Some(repo.head.clone());
+            run.worktree_mode = true;
+            run.workspace_warning = workspace_warning.clone();
         })
         .ok_or_else(|| "团队任务不存在".to_string())?;
     emit_run(&app, &view);
@@ -1149,6 +1350,9 @@ pub(crate) fn team_retry_run(
     if state.team.active.lock_recover().values().next().is_some() {
         return Err("已有任务在运行，请先等它结束或取消".to_string());
     }
+    if run.repo_root.is_none() {
+        return Err("旧运行没有 worktree 信息，请新建一轮".to_string());
+    }
     if run
         .budget_usd
         .is_some_and(|budget| budget - run.spent_usd <= 0.005)
@@ -1158,6 +1362,17 @@ pub(crate) fn team_retry_run(
             run.spent_usd,
             run.budget_usd.unwrap_or(0.0)
         ));
+    }
+    if let Some(repo_root) = run.repo_root.as_deref() {
+        let root = PathBuf::from(repo_root);
+        for task in &run.tasks {
+            if task.state == TaskState::Succeeded {
+                continue;
+            }
+            if let (Some(path), Some(branch)) = (&task.worktree_path, &task.branch) {
+                worktree::cleanup(&root, &PathBuf::from(path), branch);
+            }
+        }
     }
     if run.tasks.iter().all(|task| task.state == TaskState::Succeeded) {
         return Err("这一轮已经全部完成，不需要重试".to_string());
@@ -1183,12 +1398,166 @@ pub(crate) fn team_retry_run(
                 task.session_id = None;
                 task.pending_approval = None;
                 task.approval_id = None;
+                task.worktree_path = None;
+                task.branch = None;
+                task.base_commit = None;
+                task.changed_files.clear();
+                task.diff_stat = None;
+                task.merge_state = MergeState::None;
+                task.merge_error = None;
             }
         })
         .ok_or_else(|| "团队任务不存在".to_string())?;
     emit_run(&app, &view);
     let run_id = id.clone();
     std::thread::spawn(move || run_scheduler(app, run_id));
+    Ok(view)
+}
+
+#[tauri::command]
+pub(crate) fn team_task_diff(
+    state: tauri::State<AppState>,
+    id: String,
+    task_id: String,
+) -> Result<String, String> {
+    let run = state
+        .team
+        .get(&id)
+        .ok_or_else(|| "团队任务不存在".to_string())?;
+    let task = run
+        .tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| "任务不存在".to_string())?;
+    let root = run
+        .repo_root
+        .as_deref()
+        .ok_or_else(|| "这一轮不是 worktree 模式".to_string())?;
+    let base = task
+        .base_commit
+        .as_deref()
+        .or(run.base_commit.as_deref())
+        .ok_or_else(|| "缺少基准 commit".to_string())?;
+    let branch = task
+        .branch
+        .as_deref()
+        .ok_or_else(|| "这个任务没有 worktree 分支".to_string())?;
+    worktree::diff(Path::new(root), base, branch)
+}
+
+#[tauri::command]
+pub(crate) fn team_merge_task(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    id: String,
+    task_id: String,
+) -> Result<TeamRunView, String> {
+    let run = state
+        .team
+        .get(&id)
+        .ok_or_else(|| "团队任务不存在".to_string())?;
+    let task = run
+        .tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| "任务不存在".to_string())?;
+    if task.state != TaskState::Succeeded {
+        return Err("只有已完成的任务才能合并".to_string());
+    }
+    if task.merge_state != MergeState::Pending {
+        return Err("这个任务没有待合并的改动".to_string());
+    }
+    if task.changed_files.is_empty() {
+        return Err("这个任务没有文件改动".to_string());
+    }
+    let root = run
+        .repo_root
+        .as_deref()
+        .ok_or_else(|| "这一轮不是 worktree 模式".to_string())?;
+    let branch = task
+        .branch
+        .as_deref()
+        .ok_or_else(|| "这个任务没有 worktree 分支".to_string())?;
+    if let Err(error) = worktree::merge(Path::new(root), branch) {
+        let conflict = error.contains("合并失败");
+        let view = state.team.update(&id, |run| {
+            if let Some(task) = run.tasks.iter_mut().find(|task| task.id == task_id) {
+                task.merge_state = if conflict {
+                    MergeState::Conflict
+                } else {
+                    MergeState::Pending
+                };
+                task.merge_error = Some(error.clone());
+            }
+        });
+        if let Some(view) = view {
+            emit_run(&app, &view);
+        }
+        return Err(error);
+    }
+    if let Some(path) = task.worktree_path.as_deref() {
+        worktree::cleanup_after_merge(Path::new(root), Path::new(path));
+    }
+    let view = state
+        .team
+        .update(&id, |run| {
+            if let Some(task) = run.tasks.iter_mut().find(|task| task.id == task_id) {
+                task.merge_state = MergeState::Merged;
+                task.merge_error = None;
+                task.worktree_path = None;
+            }
+        })
+        .ok_or_else(|| "团队任务不存在".to_string())?;
+    emit_run(&app, &view);
+    Ok(view)
+}
+
+#[tauri::command]
+pub(crate) fn team_discard_task(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    id: String,
+    task_id: String,
+) -> Result<TeamRunView, String> {
+    let run = state
+        .team
+        .get(&id)
+        .ok_or_else(|| "团队任务不存在".to_string())?;
+    let task = run
+        .tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| "任务不存在".to_string())?;
+    if matches!(
+        task.state,
+        TaskState::Running | TaskState::WaitingApproval | TaskState::Queued
+    ) {
+        return Err("任务还在执行，先取消再丢弃改动".to_string());
+    }
+    if task.merge_state == MergeState::Merged {
+        return Err("已经合并到主工作区，不能丢弃；需要回滚请用 git revert".to_string());
+    }
+    let root = run
+        .repo_root
+        .as_deref()
+        .ok_or_else(|| "这一轮不是 worktree 模式".to_string())?;
+    let path = task.worktree_path.clone();
+    let branch = task.branch.clone();
+    if let (Some(path), Some(branch)) = (path.as_deref(), branch.as_deref()) {
+        worktree::cleanup(Path::new(root), Path::new(path), branch);
+    }
+    let view = state
+        .team
+        .update(&id, |run| {
+            if let Some(task) = run.tasks.iter_mut().find(|task| task.id == task_id) {
+                task.merge_state = MergeState::Discarded;
+                task.merge_error = None;
+                task.worktree_path = None;
+                task.branch = None;
+            }
+        })
+        .ok_or_else(|| "团队任务不存在".to_string())?;
+    emit_run(&app, &view);
     Ok(view)
 }
 
@@ -1269,6 +1638,13 @@ mod tests {
             session_id: None,
             pending_approval: None,
             approval_id: None,
+            worktree_path: None,
+            branch: None,
+            base_commit: None,
+            changed_files: Vec::new(),
+            diff_stat: None,
+            merge_state: MergeState::None,
+            merge_error: None,
         }
     }
 
@@ -1303,15 +1679,15 @@ mod tests {
             active: Mutex::new(HashMap::new()),
             managed_sessions: Mutex::new(HashMap::new()),
         };
-        assert!(!state.is_managed_session("s"));
-        state.register_session("s", "run-1", "task-1");
-        assert!(state.is_managed_session("s"));
+        assert!(state.task_for_session("s").is_none());
+        state.register_session("s", "run-1", "task-1", Path::new("C:\\worktree"));
+        assert!(state.task_for_session("s").is_some());
         assert_eq!(
             state.task_for_session("s"),
             Some(("run-1".to_string(), "task-1".to_string()))
         );
         state.unregister_session("s");
-        assert!(!state.is_managed_session("s"));
+        assert!(state.task_for_session("s").is_none());
     }
 
     #[test]
@@ -1391,6 +1767,11 @@ mod tests {
             planner_session_id: None,
             budget_usd: Some(2.0),
             spent_usd: 0.5,
+            repo_root: None,
+            base_branch: None,
+            base_commit: None,
+            worktree_mode: false,
+            workspace_warning: None,
         };
         let mut value = serde_json::to_value(&view).unwrap();
         value.as_object_mut().unwrap().remove("budgetUsd");

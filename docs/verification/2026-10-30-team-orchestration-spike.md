@@ -187,11 +187,25 @@ Bash  od -c ".../E2E_OK.txt"
 
 主岛团队条与 `open_team` 已在真实 WebView2 里验证：运行中显示进度/待审批，点击后总览切到团队页。
 
-回归：Rust 250 通过（4 个 live 默认忽略）、浏览器 148 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
+回归：Rust 256 通过（4 个 live 默认忽略）、浏览器 150 通过、Node 单元 188 通过；`svelte-check` 0 错误、`npm run build` 通过。3 个真实 Claude live 测试（规划 / worker 写文件 / 汇总）手动跑通。
 
-## 13. 下一步
+## 13. worktree 隔离（第三步）
 
-1. 并行与 worktree 隔离：并发上限、每任务独立 worktree、合并/回滚。
+真实 git 仓库端到端（临时 repo，一次提交）：
+
+1. 团队页填目标/仓库/预算 → 计划 → 确认；任务在 `~/.agent-island/team-runs/<run>/worktrees/<task>` 的独立分支 `agent-island/<run>/<task>` 上执行。
+2. 任务结束后检查：**主工作区没有 `WORKTREE_OK.txt`**，`git worktree list` 能看到任务 worktree；任务记录有 branch、changedFiles、diffStat。
+3. 团队页展开「查看改动」能看到包含 `WORKTREE_OK` 的 diff；点「合并」二次确认后，主工作区出现文件，`git status` 干净，`git worktree list` 只剩主工作区，任务状态 `merged`。
+4. 单元测试覆盖：非 git 拒绝、主工作区脏时拒绝合并、worktree 创建/提交/合并/清理、分支名安全化。
+5. 第一轮 worktree E2E 里 `git rev-parse` / `git worktree list` / `printf` 仍触发了审批；已把这些只读前缀加入分类器（`2>&1` 也按无害重定向处理），单测覆盖。
+6. 文件路径边界：worker 的 Edit/Write 走 PreToolUse 校验，只允许落在自己的 worktree 内；绝对路径、`..` 逃逸会被 deny。单测覆盖 inside / `../outside` / 绝对 outside。
+7. 冲突：两个同基任务改同一文件时，第二个 merge 失败并 abort，主工作区分支保留；单测覆盖。
+
+当前仍是串行执行：依赖任务不会并行；并行独立任务留到下一步。worktree 合并是手动的，不自动合并。
+
+## 14. 下一步
+
+1. 独立任务并行（worktree 已具备）：只并行无依赖任务，合并仍由用户决定。
 2. 多轮重规划、失败任务改派（Codex 接入后才有第二个负责人）。
 3. Codex 适配器（等后端可达后再验收）、自定义 Agent 的 dispatch 模板。
 4. 视觉回归基线、混合 DPI、多显示器与安装包验收。

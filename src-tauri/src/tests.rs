@@ -1719,6 +1719,9 @@ fn classify_allows_read_only_verification_commands() {
     assert!(classify_command(
         "find . -name delete_me.txt 2>/dev/null; echo done"
     ));
+    assert!(classify_command("git rev-parse --show-toplevel"));
+    assert!(classify_command("git worktree list"));
+    assert!(classify_command("printf 'bytes: ' && wc -c file 2>&1"));
     assert!(!classify_command("rm -rf build && echo ok"));
     assert!(!classify_command("echo ok > file.txt"));
     assert!(!classify_command("echo ok | sh"));

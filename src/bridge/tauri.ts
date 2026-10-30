@@ -484,6 +484,15 @@ export function createTauriBridge(): AgentIslandBridge {
     async retryTeamRun(id) {
       return await invoke<TeamRun>("team_retry_run", { id });
     },
+    async teamTaskDiff(id, taskId) {
+      return await invoke<string>("team_task_diff", { id, taskId });
+    },
+    async mergeTeamTask(id, taskId) {
+      return await invoke<TeamRun>("team_merge_task", { id, taskId });
+    },
+    async discardTeamTask(id, taskId) {
+      return await invoke<TeamRun>("team_discard_task", { id, taskId });
+    },
     async listenTeamRuns(handler) {
       return await listen<TeamRun>("team-run", (event) => handler(event.payload));
     },

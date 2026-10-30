@@ -29,7 +29,8 @@ pub(crate) fn classify_command(command: &str) -> bool {
         .to_lowercase()
         .replace("2>/dev/null", "")
         .replace("2>nul", "")
-        .replace(">/dev/null", "");
+        .replace(">/dev/null", "")
+        .replace("2>&1", "");
     if ["|", "`", "$(", ">", "<"].iter().any(|token| cleaned.contains(token)) {
         return false;
     }
@@ -121,6 +122,10 @@ fn classify_single_command(command: &str) -> bool {
         "git branch",
         "git remote",
         "git show",
+        "git rev-parse",
+        "git worktree list",
+        "git config --get",
+        "printf ",
         "git --version",
         "git -v",
         "node --version",
@@ -706,14 +711,47 @@ pub(crate) fn handle_hook_conn(mut stream: std::net::TcpStream, app: tauri::AppH
             // 但任务会进入"等待审批"，小岛上的审批卡负责真正的决定。
             let team_task = state.team.task_for_session(&session_id);
             if team_task.is_some() {
-                let file_edit = matches!(tool.as_str(), "Edit" | "Write" | "MultiEdit");
-                if file_edit || classify_command(&command) {
+                let file_edit =
+                    matches!(tool.as_str(), "Edit" | "Write" | "MultiEdit" | "NotebookEdit");
+                if file_edit {
+                    let file_path = tool_input
+                        .get("file_path")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let inside = state
+                        .team
+                        .session_worktree(&session_id)
+                        .is_some_and(|root| crate::orchestrator::worktree::path_within(&root, file_path));
+                    if inside {
+                        write_http_json(
+                            &mut stream,
+                            "200 OK",
+                            &serde_json::json!({
+                                "decision": "allow",
+                                "reason": "团队任务：文件在 worktree 内，自动放行",
+                            })
+                            .to_string(),
+                        );
+                        return;
+                    }
+                    write_http_json(
+                        &mut stream,
+                        "200 OK",
+                        &serde_json::json!({
+                            "decision": "deny",
+                            "reason": "团队任务只能修改自己的 worktree 内的文件；主工作区不被允许",
+                        })
+                        .to_string(),
+                    );
+                    return;
+                }
+                if classify_command(&command) {
                     write_http_json(
                         &mut stream,
                         "200 OK",
                         &serde_json::json!({
                             "decision": "allow",
-                            "reason": "团队任务：只读命令或文件编辑自动放行",
+                            "reason": "团队任务：只读命令自动放行",
                         })
                         .to_string(),
                     );

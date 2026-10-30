@@ -448,6 +448,8 @@ export type TeamTaskState =
   | "cancelled"
   | "skipped";
 
+export type TeamMergeState = "none" | "pending" | "merged" | "discarded" | "conflict";
+
 export interface TeamCapability {
   id: string;
   name: string;
@@ -489,6 +491,13 @@ export interface TeamTask {
   sessionId: string | null;
   pendingApproval: string | null;
   approvalId: string | null;
+  worktreePath: string | null;
+  branch: string | null;
+  baseCommit: string | null;
+  changedFiles: string[];
+  diffStat: string | null;
+  mergeState: TeamMergeState;
+  mergeError: string | null;
 }
 
 export interface TeamRun {
@@ -508,6 +517,11 @@ export interface TeamRun {
   /** 本轮 USD 预算；null 表示不设上限（旧记录）。 */
   budgetUsd: number | null;
   spentUsd: number;
+  repoRoot: string | null;
+  baseBranch: string | null;
+  baseCommit: string | null;
+  worktreeMode: boolean;
+  workspaceWarning: string | null;
 }
 
 export interface AgentStatsRow {
@@ -619,6 +633,12 @@ export interface AgentIslandBridge {
   cancelTeamRun?(id: string): Promise<TeamRun>;
   /** 把未完成的任务重新排队执行（已成功的任务不重跑）。 */
   retryTeamRun?(id: string): Promise<TeamRun>;
+  /** 查看某个任务 worktree 分支相对基准提交的 diff。 */
+  teamTaskDiff?(id: string, taskId: string): Promise<string>;
+  /** 把任务分支合并回主工作区（要求主工作区干净）。 */
+  mergeTeamTask?(id: string, taskId: string): Promise<TeamRun>;
+  /** 丢弃任务 worktree 与分支，保留任务记录。 */
+  discardTeamTask?(id: string, taskId: string): Promise<TeamRun>;
   listenTeamRuns?(handler: (run: TeamRun) => void): Promise<() => void>;
 }
 

@@ -67,6 +67,17 @@
 - 规划、worker、汇总三次调用都计入同一个 `spent_usd`；超预算后停止派发未开始的任务，重试也受剩余预算约束。
 - 不做自动充值、不自动降级模型：预算不够就明确失败，让用户提高预算或新建一轮。
 
+## 第三步：worktree 隔离（同日）
+
+预算之后做 worktree，而不是先做并行：
+
+- 每个任务从确认时的 HEAD 创建独立 `agent-island/<run>/<task>` 分支和 worktree；worker 只改 worktree，主工作区不动。
+- 任务结束把 worktree 里的改动提交到任务分支，团队页按任务查看 diff，手动「合并」或「丢弃」。
+- 合并要求主工作区干净；冲突时 `git merge --abort`，保留分支/worktree 供人工处理。
+- 非 git 工作区直接拒绝；主工作区有未提交改动时启动会警告（任务看不到这些改动），合并也会被拒绝。
+- worktree 只改 cwd，`Write` 仍可能用绝对路径写主工作区；因此 Edit/Write 的 PreToolUse 额外校验路径必须落在任务 worktree 内，`..`/绝对路径逃逸直接拒绝。
+- **先保持串行**：依赖任务不能并行；并行独立任务、merge 顺序与冲突策略是下一步。
+
 ## 参考
 
 - [Curating queues beats approving actions — WorkOS](https://webflow.workos.com/blog/curating-queues-beats-approving-actions)
