@@ -78,7 +78,20 @@ npm run tauri build
 
 旧测试密钥仍保留在本机用于回滚排查，但不再用于新的发布；1.9.1 的旧 `.sig` 不能用于 1.9.2。
 
-`latest.json` 仍由 CI 的 `tauri-action` 生成，本地构建只产出 `.sig`。CI Secrets 更新后，发布 1.9.2 才能让 1.9.2+ 的自动更新链路工作。
+`latest.json` 仍由 CI 的 `tauri-action` 生成，本地构建只产出 `.sig`。
+
+## GitHub Release v1.9.2
+
+Secrets 更新后推送 `v1.9.2` tag，Release workflow `41065219045` **成功完成**（13m41s）：
+
+- 类型检查、Rust/旧前端/单元/浏览器回归通过
+- 视觉比对在 CI runner 上报告了若干 4–5997 像素差异（字体渲染环境不同）；该步骤按设计是 report-only，不阻断发布
+- 构建并发布了非 draft、非 prerelease 的 `v1.9.2` Release
+- 资产：NSIS、MSI、两个 `.sig`、`latest.json`
+- `latest.json` version=1.9.2；其 MSI 签名 key id 为 `c733d80c8fff663b`（minisign 小端字节序），对应新公钥 `3B66FF8F0CD833C7`
+- 本地 1.9.2 安装包签名已用 `minisign-verify` 对新公钥做密码学校验，返回 `signature_ok`
+
+Release 地址：`https://github.com/Arcticus17/agent-island/releases/tag/v1.9.2`。
 
 ## 干净机器验收清单（未执行）
 
@@ -110,7 +123,8 @@ npm run tauri build
 - 团队页/团队条的关键视觉状态已有可回归基线，21 个视觉用例通过。
 - 1.9.2 NSIS/MSI 可构建、MSI 可非破坏性展开、release exe 可启动。
 - 使用新生产密钥后 `tauri build` 退出码 0，NSIS/MSI 两个 `.sig` 均生成；旧测试密钥退役。
-- 1.9.2 更新签名公钥已切换；1.9.1 及更早版本需手动重装 1.9.2，CI Secrets 仍需人工更新。
+- 1.9.2 更新签名公钥已切换；1.9.1 及更早版本需手动重装 1.9.2。
+- GitHub Release `v1.9.2` 已发布，CI Secrets 已更新，`latest.json` 签名 key id 与新公钥匹配。
 - 安装包仍没有 Authenticode 签名，Windows 上可能出现 SmartScreen“未知发布者”。
 - `latest.json` 由 CI 的 `tauri-action` 生成，本地构建不产出完整更新清单。
 - 干净机器安装、混合 DPI、多显示器、原生 WebView2 均**未验证**，不能写成已通过。

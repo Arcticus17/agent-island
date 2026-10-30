@@ -61,7 +61,7 @@
 
 ## 发布与验收
 
-仓库当前版本为 1.9.2（更新签名密钥轮换版本），安装包由 GitHub Actions 自动构建并发布。1.9.1 及更早版本使用旧更新密钥，不能自动升级到 1.9.2，需要手动重装；1.9.2 之后恢复自动更新。按[公开发布适配门槛](docs/verification/public-release-compatibility.md)口径，在完成干净环境、混合 DPI、多显示器与安装/卸载验收前仍属**测试版**。
+仓库当前版本为 1.9.2（更新签名密钥轮换版本），已发布 [Release v1.9.2](https://github.com/Arcticus17/agent-island/releases/tag/v1.9.2)，安装包由 GitHub Actions 自动构建并发布。1.9.1 及更早版本使用旧更新密钥，不能自动升级到 1.9.2，需要手动重装；1.9.2 之后恢复自动更新。按[公开发布适配门槛](docs/verification/public-release-compatibility.md)口径，在完成干净环境、混合 DPI、多显示器与安装/卸载验收前仍属**测试版**。
 
 本项目面向其他用户分发，不应依赖开发者本机环境。门槛清单覆盖干净系统、普通权限、中文/空格路径、CLI 安装方式、混合 DPI、多屏和升级卸载；未实测的系统与架构不列为已支持。实测记录见 [docs/verification/](docs/verification/)，索引在 [验证记录索引](docs/verification/README.md)。
 

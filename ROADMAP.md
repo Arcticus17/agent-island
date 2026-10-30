@@ -120,7 +120,7 @@
 - 入口：主岛展开态团队条（进度/待审批）→ 总览团队页；`open_team` 命令
 - 汇总与持久化：主 Agent 汇总、`~/.agent-island/team-runs.json` 原子写、重启把中断任务标失败
 - 进程隔离：团队 worker/验收 pid 从主岛快照过滤，应用退出 `/T /F` 清理
-- 发布硬化：团队页/团队条 5 个视觉基线（计划/验收/风险/依赖合并/团队条），`test:visual` 21 个用例通过；1.9.2 NSIS/MSI 可构建、MSI 可管理展开、release exe 可启动；已轮换到新生产 updater 密钥，构建退出码 0、两个 `.sig` 生成；安装包仍无 Authenticode 签名；干净机器/混合 DPI/多显示器未验；CI Secrets 待人工更新
+- 发布硬化：团队页/团队条 5 个视觉基线（计划/验收/风险/依赖合并/团队条），`test:visual` 21 个用例通过；1.9.2 NSIS/MSI 可构建、MSI 可管理展开、release exe 可启动；已轮换到新生产 updater 密钥并更新 CI Secrets，Release workflow `41065219045` 成功，`v1.9.2` 已发布且两个 `.sig`/`latest.json` 使用新密钥；安装包仍无 Authenticode 签名；干净机器/混合 DPI/多显示器未验
 - 真实端到端：允许→完成、拒绝→失败→重试→完成、worktree 隔离→merge、双任务并发→逐个 merge、两轮（A→合并→B）、依赖链（A→B）、验收通过/失败均跑通；详情见 [验证记录](docs/verification/2026-10-30-team-orchestration-spike.md)
 - 设计依据：[第一步设计：审批、状态与入口](docs/research/2026-10-30-team-orchestration-first-step.md)
 - 下一步：Codex/自定义 Agent 适配、安装包签名与干净机器验收、混合 DPI/原生 WebView2 验收、自动合并（可选）
