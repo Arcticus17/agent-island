@@ -91,6 +91,7 @@ function harness(initial: TeamRun | null = null) {
   const calls: string[] = [];
   const budgets: Array<number | null | undefined> = [];
   const parallelisms: Array<number | undefined> = [];
+  const riskyConfirmations: boolean[] = [];
   const bridge: AgentIslandBridge = {
     async getSnapshot() {
       throw new Error("not used");
@@ -122,8 +123,13 @@ function harness(initial: TeamRun | null = null) {
     async listTeamRuns() {
       return latest ? [latest] : [];
     },
-    async confirmTeamPlan(id, tasks: TeamPlanTask[]) {
+    async confirmTeamPlan(
+      id,
+      tasks: TeamPlanTask[],
+      allowRiskyVerification?: boolean,
+    ) {
       calls.push("confirm");
+      riskyConfirmations.push(allowRiskyVerification ?? false);
       latest = run({
         id,
         phase: "running",
@@ -135,10 +141,21 @@ function harness(initial: TeamRun | null = null) {
             prompt: entry.prompt,
             dependsOn: entry.depends_on,
             acceptance: entry.acceptance,
+            verifyCommand: entry.verify_command || null,
           }),
         ),
       });
       return latest;
+    },
+    async checkTeamVerification(tasks) {
+      return tasks
+        .filter((entry) => entry.verify_command.trim().startsWith("rm "))
+        .map((entry) => ({
+          taskId: entry.id,
+          taskTitle: entry.title,
+          command: entry.verify_command,
+          reason: "会删除文件",
+        }));
     },
     async cancelTeamRun(id) {
       calls.push("cancel");
@@ -187,7 +204,7 @@ function harness(initial: TeamRun | null = null) {
       return () => {};
     },
   };
-  return { bridge, calls, budgets, parallelisms, current: () => latest };
+  return { bridge, calls, budgets, parallelisms, riskyConfirmations, current: () => latest };
 }
 
 async function waitFor(check: () => boolean, timeoutMs = 1_500) {
@@ -552,5 +569,28 @@ describe("team board", () => {
     const target = await render(harness(initial).bridge);
     await waitFor(() => target.textContent?.includes("验收：") === true);
     expect(target.textContent).toContain("echo OK");
+  });
+
+  it("asks for a second confirmation before a risky verification command", async () => {
+    const initial = run({
+      phase: "awaiting_plan",
+      tasks: [task({ verifyCommand: "rm -rf build" })],
+    });
+    const { bridge, calls, riskyConfirmations } = harness(initial);
+    const target = await render(bridge);
+    await waitFor(() => target.textContent?.includes("确认并执行") === true);
+
+    [...target.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "确认并执行")!
+      .click();
+    await waitFor(() => target.textContent?.includes("验收命令需要再次确认") === true);
+    expect(calls).not.toContain("confirm");
+    expect(target.textContent).toContain("rm -rf build");
+
+    [...target.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "仍然执行")!
+      .click();
+    await waitFor(() => calls.includes("confirm"));
+    expect(riskyConfirmations[0]).toBe(true);
   });
 });

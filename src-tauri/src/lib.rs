@@ -689,6 +689,7 @@ pub fn run() {
             team_continue_run,
             team_get_run,
             team_list_runs,
+            team_verification_risks,
             team_confirm_plan,
             team_retry_run,
             team_task_diff,

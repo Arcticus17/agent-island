@@ -36,6 +36,7 @@ import {
   type TeamCapability,
   type TeamPlanTask,
   type TeamRun,
+  type VerificationRisk,
 } from "./types";
 
 function commandInvocation(command: AgentCommand): {
@@ -484,8 +485,19 @@ export function createTauriBridge(): AgentIslandBridge {
     async listTeamRuns() {
       return await invoke<TeamRun[]>("team_list_runs");
     },
-    async confirmTeamPlan(id, tasks: TeamPlanTask[]) {
-      return await invoke<TeamRun>("team_confirm_plan", { id, tasks });
+    async confirmTeamPlan(
+      id: string,
+      tasks: TeamPlanTask[],
+      allowRiskyVerification?: boolean,
+    ) {
+      return await invoke<TeamRun>("team_confirm_plan", {
+        id,
+        tasks,
+        allowRiskyVerification: allowRiskyVerification ?? false,
+      });
+    },
+    async checkTeamVerification(tasks: TeamPlanTask[]) {
+      return await invoke<VerificationRisk[]>("team_verification_risks", { tasks });
     },
     async cancelTeamRun(id) {
       return await invoke<TeamRun>("team_cancel_run", { id });

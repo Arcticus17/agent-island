@@ -1651,11 +1651,19 @@ pub(crate) fn team_continue_run(
 }
 
 #[tauri::command]
+pub(crate) fn team_verification_risks(
+    tasks: Vec<PlanTask>,
+) -> Vec<verification::VerificationRisk> {
+    verification::risks(&tasks)
+}
+
+#[tauri::command]
 pub(crate) fn team_confirm_plan(
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
     id: String,
     tasks: Vec<PlanTask>,
+    allow_risky_verification: Option<bool>,
 ) -> Result<TeamRunView, String> {
     let run = state
         .team
@@ -1670,6 +1678,7 @@ pub(crate) fn team_confirm_plan(
     if state.team.active.lock_recover().values().next().is_some() {
         return Err("已有团队任务在运行，请先等它结束或取消".to_string());
     }
+    verification::ensure_allowed(&tasks, allow_risky_verification.unwrap_or(false))?;
     let workspace = PathBuf::from(&run.workspace);
     let repo = worktree::detect(&workspace)?;
     let workspace_warning = repo.dirty.then(|| {

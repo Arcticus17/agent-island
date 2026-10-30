@@ -8,6 +8,7 @@
     TeamRunPhase,
     TeamTask,
     TeamTaskState,
+    VerificationRisk,
   } from "../../bridge/types";
 
   let { bridge }: { bridge: AgentIslandBridge } = $props();
@@ -21,6 +22,8 @@
   let parallelism = $state("2");
   let followupOpen = $state(false);
   let followupInstruction = $state("");
+  let verificationRisks = $state<VerificationRisk[]>([]);
+  let riskyConfirmOpen = $state(false);
   let followupBudget = $state("");
   let followupParallelism = $state("");
   let busy = $state(false);
@@ -89,6 +92,8 @@
       discardArmed = null;
       followupOpen = false;
       followupInstruction = "";
+      riskyConfirmOpen = false;
+      verificationRisks = [];
     }
     run = next;
     workspace = workspace || next.workspace;
@@ -174,18 +179,45 @@
     }
   }
 
-  async function confirm(): Promise<void> {
+  async function confirm(allowRisky = false): Promise<void> {
     if (busy || !run || !bridge.confirmTeamPlan) return;
     error = null;
+    if (!allowRisky && bridge.checkTeamVerification) {
+      busy = true;
+      try {
+        const risks = await bridge.checkTeamVerification(planTasks);
+        if (risks.length > 0) {
+          verificationRisks = risks;
+          riskyConfirmOpen = true;
+          busy = false;
+          return;
+        }
+      } catch (reason) {
+        error = String(reason);
+        busy = false;
+        return;
+      }
+    }
     busy = true;
     try {
-      const next = await bridge.confirmTeamPlan(run.id, planTasks);
+      const next = await bridge.confirmTeamPlan(run.id, planTasks, allowRisky);
+      riskyConfirmOpen = false;
+      verificationRisks = [];
       applyRun(next);
     } catch (reason) {
       error = String(reason);
     } finally {
       busy = false;
     }
+  }
+
+  function closeRisks(): void {
+    riskyConfirmOpen = false;
+    verificationRisks = [];
+  }
+
+  async function confirmRisks(): Promise<void> {
+    await confirm(true);
   }
 
   async function cancel(): Promise<void> {
@@ -397,6 +429,8 @@
     discardArmed = null;
     followupOpen = false;
     followupInstruction = "";
+    riskyConfirmOpen = false;
+    verificationRisks = [];
     try {
       applyRun(await bridge.getTeamRun(id));
     } catch (reason) {
@@ -419,6 +453,8 @@
     discardArmed = null;
     followupOpen = false;
     followupInstruction = "";
+    riskyConfirmOpen = false;
+    verificationRisks = [];
   }
 
   function removeTask(id: string): void {
@@ -634,6 +670,29 @@
             {busy ? "正在开始…" : "确认并执行"}
           </button>
         </div>
+        {#if riskyConfirmOpen}
+          <section class="risk-panel" aria-label="高风险验收命令">
+            <h3>验收命令需要再次确认</h3>
+            <p class="hint">
+              这些命令会以当前用户权限在任务 worktree 内执行，不是沙箱；确认后才会开始派发。
+            </p>
+            <ul>
+              {#each verificationRisks as risk (risk.taskId)}
+                <li>
+                  <strong>{risk.taskTitle}</strong>
+                  <code>{risk.command}</code>
+                  <span>{risk.reason}</span>
+                </li>
+              {/each}
+            </ul>
+            <div class="plan-actions">
+              <button class="ghost" type="button" onclick={closeRisks}>返回修改</button>
+              <button class="primary" type="button" disabled={busy} onclick={() => void confirmRisks()}>
+                {busy ? "正在开始…" : "仍然执行"}
+              </button>
+            </div>
+          </section>
+        {/if}
       </section>
     {:else}
       <section class="tasks" aria-label="任务列表">
@@ -925,6 +984,12 @@
   .verify-badge.passed { color: var(--status-done); background: color-mix(in srgb, var(--status-done) 14%, transparent); }
   .verify-badge.failed { color: var(--danger-ink); background: var(--danger); }
   .verify-command { display: block; margin-top: 4px; padding: 5px 7px; border-radius: 5px; background: var(--field); font-size: 10px; white-space: pre-wrap; word-break: break-word; }
+  .risk-panel { margin-top: 9px; padding: 10px; border: 1px solid var(--danger-ink); border-radius: var(--radius-card, 10px); background: var(--danger); display: flex; flex-direction: column; gap: 7px; }
+  .risk-panel h3 { margin: 0; color: var(--danger-ink); font-size: 11.5px; }
+  .risk-panel ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 5px; }
+  .risk-panel li { color: var(--text-primary); font-size: 10.5px; line-height: 1.45; }
+  .risk-panel code { display: inline-block; margin: 2px 0; padding: 2px 5px; border-radius: 4px; background: var(--field); word-break: break-word; }
+  .risk-panel li span { display: block; color: var(--danger-ink); }
   .history { display: flex; flex-direction: column; gap: 4px; }
   .history-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; width: 100%; text-align: left; background: transparent; border-color: transparent; }
   .history-row.selected { background: var(--surface-raised); border-color: var(--border-subtle); }

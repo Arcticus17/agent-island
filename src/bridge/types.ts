@@ -474,6 +474,13 @@ export interface TeamPlanTask {
   verify_command: string;
 }
 
+export interface VerificationRisk {
+  taskId: string;
+  taskTitle: string;
+  command: string;
+  reason: string;
+}
+
 export interface TaskVerification {
   command: string;
   passed: boolean;
@@ -659,7 +666,13 @@ export interface AgentIslandBridge {
   getTeamRun?(id: string): Promise<TeamRun | null>;
   listTeamRuns?(): Promise<TeamRun[]>;
   /** 确认（可编辑的）计划并开始执行。 */
-  confirmTeamPlan?(id: string, tasks: TeamPlanTask[]): Promise<TeamRun>;
+  confirmTeamPlan?(
+    id: string,
+    tasks: TeamPlanTask[],
+    allowRiskyVerification?: boolean,
+  ): Promise<TeamRun>;
+  /** 检查计划里的验收命令风险；高风险需要再次确认。 */
+  checkTeamVerification?(tasks: TeamPlanTask[]): Promise<VerificationRisk[]>;
   cancelTeamRun?(id: string): Promise<TeamRun>;
   /** 把未完成的任务重新排队执行（已成功的任务不重跑）。 */
   retryTeamRun?(id: string): Promise<TeamRun>;
