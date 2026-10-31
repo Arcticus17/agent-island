@@ -2548,7 +2548,6 @@ import TeamStrip from "../components/team/TeamStrip.svelte";
   .cards-region > .empty,
   .cards-region > .layout-persistence-status { margin-inline: 14px; }
   .adaptive-details.terminal-max .diagnostics-drawer,
-  .adaptive-details.terminal-max .composer-slot,
   .adaptive-details.terminal-max .session-picker,
   .adaptive-details.terminal-max .cards-region,
   .adaptive-details.terminal-max .refresh-note.note { display: none; }

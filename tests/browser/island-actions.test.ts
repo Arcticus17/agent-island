@@ -1582,6 +1582,11 @@ describe("island terminal maximize", () => {
     expect(
       target.querySelector('[data-testid="terminal-screen"]')?.classList.contains("maximized"),
     ).toBe(true);
+    // 最大化终端不能把指令输入框一起藏掉
+    const composer = target.querySelector<HTMLElement>('[data-testid="prompt-composer"]');
+    expect(composer).not.toBeNull();
+    expect(getComputedStyle(composer!).display).not.toBe("none");
+    expect(composer!.getBoundingClientRect().height).toBeGreaterThan(0);
     // 放大时至少请求过一次窗口尺寸调整（宽度/高度由宿主决定）
     await waitFor(() => harness.resizeCalls().length > 0);
 

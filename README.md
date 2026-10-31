@@ -11,7 +11,7 @@
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![Downloads](https://img.shields.io/github/downloads/Arcticus17/agent-island/total)](https://github.com/Arcticus17/agent-island/releases/latest)
 
-**v1.10.0 测试版** · Windows 10/11 x64 · 安装包由 GitHub Actions 构建并签名更新
+**v1.10.1 测试版** · Windows 10/11 x64 · 安装包由 GitHub Actions 构建并签名更新
 
 </div>
 
@@ -61,7 +61,7 @@
 | `Agent.Island_<version>_x64-setup.exe` | NSIS 安装器，普通用户推荐 |
 | `Agent.Island_<version>_en-US.msi` | MSI 安装包，适合企业分发 |
 
-`<version>` 是版本号，例如 `Agent.Island_1.10.0_x64-setup.exe`。
+`<version>` 是版本号，例如 `Agent.Island_1.10.1_x64-setup.exe`。
 
 > **EXE 和 MSI 二选一，不要交叉覆盖。** 两种安装器的身份和升级机制不同，手动用另一种格式覆盖时可能要求先卸载旧版；应用内自动更新不受影响。
 >
@@ -69,7 +69,7 @@
 
 ### 自动更新
 
-1.9.2 及更新版本可以在应用内检查更新；1.9.1 及更早版本使用旧更新密钥，需要手动重装一次 1.9.2 或更新版本。1.9.2 → 1.9.4 的自动更新已经在 Windows 11 虚拟机中验证；1.9.4 → 1.10.0 是下一次发布验证项。
+1.9.2 及更新版本可以在应用内检查更新；1.9.1 及更早版本使用旧更新密钥，需要手动重装一次 1.9.2 或更新版本。1.9.2 → 1.9.4 的自动更新已经在 Windows 11 虚拟机中验证；1.9.4 → 1.10.x 是下一次发布验证项。
 
 ## 快速开始
 
@@ -95,7 +95,7 @@
 - **团队 worker**支持 Claude Code 和 Codex CLI；主 Agent 可选 Claude Code / Codex CLI。
 - Codex worker 在 `workspace-write` 沙箱里运行，没有岛内审批；只返回 token 用量，不返回 USD 成本，团队预算只累计 Claude 成本。
 - Codex 主 Agent 用 `codex exec --output-schema` 规划；Codex 对 schema 要求更严格，计划的每个字段（含 `verify_command`）都必须出现在 `required` 里。
-- Codex worker 和 Codex 主 Agent 均已包含在 v1.10.0。
+- Codex worker 和 Codex 主 Agent 均已包含在 v1.10.x。
 - Codex 桌面端实时任务暂不在接入范围；只能手动查看本地记录，不会用历史日志冒充当前任务。
 
 ### 状态与通知

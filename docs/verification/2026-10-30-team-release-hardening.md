@@ -148,6 +148,15 @@ Release 地址：`https://github.com/Arcticus17/agent-island/releases/tag/v1.9.4
 - 视觉比对在 CI runner 上仍报告 4–5997 像素差异（字体渲染环境不同）；按设计 report-only，不阻断发布
 - 1.9.4 → 1.10.0 的实际自动更新尚未执行
 
+## GitHub Release v1.10.1
+
+1.10.1 修复终端最大化时指令输入框被隐藏：
+
+- `terminal-max` 的布局原本把 `.composer-slot` 整个 `display:none`；现在只隐藏诊断、会话选择、卡片区，保留 prompt composer
+- 新增浏览器回归：最大化后 `prompt-composer` 仍存在、`display` 不为 none、高度大于 0
+- 本机 720×993 实机截图确认输入框可见
+- Release workflow 待 tag 推送后记录
+
 ## 干净机器验收清单（部分执行）
 
 以下项目需要一台干净的 Windows 11 x64 虚拟机；本次已做覆盖安装和启动，其余仍未完成：
