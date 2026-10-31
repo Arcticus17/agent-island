@@ -134,6 +134,17 @@ VM 确认最小/最大不再闪烁后，推送 `v1.9.4` tag，Release workflow `
 
 Release 地址：`https://github.com/Arcticus17/agent-island/releases/tag/v1.9.4`。
 
+## GitHub Release v1.10.0
+
+1.10.0 将 Codex CLI 接入团队任务：
+
+- Codex 可作为次级 worker，也可作为主 Agent 规划；默认主 Agent 仍是 Claude
+- Codex 计划 schema 的每个属性都放入 `required`（Codex 比 Claude 严格）
+- 本机已通过 Codex 主 Agent 规划 → Claude worker → Codex 汇总 → 手动合并
+- Codex worker 无岛内审批、不返回 USD 成本；预算只累计 Claude 成本
+- 本地 1.10.0 NSIS/MSI 构建和两个 `.sig` 已生成
+- Release workflow 待 tag 推送后记录
+
 ## 干净机器验收清单（部分执行）
 
 以下项目需要一台干净的 Windows 11 x64 虚拟机；本次已做覆盖安装和启动，其余仍未完成：
