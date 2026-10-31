@@ -155,7 +155,8 @@ Release 地址：`https://github.com/Arcticus17/agent-island/releases/tag/v1.9.4
 - `terminal-max` 的布局原本把 `.composer-slot` 整个 `display:none`；现在只隐藏诊断、会话选择、卡片区，保留 prompt composer
 - 新增浏览器回归：最大化后 `prompt-composer` 仍存在、`display` 不为 none、高度大于 0
 - 本机 720×993 实机截图确认输入框可见
-- Release workflow 待 tag 推送后记录
+- Release workflow `41188977811` 成功（16m5s），`v1.10.1` 已发布；`latest.json` version=1.10.1，签名 key 仍为生产公钥
+- CI 视觉比对仍报告 4–5997 像素字体差异，report-only，不阻断发布
 
 ## 干净机器验收清单（部分执行）
 
