@@ -59,6 +59,8 @@
 
 `<version>` 指当前发布版本号，例如 `Agent.Island_1.9.4_x64-setup.exe`。安装后直接运行 `Agent Island` 即可。
 
+EXE（NSIS）和 MSI 二选一即可，不要交叉覆盖安装：两种安装器的身份和升级机制不同，手动用另一种格式覆盖时可能要求先卸载旧版。应用内自动更新不受影响。
+
 ## 发布与验收
 
 仓库当前版本为 1.9.4（修复展开态最小宽度与边界闪烁），已发布 [Release v1.9.4](https://github.com/Arcticus17/agent-island/releases/tag/v1.9.4)，安装包由 GitHub Actions 自动构建并发布。1.9.1 及更早版本使用旧更新密钥，不能自动升级，需要手动重装 1.9.2 或更新版本；1.9.2 之后恢复自动更新。按[公开发布适配门槛](docs/verification/public-release-compatibility.md)口径，在完成干净环境、混合 DPI、多显示器与安装/卸载验收前仍属**测试版**。
