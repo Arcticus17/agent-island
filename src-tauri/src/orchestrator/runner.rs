@@ -6,6 +6,7 @@
 use crate::*;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -109,7 +110,10 @@ fn parse_stream_line(line: &str, parsed: &mut Parsed) {
                 }
                 let name = item.get("name").and_then(Value::as_str).unwrap_or("工具");
                 let input = item.get("input").cloned().unwrap_or(Value::Null);
-                push_log(&mut parsed.log, format!("{name}  {}", tool_detail(name, &input)));
+                push_log(
+                    &mut parsed.log,
+                    format!("{name}  {}", tool_detail(name, &input)),
+                );
             }
         }
         "user" => {
@@ -129,15 +133,25 @@ fn parse_stream_line(line: &str, parsed: &mut Parsed) {
                     Some(value) => value.to_string(),
                     None => String::new(),
                 };
-                let failed = item.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                let failed = item
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 push_log(
                     &mut parsed.log,
-                    format!("{} {}", if failed { "✗" } else { "↳" }, cap_text(&text, 200)),
+                    format!(
+                        "{} {}",
+                        if failed { "✗" } else { "↳" },
+                        cap_text(&text, 200)
+                    ),
                 );
             }
         }
         "result" => {
-            parsed.is_error = event.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+            parsed.is_error = event
+                .get("is_error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             parsed.result = event
                 .get("result")
                 .and_then(Value::as_str)
@@ -162,7 +176,10 @@ fn parse_json_output(text: &str, parsed: &mut Parsed) {
     let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
         return;
     };
-    parsed.is_error = value.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+    parsed.is_error = value
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     parsed.result = value
         .get("result")
         .and_then(Value::as_str)
@@ -231,10 +248,7 @@ fn build_command(config: &RunnerConfig) -> std::process::Command {
     command
 }
 
-pub(crate) fn run_claude(
-    config: &RunnerConfig,
-    on_spawn: impl FnOnce(u32),
-) -> ProcessOutcome {
+pub(crate) fn run_claude(config: &RunnerConfig, on_spawn: impl FnOnce(u32)) -> ProcessOutcome {
     let mut command = build_command(config);
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -303,7 +317,10 @@ pub(crate) fn run_claude(
     }
 
     let exit_code = status.as_ref().ok().and_then(|status| status.code());
-    let exit_ok = status.as_ref().map(|status| status.success()).unwrap_or(false);
+    let exit_ok = status
+        .as_ref()
+        .map(|status| status.success())
+        .unwrap_or(false);
     let timed_out = timed_out.load(Ordering::SeqCst);
     let session_id = parsed
         .session_id
@@ -317,8 +334,7 @@ pub(crate) fn run_claude(
             config.timeout.as_secs()
         ));
     } else if parsed.is_error {
-        let budget_exhausted =
-            parsed.terminal_reason.as_deref() == Some("budget_exhausted");
+        let budget_exhausted = parsed.terminal_reason.as_deref() == Some("budget_exhausted");
         let detail = parsed
             .result
             .clone()
@@ -349,7 +365,10 @@ pub(crate) fn run_claude(
     }
     if error.is_none() && !stderr.trim().is_empty() {
         // stderr 里的 tracing/网关提示不是失败，但要在诊断里留一行。
-        push_log(&mut parsed.log, format!("stderr: {}", cap_text(&stderr, 200)));
+        push_log(
+            &mut parsed.log,
+            format!("stderr: {}", cap_text(&stderr, 200)),
+        );
     }
     if let Some(reason) = parsed.terminal_reason.as_deref() {
         if reason != "completed" && error.is_none() {
@@ -368,5 +387,283 @@ pub(crate) fn run_claude(
         session_id,
         log: parsed.log,
         timed_out,
+    }
+}
+
+pub(crate) struct CodexConfig<'a> {
+    pub program: &'a Path,
+    pub cwd: &'a Path,
+    pub prompt: &'a str,
+    pub schema: &'a Path,
+    pub last_message: &'a Path,
+    pub timeout: Duration,
+}
+
+fn parse_codex_structured(text: &str) -> Option<Value> {
+    let trimmed = text.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return value.is_object().then_some(value);
+    }
+    // 容忍模型把 JSON 包在 ```json fence 里；只接受最终的一个对象。
+    let fenced = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .and_then(|value| value.strip_suffix("```"))
+        .map(str::trim)?;
+    serde_json::from_str::<Value>(fenced)
+        .ok()
+        .filter(Value::is_object)
+}
+
+pub(crate) fn run_codex(config: &CodexConfig<'_>, on_spawn: impl FnOnce(u32)) -> ProcessOutcome {
+    let mut command = quiet_command(&config.program.to_string_lossy());
+    command
+        .arg("exec")
+        .arg("--json")
+        .arg("--output-schema")
+        .arg(config.schema)
+        .arg("--output-last-message")
+        .arg(config.last_message)
+        .arg("--sandbox")
+        .arg("workspace-write")
+        .arg("--skip-git-repo-check")
+        .arg("--ephemeral")
+        .arg("-C")
+        .arg(config.cwd)
+        .arg("--")
+        .arg(config.prompt)
+        .current_dir(config.cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            return ProcessOutcome {
+                error: Some(format!("启动 Codex 失败：{error}")),
+                ..ProcessOutcome::default()
+            }
+        }
+    };
+    let pid = child.id();
+    on_spawn(pid);
+
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
+    {
+        let timed_out = timed_out.clone();
+        let done = done.clone();
+        let timeout = config.timeout;
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + timeout;
+            while Instant::now() < deadline {
+                if done.load(Ordering::SeqCst) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            if !done.load(Ordering::SeqCst) {
+                timed_out.store(true, Ordering::SeqCst);
+                kill_process_tree(pid);
+            }
+        });
+    }
+
+    let stderr_handle = child.stderr.take().map(|stderr| {
+        std::thread::spawn(move || {
+            let mut buffer = String::new();
+            let mut limited = stderr.take(16 * 1024);
+            let _ = limited.read_to_string(&mut buffer);
+            buffer
+        })
+    });
+
+    let mut log = Vec::new();
+    let mut last_event_message = None;
+    if let Some(stdout) = child.stdout.take() {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines().map_while(Result::ok) {
+            let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            match event.get("type").and_then(Value::as_str) {
+                Some("item.completed") => {
+                    let item = event.get("item").unwrap_or(&Value::Null);
+                    match item.get("type").and_then(Value::as_str) {
+                        Some("agent_message") => {
+                            if let Some(text) = item.get("text").and_then(Value::as_str) {
+                                last_event_message = Some(text.to_string());
+                                push_log(&mut log, format!("Codex: {}", cap_text(text, 300)));
+                            }
+                        }
+                        Some("command_execution") => {
+                            let command = item
+                                .get("command")
+                                .and_then(Value::as_str)
+                                .unwrap_or("command");
+                            let exit = item.get("exit_code").and_then(Value::as_i64);
+                            push_log(
+                                &mut log,
+                                format!(
+                                    "命令：{}（exit {}）",
+                                    cap_text(command, 200),
+                                    exit.map_or("-".to_string(), |value| value.to_string())
+                                ),
+                            );
+                        }
+                        Some("file_change") => {
+                            let files = item
+                                .get("changes")
+                                .and_then(Value::as_array)
+                                .map(|changes| {
+                                    changes
+                                        .iter()
+                                        .filter_map(|change| {
+                                            change.get("path").and_then(Value::as_str)
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                })
+                                .unwrap_or_default();
+                            push_log(&mut log, format!("改动：{}", cap_text(&files, 300)));
+                        }
+                        _ => {}
+                    }
+                }
+                Some("error") => {
+                    if let Some(message) = event.get("message").and_then(Value::as_str) {
+                        push_log(&mut log, format!("Codex error: {}", cap_text(message, 300)));
+                    }
+                }
+                Some("turn.completed") => {
+                    if let Some(usage) = event.get("usage") {
+                        let input = usage
+                            .get("input_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        let output = usage
+                            .get("output_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        push_log(
+                            &mut log,
+                            format!("Codex usage: input={input}, output={output}"),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let status = child.wait();
+    done.store(true, Ordering::SeqCst);
+    let stderr = stderr_handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
+
+    let exit_code = status.as_ref().ok().and_then(|status| status.code());
+    let exit_ok = status
+        .as_ref()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    let timed_out = timed_out.load(Ordering::SeqCst);
+    let last_text = fs::read_to_string(config.last_message).ok();
+    let structured = last_text
+        .as_deref()
+        .and_then(parse_codex_structured)
+        .or_else(|| {
+            last_event_message
+                .as_deref()
+                .and_then(parse_codex_structured)
+        });
+    let result = last_text.or(last_event_message);
+
+    let mut error = None;
+    if timed_out {
+        error = Some(format!(
+            "Codex 任务超时（{} 秒），已终止进程树",
+            config.timeout.as_secs()
+        ));
+    } else if !exit_ok {
+        error = Some(match exit_code {
+            Some(code) => format!("Codex 退出码 {code}"),
+            None => "Codex 进程被终止".to_string(),
+        });
+    } else if structured.is_none() {
+        error = Some("Codex 结束了，但没有返回符合 schema 的结构化结果".to_string());
+    }
+    if error.is_none() && !stderr.trim().is_empty() {
+        push_log(&mut log, format!("stderr: {}", cap_text(&stderr, 200)));
+    }
+
+    ProcessOutcome {
+        ok: error.is_none(),
+        result,
+        structured,
+        error,
+        exit_code,
+        cost_usd: None,
+        session_id: String::new(),
+        log,
+        timed_out,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "live Codex call; run manually with --ignored"]
+    fn codex_worker_live_returns_schema_json() {
+        let Some(program) = crate::orchestrator::capability::codex_program() else {
+            eprintln!("skip: codex not installed");
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "agent-island-codex-worker-{}",
+            crate::epoch_millis()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let schema = dir.join("schema.json");
+        fs::write(
+            &schema,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string", "enum": ["completed", "blocked", "failed"] },
+                    "summary": { "type": "string" },
+                    "files_changed": { "type": "array", "items": { "type": "string" } },
+                    "verification": { "type": "string" }
+                },
+                "required": ["status", "summary", "files_changed", "verification"],
+                "additionalProperties": false
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let last = dir.join("last.txt");
+        let prompt = "Create CODEX_WORKER_OK.txt in the current directory with exact content CODEX_WORKER_OK. Do not modify anything else.";
+        let outcome = run_codex(
+            &CodexConfig {
+                program: &program,
+                cwd: &dir,
+                prompt,
+                schema: &schema,
+                last_message: &last,
+                timeout: Duration::from_secs(180),
+            },
+            |_| {},
+        );
+        assert!(outcome.ok, "codex failed: {:?}", outcome.error);
+        let structured = outcome.structured.expect("structured result");
+        assert_eq!(structured["status"], "completed");
+        assert_eq!(
+            fs::read_to_string(dir.join("CODEX_WORKER_OK.txt"))
+                .unwrap()
+                .trim(),
+            "CODEX_WORKER_OK"
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 }

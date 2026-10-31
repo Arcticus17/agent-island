@@ -87,12 +87,14 @@
 | Agent | 状态监控 | 岛内审批 | 会话查看 | 内置终端 | 团队 worker |
 | --- | :---: | :---: | :---: | :---: | :---: |
 | Claude Code | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Codex CLI | ✓ | – | ✓ | ✓ | – |
+| Codex CLI | ✓ | – | ✓ | ✓ | ✓ |
 | OpenCode | ✓ | – | ✓ | ✓ | – |
 | Hermes | ✓ | – | ✓ | ✓ | – |
 
 - **审批**只接入 Claude Code hooks；其他 Agent 仍可在终端里原生确认。
-- **团队 worker**目前只派发 Claude Code；Codex 没有通过无头可用性验证，OpenCode / Hermes 未接入。能力卡会写明原因，不假装可用。
+- **团队 worker**支持 Claude Code 和 Codex CLI；主 Agent 仍由 Claude 规划。OpenCode / Hermes 未接入团队执行。
+- Codex worker 在 `workspace-write` 沙箱里运行，没有岛内审批；只返回 token 用量，不返回 USD 成本，团队预算只累计 Claude 成本。
+- Codex worker 已接入 main，**随下一版发布；1.9.4 安装包不含**。
 - Codex 桌面端实时任务暂不在接入范围；只能手动查看本地记录，不会用历史日志冒充当前任务。
 
 ### 状态与通知
@@ -118,7 +120,7 @@
 - **并行**：互不依赖的任务默认并发 2，可调 1–4
 - **依赖链**：任务可声明单个依赖，从依赖分支 tip 创建 worktree；同链串行，合并必须先合并依赖
 - **验收命令**：worker 结束后在任务 worktree 内执行，退出码 0 才允许合并；失败保留改动但不能合并
-- **预算**：按 USD 设置本轮上限，规划 / worker / 汇总实际成本累计；并发时按槽位预留
+- **预算**：按 USD 设置本轮上限，规划 / Claude worker / 汇总实际成本累计；并发时按槽位预留；Codex 不返回 USD，只计 token
 - **手动合并**：团队页查看 diff，逐个选择合并或丢弃；冲突只影响该任务，不阻塞其他任务
 - **再来一轮**：上一轮改动全部处理完后，主 Agent 会带着上一轮汇总和任务结果继续规划
 
@@ -211,7 +213,8 @@ Claude hooks 会写入 `~/.claude/settings.json`，原文件自动备份为 `set
 
 - **平台**：目前只验收 Windows 10/11 x64；macOS、Linux、ARM64 不列为已支持
 - **Codex 桌面端**：实时任务状态和控制尚未接入；只能手动查看本地记录
-- **团队任务**：只支持 Claude Code worker、单依赖线性链、手动合并；没有自动合并和通用 DAG
+- **团队任务**：当前支持 Claude Code 和 Codex CLI worker、单依赖线性链、手动合并；没有自动合并和通用 DAG
+- **Codex worker**：无岛内审批，依赖 `workspace-write` 沙箱；不返回 USD 成本；只做主 Agent 派发的任务，不做规划者
 - **安装包**：没有 Authenticode 签名；干净系统、普通用户、中文/空格路径、卸载残留、多显示器仍需继续验收
 
 ## 开发

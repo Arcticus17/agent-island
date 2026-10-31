@@ -41,15 +41,65 @@ pub(crate) fn claude_program() -> Option<PathBuf> {
             .join("claude-code")
             .join("bin")
             .join("claude.exe"),
-        parent
-            .join("node_modules")
-            .join(".bin")
-            .join("claude.exe"),
+        parent.join("node_modules").join(".bin").join("claude.exe"),
     ];
     candidates
         .into_iter()
         .find(|candidate| candidate.is_file())
         .or(Some(resolved))
+}
+
+/// Codex CLI 的 npm shim 不是真正的 exe；优先找 @openai/codex 自带的
+/// 原生可执行文件，避免经过 cmd.exe 导致长 prompt 和引号被二次展开。
+pub(crate) fn codex_program() -> Option<PathBuf> {
+    let resolved = resolve_agent_program("codex")?;
+    if resolved
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("exe"))
+    {
+        return Some(resolved);
+    }
+    let parent = resolved.parent()?;
+    let candidates = [
+        parent
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("node_modules")
+            .join("@openai")
+            .join("codex-win32-x64")
+            .join("vendor")
+            .join("x86_64-pc-windows-msvc")
+            .join("bin")
+            .join("codex.exe"),
+        parent
+            .join("node_modules")
+            .join("@openai")
+            .join("codex-win32-x64")
+            .join("vendor")
+            .join("x86_64-pc-windows-msvc")
+            .join("bin")
+            .join("codex.exe"),
+        parent
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("vendor")
+            .join("x86_64-pc-windows-msvc")
+            .join("bin")
+            .join("codex.exe"),
+    ];
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .or(Some(resolved))
+}
+
+fn codex_has_auth() -> bool {
+    home_dir()
+        .map(|home| home.join(".codex").join("auth.json").is_file())
+        .unwrap_or(false)
 }
 
 fn settings_env_files() -> Vec<PathBuf> {
@@ -87,17 +137,21 @@ pub(crate) fn claude_settings_env() -> HashMap<String, String> {
 }
 
 fn has_credentials(settings_env: &HashMap<String, String>) -> bool {
-    ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
-        .iter()
-        .any(|key| {
-            std::env::var(key)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .is_some()
-                || settings_env
-                    .get(*key)
-                    .is_some_and(|value| !value.trim().is_empty())
-        })
+    [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    ]
+    .iter()
+    .any(|key| {
+        std::env::var(key)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .is_some()
+            || settings_env
+                .get(*key)
+                .is_some_and(|value| !value.trim().is_empty())
+    })
 }
 
 fn capability(
@@ -149,9 +203,33 @@ pub(crate) fn capabilities() -> Vec<AgentCapability> {
         },
     ));
 
+    let codex_installed = codex_program().is_some();
+    let codex_ready = codex_installed && codex_has_auth();
+    result.push(capability(
+        "codex",
+        "Codex CLI",
+        codex_program()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "codex".to_string()),
+        codex_installed,
+        false,
+        true,
+        codex_ready,
+        if codex_ready {
+            "可用：Codex exec 无头执行；workspace-write 沙箱，无岛内审批；不返回 USD 成本"
+        } else if codex_installed {
+            "已安装，但没找到 Codex 登录凭据；请先在本机运行 codex 登录"
+        } else {
+            "未安装：找不到 codex 可执行文件"
+        },
+    ));
+
     for (id, name, hint) in [
-        ("codex", "Codex CLI", "已安装，但当前版本还没有通过无头可用性验证；先不派发"),
-        ("opencode", "OpenCode", "已安装，但团队任务尚未接入这个 Agent"),
+        (
+            "opencode",
+            "OpenCode",
+            "已安装，但团队任务尚未接入这个 Agent",
+        ),
         ("hermes", "Hermes", "已安装，但团队任务尚未接入这个 Agent"),
     ] {
         let def = defs.iter().find(|def| {
@@ -163,7 +241,8 @@ pub(crate) fn capabilities() -> Vec<AgentCapability> {
         result.push(capability(
             id,
             name,
-            def.map(|def| def.program().to_string()).unwrap_or_else(|| id.to_string()),
+            def.map(|def| def.program().to_string())
+                .unwrap_or_else(|| id.to_string()),
             installed,
             false,
             false,
@@ -179,7 +258,7 @@ pub(crate) fn capabilities() -> Vec<AgentCapability> {
     result
 }
 
-/// 规划只允许真正可用的 Agent；当前只有 Claude。
+/// 规划只允许真正可用的执行 Agent；主 Agent 仍固定由 Claude 规划。
 pub(crate) fn available_agent_ids() -> Vec<String> {
     capabilities()
         .into_iter()
@@ -193,21 +272,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn claude_is_the_only_dispatchable_agent_by_default() {
+    fn dispatchable_agents_have_work_capability() {
         let caps = capabilities();
         let available: Vec<&str> = caps
             .iter()
             .filter(|capability| capability.available)
             .map(|capability| capability.id.as_str())
             .collect();
-        assert!(available.iter().all(|id| *id == "claude"));
+        assert!(available.contains(&"claude"));
+        assert!(caps
+            .iter()
+            .filter(|capability| capability.available)
+            .all(|capability| capability.can_work));
     }
 
     #[test]
     fn every_capability_has_a_reason() {
         for capability in capabilities() {
-            assert!(!capability.detail.trim().is_empty(), "{} 缺少说明", capability.id);
-            assert!(!capability.can_work || capability.can_plan, "{} 能干活却不能规划", capability.id);
+            assert!(
+                !capability.detail.trim().is_empty(),
+                "{} 缺少说明",
+                capability.id
+            );
+            assert!(
+                !capability.can_plan || capability.available,
+                "{} 不能规划却被标为规划者",
+                capability.id
+            );
         }
     }
 }

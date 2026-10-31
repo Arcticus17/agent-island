@@ -44,7 +44,8 @@ fn cap_text(text: &str, limit: usize) -> String {
     }
 }
 
-fn new_uuid() -> String {    use sha2::{Digest, Sha256};
+fn new_uuid() -> String {
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(epoch_millis().to_le_bytes());
     hasher.update(std::process::id().to_le_bytes());
@@ -357,11 +358,7 @@ impl TeamState {
         })
     }
 
-    pub(crate) fn finish_task_approval(
-        &self,
-        run_id: &str,
-        task_id: &str,
-    ) -> Option<TeamRunView> {
+    pub(crate) fn finish_task_approval(&self, run_id: &str, task_id: &str) -> Option<TeamRunView> {
         self.update_task(run_id, task_id, |task| {
             if task.state == TaskState::WaitingApproval {
                 task.state = TaskState::Running;
@@ -504,9 +501,17 @@ fn from_plan_task(task: &PlanTask) -> TeamTaskView {
         id: task.id.trim().to_string(),
         title: task.title.trim().to_string(),
         assignee: task.assignee.trim().to_string(),
-        assignee_name: "Claude Code".to_string(),
+        assignee_name: if task.assignee.trim() == "codex" {
+            "Codex CLI".to_string()
+        } else {
+            "Claude Code".to_string()
+        },
         prompt: cap_text(task.prompt.trim(), 8_000),
-        depends_on: task.depends_on.iter().map(|value| value.trim().to_string()).collect(),
+        depends_on: task
+            .depends_on
+            .iter()
+            .map(|value| value.trim().to_string())
+            .collect(),
         acceptance: cap_text(task.acceptance.trim(), 4_000),
         verify_command: task
             .verify_command
@@ -543,17 +548,15 @@ fn planner_call(
     on_spawn: impl FnOnce(u32),
     on_cost: impl FnOnce(Option<f64>),
 ) -> Result<(TeamPlan, String, Option<f64>), String> {
-    let program = capability::claude_program()
-        .ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
+    let program =
+        capability::claude_program().ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
     let allowed = capability::available_agent_ids();
     if allowed.is_empty() {
-        return Err(
-            capability::capabilities()
-                .into_iter()
-                .find(|item| item.id == "claude")
-                .map(|item| item.detail)
-                .unwrap_or_else(|| "没有可用的 Agent".to_string()),
-        );
+        return Err(capability::capabilities()
+            .into_iter()
+            .find(|item| item.id == "claude")
+            .map(|item| item.detail)
+            .unwrap_or_else(|| "没有可用的 Agent".to_string()));
     }
     let schema = plan::plan_schema(&allowed);
     let schema_text = schema.to_string();
@@ -593,11 +596,7 @@ fn planner_call(
     let team_plan: TeamPlan =
         serde_json::from_value(value).map_err(|error| format!("计划格式不合法：{error}"))?;
     plan::validate_plan(&team_plan, &allowed).map_err(|errors| errors.join("；"))?;
-    Ok((
-        team_plan,
-        outcome.session_id,
-        outcome.cost_usd,
-    ))
+    Ok((team_plan, outcome.session_id, outcome.cost_usd))
 }
 
 fn synthesis_call(
@@ -607,8 +606,8 @@ fn synthesis_call(
     max_budget_usd: Option<f64>,
     on_spawn: impl FnOnce(u32),
 ) -> Result<(String, Option<f64>), String> {
-    let program = capability::claude_program()
-        .ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
+    let program =
+        capability::claude_program().ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
     let env = capability::claude_settings_env();
     let plan_tasks: Vec<PlanTask> = tasks
         .iter()
@@ -699,23 +698,6 @@ fn execute_task(
     max_budget_usd: Option<f64>,
 ) -> ProcessOutcome {
     let state = app.state::<AppState>();
-    let Some(program) = capability::claude_program() else {
-        return ProcessOutcome {
-            error: Some("找不到 Claude Code 可执行文件".to_string()),
-            session_id: String::new(),
-            ..ProcessOutcome::default()
-        };
-    };
-    let settings = match worker_settings_path(run_id) {
-        Ok(path) => path,
-        Err(error) => {
-            return ProcessOutcome {
-                error: Some(error),
-                session_id: String::new(),
-                ..ProcessOutcome::default()
-            }
-        }
-    };
     let plan_task = PlanTask {
         id: task.id.clone(),
         title: task.title.clone(),
@@ -726,7 +708,81 @@ fn execute_task(
         verify_command: task.verify_command.clone(),
     };
     let prompt = plan::worker_prompt(goal, workspace, &plan_task);
+    let prompt = if task.assignee == "codex" {
+        format!(
+            "{prompt}\n\nCodex 工具约束：文件工具以 -C 指定的工作区为根；shell 命令可能从 C:\\ 启动。禁止用 shell 重定向写文件，所有修改必须落在当前工作区内。"
+        )
+    } else {
+        prompt
+    };
     let session_id = task.session_id.clone().unwrap_or_else(new_uuid);
+    let key = active_key(run_id, &task.id);
+    let team = &state.team;
+
+    if task.assignee != "claude" && task.assignee != "codex" {
+        return ProcessOutcome {
+            error: Some(format!(
+                "暂不支持派发给 {}：目前只有 Claude 和 Codex",
+                task.assignee
+            )),
+            ..ProcessOutcome::default()
+        };
+    }
+
+    if task.assignee == "codex" {
+        let Some(program) = capability::codex_program() else {
+            return ProcessOutcome {
+                error: Some("找不到 Codex CLI 可执行文件".to_string()),
+                ..ProcessOutcome::default()
+            };
+        };
+        let dir = team_run_dir(run_id);
+        if let Err(error) = fs::create_dir_all(&dir) {
+            return ProcessOutcome {
+                error: Some(format!("创建团队运行目录失败：{error}")),
+                ..ProcessOutcome::default()
+            };
+        }
+        let schema_path = dir.join(format!("codex-{}-schema.json", task.id));
+        let last_path = dir.join(format!("codex-{}-last.txt", task.id));
+        let schema = plan::worker_schema().to_string();
+        if let Err(error) = fs::write(&schema_path, schema) {
+            return ProcessOutcome {
+                error: Some(format!("写入 Codex schema 失败：{error}")),
+                ..ProcessOutcome::default()
+            };
+        }
+        let _ = fs::remove_file(&last_path);
+        let config = runner::CodexConfig {
+            program: &program,
+            cwd: workspace,
+            prompt: &prompt,
+            schema: &schema_path,
+            last_message: &last_path,
+            timeout: Duration::from_secs(TASK_TIMEOUT_SECS),
+        };
+        let outcome = runner::run_codex(&config, |pid| {
+            team.active.lock_recover().insert(key.clone(), pid);
+        });
+        team.active.lock_recover().remove(&key);
+        return outcome;
+    }
+
+    let Some(program) = capability::claude_program() else {
+        return ProcessOutcome {
+            error: Some("找不到 Claude Code 可执行文件".to_string()),
+            ..ProcessOutcome::default()
+        };
+    };
+    let settings = match worker_settings_path(run_id) {
+        Ok(path) => path,
+        Err(error) => {
+            return ProcessOutcome {
+                error: Some(error),
+                ..ProcessOutcome::default()
+            }
+        }
+    };
     let env = capability::claude_settings_env();
     let schema = plan::worker_schema().to_string();
     let config = RunnerConfig {
@@ -743,8 +799,6 @@ fn execute_task(
         max_budget_usd,
         env: &env,
     };
-    let key = active_key(run_id, &task.id);
-    let team = &state.team;
     team.register_session(&session_id, run_id, &task.id, worktree_root);
     let outcome = runner::run_claude(&config, |pid| {
         team.active.lock_recover().insert(key.clone(), pid);
@@ -846,7 +900,11 @@ fn run_task_verification(
         workspace,
         Duration::from_secs(verification::VERIFY_TIMEOUT_SECS),
         |pid| {
-            state.team.active.lock_recover().insert(pid_key.clone(), pid);
+            state
+                .team
+                .active
+                .lock_recover()
+                .insert(pid_key.clone(), pid);
         },
     );
     state.team.active.lock_recover().remove(&key);
@@ -898,9 +956,7 @@ fn apply_task_completion(
             task.exit_code = outcome.exit_code;
             task.cost_usd = outcome.cost_usd;
             task.result = display.as_deref().map(|text| cap_text(text, 8_000));
-            task.error = final_error
-                .as_deref()
-                .map(|text| cap_text(text, 2_000));
+            task.error = final_error.as_deref().map(|text| cap_text(text, 2_000));
             task.log = outcome.log.clone();
             task.verification = verification;
             match finalized {
@@ -918,8 +974,8 @@ fn apply_task_completion(
                     } else {
                         MergeState::None
                     };
-                    task.merge_error = verification_blocked
-                        .then(|| "验收未通过，禁止合并".to_string());
+                    task.merge_error =
+                        verification_blocked.then(|| "验收未通过，禁止合并".to_string());
                 }
                 Err(error) => {
                     task.changed_files.clear();
@@ -1248,7 +1304,10 @@ fn run_scheduler_serial(app: tauri::AppHandle, run_id: String) {
             remaining,
         );
         let current = state.team.get(&run_id);
-        if current.as_ref().is_some_and(|run| run.phase == RunPhase::Cancelled) {
+        if current
+            .as_ref()
+            .is_some_and(|run| run.phase == RunPhase::Cancelled)
+        {
             return;
         }
         let finalized = worktree::finalize(&task_worktree, &task.title);
@@ -1289,10 +1348,12 @@ fn run_scheduler_serial(app: tauri::AppHandle, run_id: String) {
     if run.phase == RunPhase::Cancelled {
         return;
     }
-    let failed = run
-        .tasks
-        .iter()
-        .any(|task| matches!(task.state, TaskState::Failed | TaskState::Cancelled | TaskState::Skipped));
+    let failed = run.tasks.iter().any(|task| {
+        matches!(
+            task.state,
+            TaskState::Failed | TaskState::Cancelled | TaskState::Skipped
+        )
+    });
     if failed {
         if let Some(view) = state.team.update(&run_id, |run| {
             run.phase = RunPhase::Failed;
@@ -1434,11 +1495,7 @@ pub(crate) fn team_start_plan(
     };
     state.team.insert(run.clone());
     emit_run(&app, &run);
-    let prompt = plan::planner_prompt(
-        &goal,
-        &workspace,
-        &capability::available_agent_ids(),
-    );
+    let prompt = plan::planner_prompt(&goal, &workspace, &capability::available_agent_ids());
     spawn_planner(app, run.id.clone(), prompt, workspace, budget_usd);
     Ok(run)
 }
@@ -1454,19 +1511,25 @@ fn spawn_planner(
         let app_state = app.state::<AppState>();
         let planner_key = active_key(&run_id, "planner");
         let planner_pid_key = planner_key.clone();
-        let result = planner_call(&prompt, &workspace, budget_usd, |pid| {
-            app_state
-                .team
-                .active
-                .lock_recover()
-                .insert(planner_pid_key.clone(), pid);
-        }, |cost| {
-            if let Some(cost) = cost {
-                let _ = app_state.team.update(&run_id, |run| {
-                    run.spent_usd += cost;
-                });
-            }
-        });
+        let result = planner_call(
+            &prompt,
+            &workspace,
+            budget_usd,
+            |pid| {
+                app_state
+                    .team
+                    .active
+                    .lock_recover()
+                    .insert(planner_pid_key.clone(), pid);
+            },
+            |cost| {
+                if let Some(cost) = cost {
+                    let _ = app_state.team.update(&run_id, |run| {
+                        run.spent_usd += cost;
+                    });
+                }
+            },
+        );
         app_state.team.active.lock_recover().remove(&planner_key);
         if app_state
             .team
@@ -1543,7 +1606,11 @@ fn previous_round_context(run: &TeamRunView) -> String {
         if let Some(verification) = &task.verification {
             text.push_str(&format!(
                 "  验收：{}（退出码 {}）：{}\n",
-                if verification.passed { "通过" } else { "失败" },
+                if verification.passed {
+                    "通过"
+                } else {
+                    "失败"
+                },
                 verification
                     .exit_code
                     .map(|code| code.to_string())
@@ -1607,9 +1674,7 @@ pub(crate) fn team_continue_run(
             .to_string()
     });
     let budget_usd = normalize_budget(budget_usd.or(parent.budget_usd))?;
-    let concurrency = concurrency
-        .unwrap_or(parent.concurrency)
-        .clamp(1, 4);
+    let concurrency = concurrency.unwrap_or(parent.concurrency).clamp(1, 4);
     let previous = previous_round_context(&parent);
     let now = epoch_millis();
     let run = TeamRunView {
@@ -1640,20 +1705,13 @@ pub(crate) fn team_continue_run(
     state.team.insert(run.clone());
     emit_run(&app, &run);
     let allowed = capability::available_agent_ids();
-    let prompt = plan::followup_planner_prompt(
-        &instruction,
-        &workspace,
-        &allowed,
-        &previous,
-    );
+    let prompt = plan::followup_planner_prompt(&instruction, &workspace, &allowed, &previous);
     spawn_planner(app, run.id.clone(), prompt, workspace, budget_usd);
     Ok(run)
 }
 
 #[tauri::command]
-pub(crate) fn team_verification_risks(
-    tasks: Vec<PlanTask>,
-) -> Vec<verification::VerificationRisk> {
+pub(crate) fn team_verification_risks(tasks: Vec<PlanTask>) -> Vec<verification::VerificationRisk> {
     verification::risks(&tasks)
 }
 
@@ -1722,7 +1780,10 @@ pub(crate) fn team_retry_run(
         .team
         .get(&id)
         .ok_or_else(|| "团队任务不存在".to_string())?;
-    if matches!(run.phase, RunPhase::Planning | RunPhase::Running | RunPhase::Summarizing) {
+    if matches!(
+        run.phase,
+        RunPhase::Planning | RunPhase::Running | RunPhase::Summarizing
+    ) {
         return Err("任务还在运行，先取消或等它结束".to_string());
     }
     if state.team.active.lock_recover().values().next().is_some() {
@@ -1752,7 +1813,11 @@ pub(crate) fn team_retry_run(
             }
         }
     }
-    if run.tasks.iter().all(|task| task.state == TaskState::Succeeded) {
+    if run
+        .tasks
+        .iter()
+        .all(|task| task.state == TaskState::Succeeded)
+    {
         return Err("这一轮已经全部完成，不需要重试".to_string());
     }
     let view = state
@@ -1954,8 +2019,8 @@ pub(crate) fn team_discard_task(
                     continue;
                 }
                 task.merge_state = MergeState::Discarded;
-                task.merge_error = (task.id != task_id)
-                    .then(|| format!("依赖任务「{root_title}」已丢弃"));
+                task.merge_error =
+                    (task.id != task_id).then(|| format!("依赖任务「{root_title}」已丢弃"));
                 task.worktree_path = None;
                 task.branch = None;
             }
@@ -1966,7 +2031,8 @@ pub(crate) fn team_discard_task(
 }
 
 #[tauri::command]
-pub(crate) fn team_cancel_run(    app: tauri::AppHandle,
+pub(crate) fn team_cancel_run(
+    app: tauri::AppHandle,
     state: tauri::State<AppState>,
     id: String,
 ) -> Result<TeamRunView, String> {
@@ -2029,7 +2095,10 @@ mod tests {
             assignee: "claude".into(),
             assignee_name: "Claude Code".into(),
             prompt: "做事".into(),
-            depends_on: depends_on.iter().map(|value| (*value).to_string()).collect(),
+            depends_on: depends_on
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             acceptance: "可验收".into(),
             verify_command: None,
             verification: None,
@@ -2132,7 +2201,10 @@ mod tests {
         let dir = live_dir("workspace");
         let normalized = normalize_workspace(&dir.to_string_lossy()).expect("workspace");
         let text = normalized.to_string_lossy();
-        assert!(!text.starts_with(r"\\?\"), "界面不应显示 verbatim 前缀：{text}");
+        assert!(
+            !text.starts_with(r"\\?\"),
+            "界面不应显示 verbatim 前缀：{text}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -2242,20 +2314,10 @@ mod tests {
             &dir,
             &capability::available_agent_ids(),
         );
-        let plan = planner_call(
-            &prompt,
-            &dir,
-            None,
-            |_| {},
-            |_| {},
-        )
-        .expect("planner should return a valid plan");
+        let plan = planner_call(&prompt, &dir, None, |_| {}, |_| {})
+            .expect("planner should return a valid plan");
         assert!(!plan.0.tasks.is_empty());
-        assert!(plan
-            .0
-            .tasks
-            .iter()
-            .all(|task| task.assignee == "claude"));
+        assert!(plan.0.tasks.iter().all(|task| task.assignee == "claude"));
         let _ = fs::remove_dir_all(&dir);
     }
 

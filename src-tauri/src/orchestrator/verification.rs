@@ -203,7 +203,13 @@ pub(crate) fn run(
         #[cfg(not(target_os = "windows"))]
         let mut process = quiet_command("sh");
         #[cfg(target_os = "windows")]
-        process.args(["/C", command]);
+        {
+            use std::os::windows::process::CommandExt;
+            process.args(["/D", "/S", "/C"]);
+            // cmd.exe 的 /C 会把普通参数里的内层引号再解析一次；raw_arg 保留
+            // `"node -e \"...\""` 这类命令，避免把开头引号传给子进程。
+            process.raw_arg(format!("\"{command}\""));
+        }
         #[cfg(not(target_os = "windows"))]
         process.args(["-c", command]);
         process
@@ -253,8 +259,12 @@ pub(crate) fn run(
             }
         }
     };
-    let stdout = stdout.and_then(|handle| handle.join().ok()).unwrap_or_default();
-    let stderr = stderr.and_then(|handle| handle.join().ok()).unwrap_or_default();
+    let stdout = stdout
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
     let mut output = String::new();
     if !stdout.is_empty() {
         output.push_str(&stdout);
@@ -338,6 +348,16 @@ mod tests {
         assert!(result.passed, "{}", result.output);
         assert_eq!(result.exit_code, Some(0));
         assert!(result.output.contains("VERIFY_OK"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn passes_a_command_with_nested_quotes_on_windows() {
+        let dir = temp_dir("quoted");
+        std::fs::write(dir.join("verify.txt"), "QUOTED_OK\n").unwrap();
+        let command = r#"node -e "const fs=require('fs');process.exit(fs.readFileSync('verify.txt','utf8').trim()==='QUOTED_OK'?0:1)""#;
+        let result = run(command, &dir, Duration::from_secs(10), |_| {});
+        assert!(result.passed, "{}", result.output);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

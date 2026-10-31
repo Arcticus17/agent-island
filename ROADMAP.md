@@ -104,10 +104,11 @@
 - 验证：Rust 228、Node 29（含 3 条 bridge 协议测试）、浏览器 136、视觉 24；真机 CDP 验证 allow / 10 分钟 grant / deny reason / inbox peek，并核对 Agent 检测路径与本机文件一致
 - 记录：[docs/verification/2026-10-28-inbox-and-approval-2.md](docs/verification/2026-10-28-inbox-and-approval-2.md)、[docs/verification/2026-10-28-agent-update-guard.md](docs/verification/2026-10-28-agent-update-guard.md)、[docs/verification/2026-10-28-agent-detection-exactness.md](docs/verification/2026-10-28-agent-detection-exactness.md)
 
-## v1.11：团队编排（审批 + 预算 + worktree + 并行 + 多轮 + 依赖链 + 验收 + 视觉基线已完成，下一步 Codex/签名/干净机器）
+## v1.11：团队编排（审批 + 预算 + worktree + 并行 + 多轮 + 依赖链 + 验收 + Codex worker 已完成，下一步签名/干净机器）
 
 - 主 Agent 规划：Claude `--json-schema` 输出结构化计划，先预览/可编辑，再确认执行
-- 次级 Agent 执行：独立 `--session-id`、`acceptEdits` 写文件、10 分钟超时、取消杀进程树
+- 次级 Agent 执行：Claude 用独立 `--session-id`、`acceptEdits` 写文件；Codex 用 `codex exec --output-schema --sandbox workspace-write` 无头执行；两者都是 10 分钟超时、取消杀进程树
+- Codex worker：优先调用 `@openai/codex` 原生 exe；必须返回 `completed / blocked / failed` 的 schema JSON；只写 worktree；没有岛内审批，不返回 USD 成本；主 Agent 仍由 Claude 规划
 - 并行：互不依赖的任务按并发上限（1–4，默认 2）同时执行；预算按槽位预留；合并仍逐个确认
 - 依赖链：任务可声明单个依赖，依赖任务从依赖分支 tip 创建 worktree，能看到前一个任务的改动；同链串行，独立根任务仍并行；合并必须先合并依赖；丢弃依赖级联丢弃整条链；不支持分叉/多依赖
 - 执行级验收：计划可带验收命令；worker 结束后在 worktree 内执行，记录退出码/输出/耗时；退出码 0 才允许合并，失败保留改动但不能合并；120 秒超时、输出截断、进程可被取消；删除/推送/下载执行等高风险命令在确认计划时二次确认
@@ -116,14 +117,14 @@
 - 审批：文件编辑/只读 Bash 自动放行；危险 Bash 进入 `waiting_approval`，小岛审批卡允许/拒绝，5 分钟超时按拒绝；只读命令链/安全管道不再反复弹审批
 - 完成判定：worker 必须返回结构化 `completed / blocked / failed`；说 blocked/failed 或没返回结构化结果都标失败，避免退出码 0 的假成功；配置了验收命令时还要验收通过
 - 恢复：失败/跳过的任务可"重试未完成任务"，已成功的不重跑；重试前清理旧 worktree/分支和验收状态
-- 预算：每次运行设置 USD 上限（默认 $2），规划/worker/汇总成本累加并显示；超预算停止派发，重试也受剩余预算约束
+- 预算：每次运行设置 USD 上限（默认 $2），规划/Claude worker/汇总成本累加并显示；Codex 只返回 token，不返回 USD，不纳入预算计量；超预算停止派发，重试也受剩余预算约束
 - 入口：主岛展开态团队条（进度/待审批）→ 总览团队页；`open_team` 命令
 - 汇总与持久化：主 Agent 汇总、`~/.agent-island/team-runs.json` 原子写、重启把中断任务标失败
 - 进程隔离：团队 worker/验收 pid 从主岛快照过滤，应用退出 `/T /F` 清理
-- 发布硬化：团队页/团队条 5 个视觉基线（计划/验收/风险/依赖合并/团队条），`test:visual` 21 个用例通过；1.9.4 修复展开态最小宽度（360）与最小/最大边界闪烁；VM 覆盖安装 1.9.2→1.9.3→1.9.4 成功，100/125/150/200% 原生截图无横向溢出；已轮换到新生产 updater 密钥并更新 CI Secrets，`v1.9.2` 与 `v1.9.4` 均已发布；安装包仍无 Authenticode 签名；普通用户/中文路径/卸载残留/多显示器/实际自动更新未验
-- 真实端到端：允许→完成、拒绝→失败→重试→完成、worktree 隔离→merge、双任务并发→逐个 merge、两轮（A→合并→B）、依赖链（A→B）、验收通过/失败均跑通；详情见 [验证记录](docs/verification/2026-10-30-team-orchestration-spike.md)
+- 发布硬化：团队页/团队条 5 个视觉基线（计划/验收/风险/依赖合并/团队条），`test:visual` 21 个用例通过；1.9.4 修复展开态最小宽度（360）与最小/最大边界闪烁；VM 覆盖安装 1.9.2→1.9.3→1.9.4 成功，100/125/150/200% 原生截图无横向溢出；1.9.2→1.9.4 自动更新已口述验证；已轮换到新生产 updater 密钥并更新 CI Secrets，`v1.9.2` 与 `v1.9.4` 均已发布；安装包仍无 Authenticode 签名；普通用户/中文路径/卸载残留/多显示器未验
+- 真实端到端：允许→完成、拒绝→失败→重试→完成、worktree 隔离→merge、双任务并发→逐个 merge、两轮（A→合并→B）、依赖链（A→B）、验收通过/失败均跑通；Codex worker 真实执行→完成→手动合并也跑通；详情见 [验证记录](docs/verification/2026-10-30-team-orchestration-spike.md) 与 [Codex worker 验收](docs/verification/2026-10-31-codex-worker.md)
 - 设计依据：[第一步设计：审批、状态与入口](docs/research/2026-10-30-team-orchestration-first-step.md)
-- 下一步：Codex/自定义 Agent 适配、安装包签名与干净机器验收、混合 DPI/原生 WebView2 验收、自动合并（可选）
+- 下一步：自定义 Agent 适配、主/次角色配置、安装包签名与干净机器验收、混合 DPI/原生 WebView2 验收、自动合并（可选）
 
 ## 当前已完成
 
