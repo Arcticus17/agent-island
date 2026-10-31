@@ -4,7 +4,7 @@
 
 ## 结论
 
-Codex CLI 已接入团队任务，作为**次级 worker** 使用；主 Agent 仍由 Claude 规划。
+Codex CLI 已接入团队任务，可作为**次级 worker**，也可作为**主 Agent** 规划；默认主 Agent 仍是 Claude。
 
 - 环境：Windows 11 x64，Codex CLI 0.165.0（npm 安装，实际调用 `@openai/codex` 自带原生 `codex.exe`）
 - 调用方式：`codex exec --json --output-schema <schema> --output-last-message <last> --sandbox workspace-write --skip-git-repo-check --ephemeral -C <worktree> <prompt>`
@@ -29,7 +29,7 @@ Codex CLI 已接入团队任务，作为**次级 worker** 使用；主 Agent 仍
 - **无岛内审批**：Codex worker 没有 Claude hooks 审批链；靠 `workspace-write` 沙箱限制写入。需要审批的命令应在计划/验收阶段处理。
 - **预算**：Codex 不返回 USD 成本，团队预算只累计 Claude 规划/Claude worker 的成本；不能把 Codex 的 token 当 USD 记账。
 - **验收命令**：在 Windows 上通过 `cmd /D /S /C` 执行。最初 `node -e "..."` 在 `cmd` 层被拆坏；已改为 `raw_arg` 保留外层引号，并新增 `passes_a_command_with_nested_quotes_on_windows` 回归。本次 Codex worker 的空验收链路已经验证；带引号的验收命令还需要在真实任务里再跑一次。
-- **主 Agent**：仍固定 Claude；Codex 只做 worker，不做规划者。
+- **主 Agent**：默认 Claude；Codex 也可规划，已通过规划/汇总/合并实机链路。
 - **未测**：多 Codex 任务并发、Codex + Claude 混合依赖链、Codex 超时/强杀、Codex 无登录凭据的失败提示、真实业务仓库。
 
 ## 主 Agent 角色配置

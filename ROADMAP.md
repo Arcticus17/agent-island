@@ -108,7 +108,7 @@
 
 - 主 Agent 规划：Claude `--json-schema` 输出结构化计划，先预览/可编辑，再确认执行
 - 次级 Agent 执行：Claude 用独立 `--session-id`、`acceptEdits` 写文件；Codex 用 `codex exec --output-schema --sandbox workspace-write` 无头执行；两者都是 10 分钟超时、取消杀进程树
-- Codex worker：优先调用 `@openai/codex` 原生 exe；必须返回 `completed / blocked / failed` 的 schema JSON；只写 worktree；没有岛内审批，不返回 USD 成本；主 Agent 仍由 Claude 规划
+- Codex worker：优先调用 `@openai/codex` 原生 exe；必须返回 `completed / blocked / failed` 的 schema JSON；只写 worktree；没有岛内审批，不返回 USD 成本；也可作为主 Agent 规划
 - 并行：互不依赖的任务按并发上限（1–4，默认 2）同时执行；预算按槽位预留；合并仍逐个确认
 - 依赖链：任务可声明单个依赖，依赖任务从依赖分支 tip 创建 worktree，能看到前一个任务的改动；同链串行，独立根任务仍并行；合并必须先合并依赖；丢弃依赖级联丢弃整条链；不支持分叉/多依赖
 - 执行级验收：计划可带验收命令；worker 结束后在 worktree 内执行，记录退出码/输出/耗时；退出码 0 才允许合并，失败保留改动但不能合并；120 秒超时、输出截断、进程可被取消；删除/推送/下载执行等高风险命令在确认计划时二次确认
