@@ -466,12 +466,13 @@ export function createTauriBridge(): AgentIslandBridge {
     async listenOpenTeam(handler) {
       return await listen("open-team", () => handler());
     },
-    async startTeamPlan(goal, workspace, budgetUsd, concurrency) {
+    async startTeamPlan(goal, workspace, budgetUsd, concurrency, mainAgent) {
       return await invoke<TeamRun>("team_start_plan", {
         goal,
         workspace,
         budgetUsd: budgetUsd ?? null,
         concurrency: concurrency ?? 2,
+        mainAgent: mainAgent ?? null,
       });
     },
     async continueTeamRun(id, instruction, budgetUsd, concurrency) {

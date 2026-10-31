@@ -24,7 +24,7 @@ use std::time::Duration;
 const MAX_PERSISTED_RUNS: usize = 10;
 const MAX_RUNS_BYTES: usize = 2 * 1024 * 1024;
 const TASK_TIMEOUT_SECS: u64 = 600;
-const PLANNER_TIMEOUT_SECS: u64 = 240;
+const PLANNER_TIMEOUT_SECS: u64 = 360;
 const SYNTHESIS_TIMEOUT_SECS: u64 = 300;
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -496,16 +496,19 @@ fn normalize_workspace(input: &str) -> Result<PathBuf, String> {
     Ok(cleaned)
 }
 
+fn agent_name(id: &str) -> &'static str {
+    match id {
+        "codex" => "Codex CLI",
+        _ => "Claude Code",
+    }
+}
+
 fn from_plan_task(task: &PlanTask) -> TeamTaskView {
     TeamTaskView {
         id: task.id.trim().to_string(),
         title: task.title.trim().to_string(),
         assignee: task.assignee.trim().to_string(),
-        assignee_name: if task.assignee.trim() == "codex" {
-            "Codex CLI".to_string()
-        } else {
-            "Claude Code".to_string()
-        },
+        assignee_name: agent_name(task.assignee.trim()).to_string(),
         prompt: cap_text(task.prompt.trim(), 8_000),
         depends_on: task
             .depends_on
@@ -542,46 +545,88 @@ fn from_plan_task(task: &PlanTask) -> TeamTaskView {
 }
 
 fn planner_call(
+    main_agent: &str,
     prompt: &str,
     workspace: &Path,
     max_budget_usd: Option<f64>,
     on_spawn: impl FnOnce(u32),
     on_cost: impl FnOnce(Option<f64>),
 ) -> Result<(TeamPlan, String, Option<f64>), String> {
-    let program =
-        capability::claude_program().ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
     let allowed = capability::available_agent_ids();
-    if allowed.is_empty() {
+    let planners = capability::available_planner_ids();
+    if !planners.iter().any(|id| id == main_agent) {
         return Err(capability::capabilities()
             .into_iter()
-            .find(|item| item.id == "claude")
+            .find(|item| item.id == main_agent)
             .map(|item| item.detail)
-            .unwrap_or_else(|| "没有可用的 Agent".to_string()));
+            .unwrap_or_else(|| format!("主 Agent {main_agent} 当前不可用")));
     }
     let schema = plan::plan_schema(&allowed);
     let schema_text = schema.to_string();
-    let env = capability::claude_settings_env();
-    let session_id = new_uuid();
-    let config = RunnerConfig {
-        program: &program,
-        cwd: workspace,
-        prompt,
-        settings: None,
-        session_id: &session_id,
-        permission_mode: "plan",
-        max_turns: 3,
-        timeout: Duration::from_secs(PLANNER_TIMEOUT_SECS),
-        output_format: "json",
-        json_schema: Some(&schema_text),
-        max_budget_usd,
-        env: &env,
+    let outcome = if main_agent == "codex" {
+        let program =
+            capability::codex_program().ok_or_else(|| "找不到 Codex CLI 可执行文件".to_string())?;
+        let token = new_uuid();
+        let schema_path = std::env::temp_dir().join(format!("agent-island-plan-{token}.json"));
+        let last_path = std::env::temp_dir().join(format!("agent-island-plan-{token}.txt"));
+        fs::write(&schema_path, &schema_text)
+            .map_err(|error| format!("写入 Codex 计划 schema 失败：{error}"))?;
+        let outcome = runner::run_codex(
+            &runner::CodexConfig {
+                program: &program,
+                cwd: workspace,
+                prompt,
+                schema: Some(&schema_path),
+                last_message: &last_path,
+                timeout: Duration::from_secs(PLANNER_TIMEOUT_SECS),
+            },
+            on_spawn,
+        );
+        let _ = fs::remove_file(&schema_path);
+        let _ = fs::remove_file(&last_path);
+        outcome
+    } else {
+        let program = capability::claude_program()
+            .ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
+        let env = capability::claude_settings_env();
+        let session_id = new_uuid();
+        let config = RunnerConfig {
+            program: &program,
+            cwd: workspace,
+            prompt,
+            settings: None,
+            session_id: &session_id,
+            permission_mode: "plan",
+            max_turns: 3,
+            timeout: Duration::from_secs(PLANNER_TIMEOUT_SECS),
+            output_format: "json",
+            json_schema: Some(&schema_text),
+            max_budget_usd,
+            env: &env,
+        };
+        runner::run_claude(&config, on_spawn)
     };
-    let outcome = runner::run_claude(&config, on_spawn);
     on_cost(outcome.cost_usd);
     if !outcome.ok {
-        return Err(outcome
+        let detail = outcome
             .error
-            .unwrap_or_else(|| "主 Agent 规划失败".to_string()));
+            .unwrap_or_else(|| "主 Agent 规划失败".to_string());
+        let tail = outcome
+            .log
+            .iter()
+            .rev()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join(" | ");
+        return Err(if tail.is_empty() {
+            detail
+        } else {
+            format!("{detail}（{tail}）")
+        });
     }
     let value = outcome
         .structured
@@ -600,15 +645,13 @@ fn planner_call(
 }
 
 fn synthesis_call(
+    main_agent: &str,
     goal: &str,
     workspace: &Path,
     tasks: &[TeamTaskView],
     max_budget_usd: Option<f64>,
     on_spawn: impl FnOnce(u32),
 ) -> Result<(String, Option<f64>), String> {
-    let program =
-        capability::claude_program().ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
-    let env = capability::claude_settings_env();
     let plan_tasks: Vec<PlanTask> = tasks
         .iter()
         .map(|task| PlanTask {
@@ -631,6 +674,35 @@ fn synthesis_call(
         })
         .collect();
     let prompt = plan::synthesis_prompt(goal, workspace, &plan_tasks, &results);
+    if main_agent == "codex" {
+        let program =
+            capability::codex_program().ok_or_else(|| "找不到 Codex CLI 可执行文件".to_string())?;
+        let last_path = std::env::temp_dir().join(format!(
+            "agent-island-summary-{}.txt",
+            new_uuid()
+        ));
+        let outcome = runner::run_codex(
+            &runner::CodexConfig {
+                program: &program,
+                cwd: workspace,
+                prompt: &prompt,
+                schema: None,
+                last_message: &last_path,
+                timeout: Duration::from_secs(SYNTHESIS_TIMEOUT_SECS),
+            },
+            on_spawn,
+        );
+        let _ = fs::remove_file(&last_path);
+        return match (outcome.ok, outcome.result) {
+            (true, Some(text)) if !text.trim().is_empty() => Ok((text, None)),
+            (_, _) => Err(outcome
+                .error
+                .unwrap_or_else(|| "主 Agent 汇总没有返回文本".to_string())),
+        };
+    }
+    let program =
+        capability::claude_program().ok_or_else(|| "找不到 Claude Code 可执行文件".to_string())?;
+    let env = capability::claude_settings_env();
     let session_id = new_uuid();
     let config = RunnerConfig {
         program: &program,
@@ -757,7 +829,7 @@ fn execute_task(
             program: &program,
             cwd: workspace,
             prompt: &prompt,
-            schema: &schema_path,
+            schema: Some(&schema_path),
             last_message: &last_path,
             timeout: Duration::from_secs(TASK_TIMEOUT_SECS),
         };
@@ -1378,6 +1450,7 @@ fn run_scheduler_serial(app: tauri::AppHandle, run_id: String) {
         Err("预算已用完，跳过汇总".to_string())
     } else {
         synthesis_call(
+            &run.main_agent,
             &run.goal,
             &PathBuf::from(&run.workspace),
             &run.tasks,
@@ -1443,6 +1516,7 @@ pub(crate) fn team_start_plan(
     workspace: String,
     budget_usd: Option<f64>,
     concurrency: Option<u32>,
+    main_agent: Option<String>,
 ) -> Result<TeamRunView, String> {
     let goal = goal.trim().to_string();
     if goal.is_empty() {
@@ -1460,20 +1534,28 @@ pub(crate) fn team_start_plan(
             .to_string()
     });
     let available = capability::available_agent_ids();
-    if !available.iter().any(|id| id == "claude") {
+    let planners = capability::available_planner_ids();
+    let main_agent = main_agent
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "claude".to_string());
+    if !planners.iter().any(|id| id == &main_agent) {
         return Err(capability::capabilities()
             .into_iter()
-            .find(|item| item.id == "claude")
+            .find(|item| item.id == main_agent)
             .map(|item| item.detail)
-            .unwrap_or_else(|| "Claude 当前不可用".to_string()));
+            .unwrap_or_else(|| format!("主 Agent {main_agent} 当前不可用")));
+    }
+    if available.is_empty() {
+        return Err("当前没有可派发的 Agent".to_string());
     }
     let now = epoch_millis();
     let run = TeamRunView {
         id: next_id("team"),
         goal: goal.clone(),
         workspace: workspace.to_string_lossy().into_owned(),
-        main_agent: "claude".to_string(),
-        main_agent_name: "Claude Code".to_string(),
+        main_agent: main_agent.clone(),
+        main_agent_name: agent_name(&main_agent).to_string(),
         phase: RunPhase::Planning,
         plan_summary: None,
         summary: None,
@@ -1495,8 +1577,15 @@ pub(crate) fn team_start_plan(
     };
     state.team.insert(run.clone());
     emit_run(&app, &run);
-    let prompt = plan::planner_prompt(&goal, &workspace, &capability::available_agent_ids());
-    spawn_planner(app, run.id.clone(), prompt, workspace, budget_usd);
+    let prompt = plan::planner_prompt(&goal, &workspace, &available);
+    spawn_planner(
+        app,
+        run.id.clone(),
+        prompt,
+        workspace,
+        budget_usd,
+        main_agent,
+    );
     Ok(run)
 }
 
@@ -1506,12 +1595,14 @@ fn spawn_planner(
     prompt: String,
     workspace: PathBuf,
     budget_usd: Option<f64>,
+    main_agent: String,
 ) {
     std::thread::spawn(move || {
         let app_state = app.state::<AppState>();
         let planner_key = active_key(&run_id, "planner");
         let planner_pid_key = planner_key.clone();
         let result = planner_call(
+            &main_agent,
             &prompt,
             &workspace,
             budget_usd,
@@ -1675,14 +1766,24 @@ pub(crate) fn team_continue_run(
     });
     let budget_usd = normalize_budget(budget_usd.or(parent.budget_usd))?;
     let concurrency = concurrency.unwrap_or(parent.concurrency).clamp(1, 4);
+    let main_agent = parent.main_agent.clone();
+    if !capability::available_planner_ids()
+        .iter()
+        .any(|id| id == &main_agent)
+    {
+        return Err(format!(
+            "上一轮的主 Agent {} 当前不可用",
+            parent.main_agent_name
+        ));
+    }
     let previous = previous_round_context(&parent);
     let now = epoch_millis();
     let run = TeamRunView {
         id: next_id("team"),
         goal: instruction.clone(),
         workspace: workspace.to_string_lossy().into_owned(),
-        main_agent: "claude".to_string(),
-        main_agent_name: "Claude Code".to_string(),
+        main_agent: main_agent.clone(),
+        main_agent_name: agent_name(&main_agent).to_string(),
         phase: RunPhase::Planning,
         plan_summary: None,
         summary: None,
@@ -1706,7 +1807,14 @@ pub(crate) fn team_continue_run(
     emit_run(&app, &run);
     let allowed = capability::available_agent_ids();
     let prompt = plan::followup_planner_prompt(&instruction, &workspace, &allowed, &previous);
-    spawn_planner(app, run.id.clone(), prompt, workspace, budget_usd);
+    spawn_planner(
+        app,
+        run.id.clone(),
+        prompt,
+        workspace,
+        budget_usd,
+        main_agent,
+    );
     Ok(run)
 }
 
@@ -2314,11 +2422,29 @@ mod tests {
             &dir,
             &capability::available_agent_ids(),
         );
-        let plan = planner_call(&prompt, &dir, None, |_| {}, |_| {})
+        let plan = planner_call("claude", &prompt, &dir, None, |_| {}, |_| {})
             .expect("planner should return a valid plan");
         assert!(!plan.0.tasks.is_empty());
-        assert!(plan.0.tasks.iter().all(|task| task.assignee == "claude"));
+        assert!(plan
+            .0
+            .tasks
+            .iter()
+            .all(|task| task.assignee == "claude" || task.assignee == "codex"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "live Codex planner call; costs tokens"]
+    fn live_codex_planner_returns_a_valid_plan() {
+        let dir = live_dir("codex-planner");
+        let prompt = plan::planner_prompt(
+            "Create a file named island_live.txt containing LIVE_OK. Do not change anything else.",
+            &dir,
+            &capability::available_agent_ids(),
+        );
+        let result = planner_call("codex", &prompt, &dir, None, |_| {}, |_| {});
+        eprintln!("codex planner result: {result:?}");
+        assert!(result.is_ok(), "codex planner failed");
     }
 
     /// 真实调用 Claude 汇总。默认忽略，手动运行：
@@ -2331,6 +2457,7 @@ mod tests {
         finished.title = "Create island_live.txt".into();
         finished.result = Some("Created island_live.txt with LIVE_OK.".into());
         let (text, _cost) = synthesis_call(
+            "claude",
             "Create a marker file and report what changed",
             &dir,
             &[finished],

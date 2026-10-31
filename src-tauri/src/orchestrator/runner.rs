@@ -394,7 +394,7 @@ pub(crate) struct CodexConfig<'a> {
     pub program: &'a Path,
     pub cwd: &'a Path,
     pub prompt: &'a str,
-    pub schema: &'a Path,
+    pub schema: Option<&'a Path>,
     pub last_message: &'a Path,
     pub timeout: Duration,
 }
@@ -417,11 +417,11 @@ fn parse_codex_structured(text: &str) -> Option<Value> {
 
 pub(crate) fn run_codex(config: &CodexConfig<'_>, on_spawn: impl FnOnce(u32)) -> ProcessOutcome {
     let mut command = quiet_command(&config.program.to_string_lossy());
+    command.arg("exec").arg("--json");
+    if let Some(schema) = config.schema {
+        command.arg("--output-schema").arg(schema);
+    }
     command
-        .arg("exec")
-        .arg("--json")
-        .arg("--output-schema")
-        .arg(config.schema)
         .arg("--output-last-message")
         .arg(config.last_message)
         .arg("--sandbox")
@@ -568,14 +568,18 @@ pub(crate) fn run_codex(config: &CodexConfig<'_>, on_spawn: impl FnOnce(u32)) ->
         .unwrap_or(false);
     let timed_out = timed_out.load(Ordering::SeqCst);
     let last_text = fs::read_to_string(config.last_message).ok();
-    let structured = last_text
-        .as_deref()
-        .and_then(parse_codex_structured)
-        .or_else(|| {
-            last_event_message
-                .as_deref()
-                .and_then(parse_codex_structured)
-        });
+    let structured = if config.schema.is_some() {
+        last_text
+            .as_deref()
+            .and_then(parse_codex_structured)
+            .or_else(|| {
+                last_event_message
+                    .as_deref()
+                    .and_then(parse_codex_structured)
+            })
+    } else {
+        None
+    };
     let result = last_text.or(last_event_message);
 
     let mut error = None;
@@ -589,8 +593,12 @@ pub(crate) fn run_codex(config: &CodexConfig<'_>, on_spawn: impl FnOnce(u32)) ->
             Some(code) => format!("Codex 退出码 {code}"),
             None => "Codex 进程被终止".to_string(),
         });
-    } else if structured.is_none() {
+    } else if config.schema.is_some() && structured.is_none() {
         error = Some("Codex 结束了，但没有返回符合 schema 的结构化结果".to_string());
+    } else if config.schema.is_none()
+        && result.as_deref().map_or(true, |text| text.trim().is_empty())
+    {
+        error = Some("Codex 结束了，但没有返回文本结果".to_string());
     }
     if error.is_none() && !stderr.trim().is_empty() {
         push_log(&mut log, format!("stderr: {}", cap_text(&stderr, 200)));
@@ -649,7 +657,7 @@ mod tests {
                 program: &program,
                 cwd: &dir,
                 prompt,
-                schema: &schema,
+                schema: Some(&schema),
                 last_message: &last,
                 timeout: Duration::from_secs(180),
             },

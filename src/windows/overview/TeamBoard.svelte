@@ -20,6 +20,7 @@
   let workspace = $state("");
   let budget = $state("2.00");
   let parallelism = $state("2");
+  let mainAgent = $state("");
   let followupOpen = $state(false);
   let followupInstruction = $state("");
   let verificationRisks = $state<VerificationRisk[]>([]);
@@ -167,6 +168,7 @@
         workspace.trim(),
         parsedBudget,
         parsedParallelism,
+        mainAgent || undefined,
       );
       planTasks = [];
       planForRunId = null;
@@ -491,6 +493,9 @@
       if (bridge.teamCapabilities) {
         try {
           capabilities = await bridge.teamCapabilities();
+          if (!mainAgent) {
+            mainAgent = capabilities.find((item) => item.available && item.canPlan)?.id ?? "";
+          }
         } catch {
           capabilities = [];
         }
@@ -549,6 +554,14 @@
           placeholder="C:\\path\\to\\project"
         />
       </label>
+      <label class="field compact">
+        <span>主 Agent</span>
+        <select data-testid="team-main-agent" bind:value={mainAgent}>
+          {#each capabilities.filter((item) => item.available && item.canPlan) as capability (capability.id)}
+            <option value={capability.id}>{capability.name}</option>
+          {/each}
+        </select>
+      </label>
       <label class="field">
         <span>预算（USD）</span>
         <input
@@ -567,11 +580,11 @@
           placeholder="2"
         />
       </label>
-      <p class="hint">预算只按本机 Claude 返回的成本累计；超出后停止派发，不会继续花钱。并发只用于互不依赖的任务。</p>
+      <p class="hint">预算只按本机 Claude 返回的成本累计；超出后停止派发，不会继续花钱。并发只用于互不依赖的任务。主 Agent 负责规划，次级 worker 按任务单独选择。</p>
       <div class="capabilities">
         {#each capabilities as capability (capability.id)}
           <span class="capability" class:ready={capability.available} title={capability.detail}>
-            <span class="dot"></span>{capability.name}{capability.available ? " · 可派发" : " · 不可用"}
+            <span class="dot"></span>{capability.name}{capability.available ? (capability.canPlan ? " · 可规划/执行" : " · 可派发") : " · 不可用"}
           </span>
         {/each}
       </div>

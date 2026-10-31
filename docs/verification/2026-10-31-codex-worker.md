@@ -32,6 +32,17 @@ Codex CLI 已接入团队任务，作为**次级 worker** 使用；主 Agent 仍
 - **主 Agent**：仍固定 Claude；Codex 只做 worker，不做规划者。
 - **未测**：多 Codex 任务并发、Codex + Claude 混合依赖链、Codex 超时/强杀、Codex 无登录凭据的失败提示、真实业务仓库。
 
+## 主 Agent 角色配置（实验，未通过）
+
+同一轮补了“主 Agent 可选 Claude / Codex”：
+
+- 团队页新增主 Agent 下拉；`team_start_plan` 接收 `main_agent`，默认 Claude
+- Codex 作为主 Agent 时使用 `codex exec --output-schema <plan schema>` 规划，规划结果仍走同一套校验
+- 汇总阶段也按本轮主 Agent 选择 Claude 或 Codex
+- 续轮沿用上一轮主 Agent
+
+但实机复测没有通过：Codex planner 返回 `workspace routing discovery failed`，同一时间 Codex worker 的 live test 也失败，说明是 Codex 账号/网络路由问题，不是角色选择代码路径单独坏了。默认仍是 Claude 主 Agent；Codex 主 Agent 在 README 里标为实验能力，不能写成已验证。
+
 ## 相关代码
 
 - `src-tauri/src/orchestrator/capability.rs`：Codex 原生 exe 解析、auth 检测、能力卡

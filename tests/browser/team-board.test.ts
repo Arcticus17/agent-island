@@ -86,11 +86,12 @@ const capability: TeamCapability = {
   detail: "可用",
 };
 
-function harness(initial: TeamRun | null = null) {
+function harness(initial: TeamRun | null = null, capabilities: TeamCapability[] = [capability]) {
   let latest: TeamRun | null = initial;
   const calls: string[] = [];
   const budgets: Array<number | null | undefined> = [];
   const parallelisms: Array<number | undefined> = [];
+  const mainAgents: Array<string | undefined> = [];
   const riskyConfirmations: boolean[] = [];
   const bridge: AgentIslandBridge = {
     async getSnapshot() {
@@ -103,17 +104,19 @@ function harness(initial: TeamRun | null = null) {
       return () => {};
     },
     async teamCapabilities() {
-      return [capability];
+      return capabilities;
     },
     async startTeamPlan(
       _goal: string,
       _workspace: string,
       budgetUsd?: number | null,
       concurrency?: number,
+      mainAgent?: string,
     ) {
       calls.push("start");
       budgets.push(budgetUsd);
       parallelisms.push(concurrency);
+      mainAgents.push(mainAgent);
       latest = run({ phase: "awaiting_plan", tasks: [task()] });
       return latest;
     },
@@ -204,7 +207,7 @@ function harness(initial: TeamRun | null = null) {
       return () => {};
     },
   };
-  return { bridge, calls, budgets, parallelisms, riskyConfirmations, current: () => latest };
+  return { bridge, calls, budgets, parallelisms, mainAgents, riskyConfirmations, current: () => latest };
 }
 
 async function waitFor(check: () => boolean, timeoutMs = 1_500) {
@@ -253,6 +256,28 @@ describe("team board", () => {
     await waitFor(() => target.textContent?.includes("执行中") === true);
     expect(calls).toContain("confirm");
     expect(current()?.phase).toBe("running");
+  });
+
+  it("sends the chosen main agent with the plan request", async () => {
+    const codexCapability: TeamCapability = {
+      ...capability,
+      id: "codex",
+      name: "Codex CLI",
+      program: "codex",
+    };
+    const { bridge, mainAgents } = harness(null, [capability, codexCapability]);
+    const target = await render(bridge);
+
+    await userEvent.fill(target.querySelector<HTMLTextAreaElement>('[data-testid="team-goal"]')!, "写一个标记文件");
+    await userEvent.fill(target.querySelector<HTMLInputElement>('[data-testid="team-workspace"]')!, "C:\\work");
+    await userEvent.selectOptions(
+      target.querySelector<HTMLSelectElement>('[data-testid="team-main-agent"]')!,
+      "codex",
+    );
+    target.querySelector<HTMLButtonElement>('[data-testid="team-generate"]')!.click();
+
+    await waitFor(() => target.textContent?.includes("计划已生成") === true);
+    expect(mainAgents.at(-1)).toBe("codex");
   });
 
   it("cancels a running team run", async () => {

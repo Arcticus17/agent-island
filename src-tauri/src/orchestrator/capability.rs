@@ -212,11 +212,11 @@ pub(crate) fn capabilities() -> Vec<AgentCapability> {
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_else(|| "codex".to_string()),
         codex_installed,
-        false,
+        true,
         true,
         codex_ready,
         if codex_ready {
-            "可用：Codex exec 无头执行；workspace-write 沙箱，无岛内审批；不返回 USD 成本"
+            "可用：Codex 主 Agent 规划（实验）+ 无头 worker；workspace-write 沙箱，无岛内审批；不返回 USD 成本；网络不稳时可能失败"
         } else if codex_installed {
             "已安装，但没找到 Codex 登录凭据；请先在本机运行 codex 登录"
         } else {
@@ -258,11 +258,20 @@ pub(crate) fn capabilities() -> Vec<AgentCapability> {
     result
 }
 
-/// 规划只允许真正可用的执行 Agent；主 Agent 仍固定由 Claude 规划。
+/// 规划只允许真正可用的执行 Agent；主 Agent 由用户选择。
 pub(crate) fn available_agent_ids() -> Vec<String> {
     capabilities()
         .into_iter()
         .filter(|capability| capability.available && capability.can_work)
+        .map(|capability| capability.id)
+        .collect()
+}
+
+/// 可作为主 Agent 的项：既要有规划能力，也要当前可用。
+pub(crate) fn available_planner_ids() -> Vec<String> {
+    capabilities()
+        .into_iter()
+        .filter(|capability| capability.available && capability.can_plan)
         .map(|capability| capability.id)
         .collect()
 }
@@ -295,8 +304,8 @@ mod tests {
                 capability.id
             );
             assert!(
-                !capability.can_plan || capability.available,
-                "{} 不能规划却被标为规划者",
+                !capability.can_plan || capability.can_work,
+                "{} 能规划却不能干活",
                 capability.id
             );
         }

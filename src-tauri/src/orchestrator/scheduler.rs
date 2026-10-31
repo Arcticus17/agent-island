@@ -259,6 +259,7 @@ pub(crate) fn run_parallel(app: tauri::AppHandle, run_id: String) {
         Err("预算已用完，跳过汇总".to_string())
     } else {
         synthesis_call(
+            &run.main_agent,
             &run.goal,
             &PathBuf::from(&run.workspace),
             &run.tasks,

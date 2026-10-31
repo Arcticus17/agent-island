@@ -92,8 +92,9 @@
 | Hermes | ✓ | – | ✓ | ✓ | – |
 
 - **审批**只接入 Claude Code hooks；其他 Agent 仍可在终端里原生确认。
-- **团队 worker**支持 Claude Code 和 Codex CLI；主 Agent 仍由 Claude 规划。OpenCode / Hermes 未接入团队执行。
+- **团队 worker**支持 Claude Code 和 Codex CLI；主 Agent 也可在 Claude Code / Codex CLI 之间选择，Codex 主 Agent 仍属实验能力。
 - Codex worker 在 `workspace-write` 沙箱里运行，没有岛内审批；只返回 token 用量，不返回 USD 成本，团队预算只累计 Claude 成本。
+- Codex 主 Agent 依赖 `codex exec` 的账号路由；本机在 2026-10-31 复测时遇到 `workspace routing discovery failed`，因此不把它当成稳定能力，默认仍是 Claude 主 Agent。
 - Codex worker 已接入 main，**随下一版发布；1.9.4 安装包不含**。
 - Codex 桌面端实时任务暂不在接入范围；只能手动查看本地记录，不会用历史日志冒充当前任务。
 
@@ -214,7 +215,8 @@ Claude hooks 会写入 `~/.claude/settings.json`，原文件自动备份为 `set
 - **平台**：目前只验收 Windows 10/11 x64；macOS、Linux、ARM64 不列为已支持
 - **Codex 桌面端**：实时任务状态和控制尚未接入；只能手动查看本地记录
 - **团队任务**：当前支持 Claude Code 和 Codex CLI worker、单依赖线性链、手动合并；没有自动合并和通用 DAG
-- **Codex worker**：无岛内审批，依赖 `workspace-write` 沙箱；不返回 USD 成本；只做主 Agent 派发的任务，不做规划者
+- **主 Agent**：Claude 为默认且已验证；Codex 主 Agent 已接入但仍是实验能力，Codex 平台网络路由失败时会直接报错
+- **Codex worker**：无岛内审批，依赖 `workspace-write` 沙箱；不返回 USD 成本；只做主 Agent 派发的任务
 - **安装包**：没有 Authenticode 签名；干净系统、普通用户、中文/空格路径、卸载残留、多显示器仍需继续验收
 
 ## 开发

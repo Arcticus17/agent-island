@@ -658,6 +658,7 @@ export interface AgentIslandBridge {
     workspace: string,
     budgetUsd?: number | null,
     concurrency?: number,
+    mainAgent?: string,
   ): Promise<TeamRun>;
   /** 基于上一轮汇总继续规划下一轮；要求上一轮改动都已合并或丢弃。 */
   continueTeamRun?(
