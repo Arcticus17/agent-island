@@ -57,7 +57,7 @@ pub(crate) fn plan_schema(allowed_agents: &[String]) -> Value {
                         "acceptance": { "type": "string" },
                         "verify_command": { "type": "string" }
                     },
-                    "required": ["id", "title", "assignee", "prompt", "depends_on", "acceptance"],
+                    "required": ["id", "title", "assignee", "prompt", "depends_on", "acceptance", "verify_command"],
                     "additionalProperties": false
                 }
             }
@@ -445,8 +445,19 @@ mod tests {
         let required = schema["properties"]["tasks"]["items"]["required"]
             .as_array()
             .unwrap();
-        for field in ["id", "title", "assignee", "prompt", "depends_on", "acceptance"] {
-            assert!(required.iter().any(|value| value == field), "missing {field}");
+        for field in [
+            "id",
+            "title",
+            "assignee",
+            "prompt",
+            "depends_on",
+            "acceptance",
+            "verify_command",
+        ] {
+            assert!(
+                required.iter().any(|value| value == field),
+                "missing {field}"
+            );
         }
     }
 

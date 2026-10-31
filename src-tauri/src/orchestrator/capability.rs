@@ -216,7 +216,7 @@ pub(crate) fn capabilities() -> Vec<AgentCapability> {
         true,
         codex_ready,
         if codex_ready {
-            "可用：Codex 主 Agent 规划（实验）+ 无头 worker；workspace-write 沙箱，无岛内审批；不返回 USD 成本；网络不稳时可能失败"
+            "可用：Codex 主 Agent 规划 + 无头 worker；workspace-write 沙箱，无岛内审批；不返回 USD 成本"
         } else if codex_installed {
             "已安装，但没找到 Codex 登录凭据；请先在本机运行 codex 登录"
         } else {
