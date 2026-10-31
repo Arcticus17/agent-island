@@ -143,7 +143,10 @@ Release 地址：`https://github.com/Arcticus17/agent-island/releases/tag/v1.9.4
 - 本机已通过 Codex 主 Agent 规划 → Claude worker → Codex 汇总 → 手动合并
 - Codex worker 无岛内审批、不返回 USD 成本；预算只累计 Claude 成本
 - 本地 1.10.0 NSIS/MSI 构建和两个 `.sig` 已生成
-- Release workflow 待 tag 推送后记录
+- Release workflow `41183690422` 成功（13m41s），`v1.10.0` 已发布；资产含 NSIS/MSI、两个 `.sig`、`latest.json`
+- `latest.json` version=1.10.0，签名 key id 仍为新生产公钥 `3B66FF8F0CD833C7`
+- 视觉比对在 CI runner 上仍报告 4–5997 像素差异（字体渲染环境不同）；按设计 report-only，不阻断发布
+- 1.9.4 → 1.10.0 的实际自动更新尚未执行
 
 ## 干净机器验收清单（部分执行）
 

@@ -122,7 +122,7 @@
 - 汇总与持久化：主 Agent 汇总、`~/.agent-island/team-runs.json` 原子写、重启把中断任务标失败
 - 进程隔离：团队 worker/验收 pid 从主岛快照过滤，应用退出 `/T /F` 清理
 - 主 Agent 角色：Claude / Codex 可选，默认 Claude；Codex 主 Agent 已通过规划、汇总、手动合并实机链路；计划 schema 的每个属性都放进 `required`，兼容 Codex 的严格校验
-- 发布硬化：团队页/团队条 5 个视觉基线（计划/验收/风险/依赖合并/团队条），`test:visual` 21 个用例通过；1.9.4 修复展开态最小宽度（360）与最小/最大边界闪烁；VM 覆盖安装 1.9.2→1.9.3→1.9.4 成功，100/125/150/200% 原生截图无横向溢出；1.9.2→1.9.4 自动更新已口述验证；已轮换到新生产 updater 密钥并更新 CI Secrets，`v1.9.2` 与 `v1.9.4` 均已发布；安装包仍无 Authenticode 签名；普通用户/中文路径/卸载残留/多显示器未验
+- 发布硬化：团队页/团队条 5 个视觉基线（计划/验收/风险/依赖合并/团队条），`test:visual` 21 个用例通过；1.9.4 修复展开态最小宽度（360）与最小/最大边界闪烁；VM 覆盖安装 1.9.2→1.9.3→1.9.4 成功，100/125/150/200% 原生截图无横向溢出；1.9.2→1.9.4 自动更新已口述验证；已轮换到新生产 updater 密钥并更新 CI Secrets，`v1.9.2`、`v1.9.4` 与 `v1.10.0` 均已发布；安装包仍无 Authenticode 签名；普通用户/中文路径/卸载残留/多显示器未验
 - 真实端到端：允许→完成、拒绝→失败→重试→完成、worktree 隔离→merge、双任务并发→逐个 merge、两轮（A→合并→B）、依赖链（A→B）、验收通过/失败均跑通；Codex worker 真实执行→完成→手动合并也跑通；详情见 [验证记录](docs/verification/2026-10-30-team-orchestration-spike.md) 与 [Codex worker 验收](docs/verification/2026-10-31-codex-worker.md)
 - 设计依据：[第一步设计：审批、状态与入口](docs/research/2026-10-30-team-orchestration-first-step.md)
 - 下一步：自定义 Agent 适配、发布 1.10.0、安装包签名与干净机器验收、混合 DPI/原生 WebView2 验收、自动合并（可选）
