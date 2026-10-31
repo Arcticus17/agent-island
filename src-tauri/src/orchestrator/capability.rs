@@ -283,12 +283,7 @@ mod tests {
     #[test]
     fn dispatchable_agents_have_work_capability() {
         let caps = capabilities();
-        let available: Vec<&str> = caps
-            .iter()
-            .filter(|capability| capability.available)
-            .map(|capability| capability.id.as_str())
-            .collect();
-        assert!(available.contains(&"claude"));
+        assert!(caps.iter().any(|capability| capability.id == "claude"));
         assert!(caps
             .iter()
             .filter(|capability| capability.available)
