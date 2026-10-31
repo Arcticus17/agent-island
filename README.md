@@ -1,181 +1,222 @@
+<div align="center">
+
 # Agent Island
 
-一个常驻 Windows 桌面的“Agent 灵动岛”：一眼看到正在运行的 AI 编程 Agent，并直接在桌面上控制它们。
+### 常驻 Windows 桌面的 AI 编程 Agent 灵动岛
 
-**当前状态**：v1.9.4 测试版（更新签名密钥已轮换）。安装包已发布，但在完成干净环境、混合 DPI、多显示器与安装/卸载验收前不宣称正式支持，详见[公开发布适配门槛](docs/verification/public-release-compatibility.md)与[发布记录](docs/verification/2026-09-30-v1.9.0-release.md)。
+**不用来回切终端：一眼看到谁在干活、谁在等审批，直接在小岛上处理。**
 
-## 目录
+[![Version](https://img.shields.io/github/v/release/Arcticus17/agent-island?color=blue&label=version)](https://github.com/Arcticus17/agent-island/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-lightgrey.svg)](https://github.com/Arcticus17/agent-island/releases)
+[![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
+[![Downloads](https://img.shields.io/github/downloads/Arcticus17/agent-island/total)](https://github.com/Arcticus17/agent-island/releases/latest)
 
-- [功能](#功能)
-- [安装](#安装)
-- [发布与验收](#发布与验收)
-- [使用](#使用)
-  - [快捷键](#快捷键)
-  - [布局与外观](#布局与外观)
-  - [操作与数据边界](#操作与数据边界)
-  - [已知限制](#已知限制)
-- [配置](#配置)
-- [隐私说明](#隐私说明)
-- [开发](#开发)
-  - [环境要求](#环境要求)
-  - [开发与调试](#开发与调试)
-  - [测试与构建](#测试与构建)
-  - [视觉回归](#视觉回归)
-  - [持续集成](#持续集成)
-  - [Playwright Chromium 镜像加速](#playwright-chromium-镜像加速)
-  - [临时回退旧界面](#临时回退旧界面)
-- [许可证](#许可证)
+**v1.9.4 测试版** · Windows 10/11 x64 · 安装包由 GitHub Actions 构建并签名更新
 
-## 功能
+</div>
 
-- 常驻灵动岛：贴屏幕顶部居中的刘海默认常驻（40px，只显示吉祥物/状态记号/计数），点击展开面板；`Esc` 或全局快捷键可把它收成一条 3px 刻度
-- Agent 监控：Claude Code、Codex CLI、OpenCode、Hermes
-- 会话一致性：默认只显示可靠匹配的当前会话；历史记录可在总览或胶囊中明确选择查看。未手动选择时不会用历史代替当前；所选记录消失时提示重新选择，不偷偷换成其他对话
-- 状态真相源：进行中、已完成、报错与等待只由结构化事件（Claude hooks、官方会话事件）结合会话绑定判定；正文文本不会改变状态，最多作为诊断提示出现，陈旧日志不会代表当前任务
-- 单实例：重复启动不会出现第二个小岛。后启动的进程会自行退出，并尝试把已在运行的窗口唤到前台；这是必要的，因为 hook 端口只属于第一个进程，重复实例会收不到事件却照常写统计
-- 事件通知：报错/完成/等待通知卡，按 Agent 分组折叠，自动展开与收起
-- 用量监控：Claude Code 5 小时窗口 tokens/费用、Codex 额度百分比与重置倒计时，超限变色预警
-- Hook 事件：Claude Code 会话完成/通知秒级直达；危险命令在岛上弹审批卡，允许/拒绝/回退原生确认
-- 终端跳回：一键跳回 Agent 所在终端窗口
-- 会话总览：独立窗口实时列出会话、日志、统计，可发消息、恢复、停止、重启
-- 团队任务（实验）：主 Agent 拆解目标、次级 Agent 执行；每个任务独立 git worktree/分支，互不依赖的任务可并发（默认 2），有依赖的任务沿线性链串行；主工作区不动，完成后在团队页看 diff 并逐个合并或丢弃；支持执行级验收命令、基于上一轮汇总的再来一轮、预算上限、审批、重试与进程隔离（当前仅 Claude Code 可派发）
-- 自动发现：PATH / 常见安装目录里已安装的 Agent 会自动出现在「+」检测列表；运行中、已固定或最近用过的才默认进岛
-- 全局快捷键：`Ctrl+Alt+I` 呼出/隐藏小岛，`Ctrl+Alt+O` 打开总览
-- 隐私遮罩：在设置中手动开启，模糊日志与路径
-- 专注模式：全部状态、聚焦错误、静音通知
-- 自适应布局：卡片拖拽或按钮排序，尺寸切换、隐藏与恢复，自动保存
-- 外观：深色与浅色两态共用同一套设计（状态板）；状态色只在"等待确认/报错"时整片点亮；尊重系统减少动画偏好，总览保留系统浅色模式
-- 统计报表：按天/周查看各 Agent 用时、报错数、完成数
-- 诊断卡：适配器解析问题与用量数据源健康（记录文件数、解析状态）同屏可见，支持脱敏导出；用量卡为空时可在诊断中看到原因，不再静默
+## 为什么选择 Agent Island？
 
-## 安装
+同时跑 Claude Code、Codex CLI、OpenCode、Hermes 时，真实状态散落在不同终端里：哪个还在执行、哪个完成了、哪个在等危险命令确认，经常要一个一个窗口翻。
 
-从 [GitHub Release](https://github.com/Arcticus17/agent-island/releases) 下载：
+**Agent Island** 把这件事收进屏幕顶部的一条“灵动岛”：
+
+- **一眼看到全部 Agent** — 胶囊态显示当前 Agent、状态和待处理数量；点击展开状态板
+- **不离开桌面就能操作** — 发指令、打开目录/终端、停止、重启、跳回对应终端
+- **危险命令不埋没** — Claude Code 的审批请求直接弹到岛上，允许、拒绝或回退原生确认
+- **状态不靠猜** — 进行中/完成/报错/等待由结构化事件和会话绑定决定，正文文本不会改变状态
+- **团队任务可验收** — 主 Agent 拆解任务，次级 Agent 在独立 git worktree 里执行；支持并发、依赖链、验收命令和手动合并
+- **本地优先** — Agent 状态、日志、统计和团队记录只存在本机，不上传密钥
+
+## 界面预览
+
+<table>
+<tr>
+<td align="center" width="50%"><img src="docs/assets/readme/island-compact.png" alt="胶囊态：Agent 状态与待处理数量" width="360"><br>胶囊态：当前 Agent 与待处理数量</td>
+<td align="center" width="50%"><img src="docs/assets/readme/island-expanded.png" alt="展开态：状态板与会话" width="360"><br>展开态：状态板与会话</td>
+</tr>
+<tr>
+<td align="center"><img src="docs/assets/readme/island-approval.png" alt="岛内审批：危险命令允许或拒绝" width="360"><br>岛内审批：危险命令不埋没</td>
+<td align="center"><img src="docs/assets/readme/team-plan.png" alt="团队任务：计划、依赖与验收命令" width="360"><br>团队任务：计划、依赖与验收命令</td>
+</tr>
+<tr>
+<td align="center" colspan="2"><img src="docs/assets/readme/team-verification.png" alt="团队任务：验收通过与失败" width="360"><br>每个任务有真实验收结果，失败不能合并</td>
+</tr>
+</table>
+
+## 下载安装
+
+### 系统要求
+
+- **Windows 10 / 11 x64**
+- 需要 WebView2 Runtime（Windows 11 通常已内置；Windows 10 可能需要单独安装）
+- 当前只验收 Windows；macOS / Linux / ARM64 不在支持范围
+
+### Windows 用户
+
+从 [Releases](https://github.com/Arcticus17/agent-island/releases) 下载最新版本：
 
 | 资产 | 说明 |
 | --- | --- |
-| `Agent.Island_<version>_x64-setup.exe` | Windows 安装器（NSIS） |
-| `Agent.Island_<version>_en-US.msi` | MSI 安装包 |
+| `Agent.Island_<version>_x64-setup.exe` | NSIS 安装器，普通用户推荐 |
+| `Agent.Island_<version>_en-US.msi` | MSI 安装包，适合企业分发 |
 
-`<version>` 指当前发布版本号，例如 `Agent.Island_1.9.4_x64-setup.exe`。安装后直接运行 `Agent Island` 即可。
+`<version>` 是版本号，例如 `Agent.Island_1.9.4_x64-setup.exe`。
 
-EXE（NSIS）和 MSI 二选一即可，不要交叉覆盖安装：两种安装器的身份和升级机制不同，手动用另一种格式覆盖时可能要求先卸载旧版。应用内自动更新不受影响。
+> **EXE 和 MSI 二选一，不要交叉覆盖。** 两种安装器的身份和升级机制不同，手动用另一种格式覆盖时可能要求先卸载旧版；应用内自动更新不受影响。
+>
+> 当前安装包没有 Authenticode 签名，Windows 可能提示“未知发布者”。应用内更新使用独立的 Tauri/minisign 签名，不等同于代码签名。
 
-## 发布与验收
+### 自动更新
 
-仓库当前版本为 1.9.4（修复展开态最小宽度与边界闪烁），已发布 [Release v1.9.4](https://github.com/Arcticus17/agent-island/releases/tag/v1.9.4)，安装包由 GitHub Actions 自动构建并发布。1.9.1 及更早版本使用旧更新密钥，不能自动升级，需要手动重装 1.9.2 或更新版本；1.9.2 之后恢复自动更新。按[公开发布适配门槛](docs/verification/public-release-compatibility.md)口径，在完成干净环境、混合 DPI、多显示器与安装/卸载验收前仍属**测试版**。
+1.9.2 及更新版本可以在应用内检查更新；1.9.1 及更早版本使用旧更新密钥，需要手动重装一次 1.9.2 或更新版本。1.9.2 → 1.9.4 的自动更新已经在 Windows 11 虚拟机中验证。
 
-本项目面向其他用户分发，不应依赖开发者本机环境。门槛清单覆盖干净系统、普通权限、中文/空格路径、CLI 安装方式、混合 DPI、多屏和升级卸载；未实测的系统与架构不列为已支持。实测记录见 [docs/verification/](docs/verification/)，索引在 [验证记录索引](docs/verification/README.md)。
+## 快速开始
 
-### 发版流程
+1. **安装并启动** — 安装后运行 `Agent Island`，小岛默认停在屏幕顶部居中
+2. **展开** — 移动鼠标到胶囊或点击它，展开状态板；点顶部按钮可收起
+3. **接入 Claude 事件（可选）** — 打开「设置 → Claude 事件」检查/开启 hooks；开启后才有秒级状态、通知和岛内审批
+4. **处理审批** — 危险 Bash 命令会进入岛内审批卡；允许、拒绝或回退原生确认
+5. **打开总览** — 点「总览」或按 `Ctrl+Alt+O`，查看全部会话、日志和统计
+6. **团队任务（实验）** — 总览顶部点「团队」，填目标、git 工作区、预算和并发，生成计划后确认执行
 
-```bash
-npm run release:minor -- --dry-run   # 先看会改哪四个文件（package.json / Cargo.toml / tauri.conf.json / Cargo.lock）
-npm run release:minor                # 一次性改完版本号，Cargo.lock 不会漏
-git commit -am "chore: release X.Y.Z"
-git tag vX.Y.Z && git push origin vX.Y.Z
-```
+## 功能特性
 
-打 tag 后 GitHub Actions 会自动跑回归、构建并发布 EXE/MSI、`.sig` 与 `latest.json`（自动更新清单）。前提是仓库 Secrets 里的 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 已更新为轮换后的生产密钥（key id `3B66FF8F0CD833C7`）；旧的本地测试密钥已退役。
-## 使用
+### Agent 支持
 
-### 快捷键
+| Agent | 状态监控 | 岛内审批 | 会话查看 | 内置终端 | 团队 worker |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| Claude Code | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Codex CLI | ✓ | – | ✓ | ✓ | – |
+| OpenCode | ✓ | – | ✓ | ✓ | – |
+| Hermes | ✓ | – | ✓ | ✓ | – |
 
-| 按键 | 功能 |
-| --- | --- |
-| `Tab`、`Enter` / `空格` | 聚焦并操作按钮；在顶部按钮上展开/收起 |
-| 总览会话列表中的方向键、`Home` / `End` | 切换会话 |
-| `Ctrl+Alt+I` | 全局呼出/隐藏小岛 |
-| `Ctrl+Alt+O` | 全局打开总览 |
+- **审批**只接入 Claude Code hooks；其他 Agent 仍可在终端里原生确认。
+- **团队 worker**目前只派发 Claude Code；Codex 没有通过无头可用性验证，OpenCode / Hermes 未接入。能力卡会写明原因，不假装可用。
+- Codex 桌面端实时任务暂不在接入范围；只能手动查看本地记录，不会用历史日志冒充当前任务。
 
-以上以默认 Svelte 界面为准；旧界面特有的单字母快捷键和右键菜单不属于当前默认入口。
+### 状态与通知
+
+- 胶囊、状态板、通知卡三层信息：当前 Agent、做了什么、是否需要你处理
+- 状态由结构化事件（Claude hooks、官方会话事件）和会话绑定决定；正文文本不会把“等待”误判成“完成”
+- 报错、完成、等待通知按 Agent 分组折叠，不打断当前工作
+- 历史记录与当前会话明确区分；所选记录消失时提示重新选择，不偷偷换成其他对话
+
+### 会话、终端与统计
+
+- **会话总览**：独立窗口实时列出会话、日志、统计，可发消息、恢复、停止、重启
+- **终端跳回**：一键跳回 Agent 所在终端；Windows 拒绝切换焦点时不会报告成功
+- **内置终端**：直接在小岛里跑 Agent CLI，收起岛不会杀掉会话
+- **用量监控**：Claude Code 5 小时窗口 tokens/费用，Codex 额度百分比与重置倒计时
+- **统计报表**：按天/周查看各 Agent 用时、报错数、完成数
+- **诊断卡**：适配器解析问题和用量数据源健康同屏可见，支持脱敏导出
 
 ### 团队任务（实验）
 
-打开总览窗口，点顶部的「团队」：
+主 Agent 拆目标，次级 Agent 执行；每个任务在独立 git worktree / 分支里完成：
 
-1. 填目标、工作区、预算（默认 $2.00）和并发（默认 2，范围 1–4），点「生成计划」。
-2. 主 Agent 会返回 1–4 个任务；先检查任务说明、负责人和验收标准，可以删改。
-3. 点「确认并执行」后，岛才会派发次级 Agent。**每个任务在独立的 git worktree / 分支上执行，主工作区不会被直接修改**；互不依赖的任务按并发上限同时执行，有依赖的任务从依赖分支 tip 创建 worktree、按链串行，完成后由主 Agent 汇总。
-4. 任务完成后，在团队页展开「查看改动」，逐个选择「合并」把分支合并回主工作区，或「丢弃改动」清理 worktree；某个任务合并冲突不会阻塞其他任务。**依赖任务必须先合并前一个任务**；丢弃依赖会级联丢弃后续任务。
-5. 计划里可以给任务填**验收命令**（可选）。worker 结束后，岛会在同一个 worktree 里执行它，记录真实退出码和输出；**退出码 0 才算通过，验收失败的任务不能合并**。命令在任务 worktree 内执行，超时 120 秒，输出有上限。
-6. 运行期间展开小岛，会在顶部看到团队条（进度与待审批数）；点它直接打开总览的团队页。
-7. 上一轮结束、且所有改动都已合并/丢弃后，可以点「再来一轮」：主 Agent 会带着上一轮的目标、汇总和任务结果规划下一轮；新 worktree 从当前 HEAD 创建。新计划仍需你确认。
+- **并行**：互不依赖的任务默认并发 2，可调 1–4
+- **依赖链**：任务可声明单个依赖，从依赖分支 tip 创建 worktree；同链串行，合并必须先合并依赖
+- **验收命令**：worker 结束后在任务 worktree 内执行，退出码 0 才允许合并；失败保留改动但不能合并
+- **预算**：按 USD 设置本轮上限，规划 / worker / 汇总实际成本累计；并发时按槽位预留
+- **手动合并**：团队页查看 diff，逐个选择合并或丢弃；冲突只影响该任务，不阻塞其他任务
+- **再来一轮**：上一轮改动全部处理完后，主 Agent 会带着上一轮汇总和任务结果继续规划
 
-边界（当前版本）：
+详细规则、边界和验收记录见：
 
-- 工作区必须是 **git 仓库且至少有一次提交**；非 git 工作区会直接拒绝，不会偷偷写主工作区。
-- 主工作区有未提交改动时会提示：worktree 从当前 HEAD 创建，任务看不到未提交改动；合并前也必须先提交或暂存，否则合并会被拒绝。
-- 文件工具（Edit/Write）只能修改任务 worktree 内的文件；绝对路径或 `..` 逃逸会被拒绝，主工作区不会被间接改写。
-- 合并冲突时自动 abort，分支和 worktree 保留；可以手动处理后重试，或直接丢弃。
-- 需要先在「设置 → Claude 事件」开启 hooks，否则不会派发。**文件编辑自动放行；只读 Bash 自动放行；危险 Bash 会让任务进入「等待审批」**，在小岛审批卡上允许或拒绝；5 分钟无人处理按拒绝处理。拒绝或超时会明确失败，可以重试。
-- worker 结束时必须返回结构化状态（completed / blocked / failed）。说 blocked/failed，或者干脆没返回结构化结果，任务都会标失败，**不会因为退出码 0 就算完成**。
-- 失败或跳过的任务可以点「重试未完成任务」；已经成功的任务不会重跑，旧的 worktree/分支会先清理。
-- 预算按 Claude 返回的实际成本累计（规划 + worker + 汇总）；超额后停止派发。`--max-budget-usd` 是近似上限，实际计费可能略超一点，界面显示真实累计值。并发时每个任务按“剩余预算 / 并发槽位”预留上限，因此单任务可能偏保守。
-- 当前只有 Claude Code 标为「可派发」；Codex 在这台机器上没有通过无头可用性验证，OpenCode / Hermes 未接入。能力卡会直接写原因，不会假装可用。
-- 同一时间只允许一个团队运行；依赖只支持**线性链**：每个任务最多一个依赖、每个任务最多被一个后续任务依赖，不支持分叉或多依赖；最多 4 个任务、最多并发 4；单任务 10 分钟超时；退出应用会中止运行中的任务。
-- 依赖任务从依赖分支的 tip 创建 worktree，能看到前一个任务的改动；合并必须先合并依赖，丢弃依赖会级联丢弃整条后续链。
-- 验收命令来自计划，**确认计划即批准该命令在该任务 worktree 内执行**；它不是沙箱，命令拥有当前用户的权限。删除、推送、下载后执行等高风险命令会在确认计划时再弹一次确认；没有合适命令就留空，不会凭空运行测试。
-- 验收失败的任务会保留改动和输出方便排查，但状态是失败、不能合并；可以重试或丢弃。
-- 再来一轮要求上一轮的改动全部合并或丢弃；验收失败但有改动的任务也必须先丢弃，避免新一轮基于没进主工作区的旧代码。
-- 运行记录保存在 `~/.agent-island/team-runs.json`，只在本机，不上传；任务输出会截断后保存。
-- 还没有自动合并、Codex 适配和视觉基线刷新，这些在后续做。
+- [团队任务验证记录](docs/verification/2026-10-30-team-orchestration-spike.md)
+- [第一步设计](docs/research/2026-10-30-team-orchestration-first-step.md)
 
-### 布局与外观
+> 团队任务要求工作区是至少有一次提交的 git 仓库；非 git 工作区会直接拒绝。验收命令拥有当前用户权限，不是沙箱；高风险命令会在确认计划时二次确认。
 
-首次加载和重新展开胶囊时，默认优先显示正在执行任务的 Agent；无人执行时，选择后端记录中最近结束任务的 Agent（包括成功或失败）。多个 Agent 同时执行时保留当前执行中的选择。展开后可手动切换，普通轮询不会抢回选择；显式开启“聚焦错误”时仍按该模式显示。
+### 界面与个性化
 
-展开小岛后点击“编辑”，通过拖拽或每张卡的上移/下移按钮调整顺序，并选择紧凑、标准或宽版尺寸。用量、会话、统计卡可隐藏，在“已隐藏”区恢复；状态和日志卡始终保留。身份栏、审批与核心操作不参加卡片排序。
+- 深色 / 浅色 / 纯黑 / 石墨主题
+- 极简、监控、调试三套布局预设；卡片可拖拽排序、切换尺寸、隐藏与恢复
+- 窗口展开态最小宽度 360px，收起时回到胶囊宽度；100%–200% 缩放已验证无横向溢出
+- 隐私遮罩、专注模式（全部状态 / 聚焦错误 / 静音通知）
+- 尊重系统“减少动画”偏好；总览保留系统浅色模式
 
-提供“极简”“监控”“调试”三个预设；“重置”恢复当前选中的预设，自定义配置重新启动后默认以监控作为重置目标。窄窗口自动变成单列，保存的顺序与尺寸不会被覆盖。
+### 本地与隐私
 
-布局更改自动保存在当前应用的本地存储。配置损坏时尝试保留原文备份并回退监控预设；存储失败会提示“已应用，但暂时未保存”，下次调整会重试。在“设置 → 外观”切换深色/浅色，在同一菜单开启隐私遮罩或专注模式。
+- Agent 状态、日志、统计保存在本机，不上传任何密钥
+- 团队任务目标、计划、任务输出保存在 `~/.agent-island/team-runs.json`，只在本机
+- 诊断导出只包含脱敏元数据：应用/系统版本、适配器、会话哈希、事件类型、问题代码与计数、时间、项目目录名和消息长度；不含提示词、凭据或完整路径
 
-卡片尺寸会实际改变内容密度：紧凑、标准、宽版的日志区高度分别为 96、164、240px。展开与工作状态带有轻量动画，系统开启减少动画时停用。透明窗口外层不使用背景模糊或外溢阴影，避免胶囊外出现矩形合成边缘；原生 WebView2 表现仍需实机验收。
+## 快捷键
 
-### 操作与数据边界
+| 按键 | 功能 |
+| --- | --- |
+| `Ctrl+Alt+I` | 全局呼出 / 隐藏小岛 |
+| `Ctrl+Alt+O` | 全局打开总览 |
+| `Enter` / `空格` | 聚焦并操作按钮；在顶部按钮上展开 / 收起 |
+| `方向键`、`Home` / `End` | 总览会话列表中切换会话 |
 
-- 胶囊“查看会话”列出当前快照中的本地记录，选择后展示对应对话与目录，并标记“本地记录／非实时状态”。目录和终端使用所选会话；终端仅打开工作目录，不代表恢复桌面任务。历史模式禁止停止、重启与跳回，避免作用到其他运行任务。切换 Agent 会退出手动查看。
-- Codex 数据目录优先采用非空 `CODEX_HOME`，否则使用用户目录 `.codex`；日志和用量使用同一数据根目录。历史可见记录仍有数量上限；明确识别的 Desktop 根用户会话优先于辅助日志，未知来源不冒认为桌面根任务，所有候选仍参与身份歧义检查。
-- 总览打开时还原并置顶，窗口操作失败会提示；跳回只依赖运行进程，不再要求已匹配会话。Windows 拒绝切换焦点时不会报告成功。
-- 目录、终端需要可靠的当前会话信息；缺失时点击会说明原因，不会猜测历史目录。会话缺失不再隐藏状态、用量和布局编辑。
-- 胶囊“重启”使用已记录的启动方式重新打开 Agent，**不会停止现有任务**；“已请求启动”不代表 CLI 已启动成功或任务已恢复。总览“恢复”打开指定会话的恢复终端，需在终端确认后续状态；CLI 不在 PATH 中会明确报错。
-- 设置中的隐私遮罩、专注模式、主题会显示当前含义；Claude hooks 开关仍需后端返回确认。浏览器测试不能替代真实 hooks 和窗口操作验收。
-- Codex 长会话元数据按完整首记录读取（上限 1MiB），不再因首行超过 16KiB 而漏掉有效会话；当前会话仍须经过身份匹配。
+## 常见问题
 
-### 已知限制
+<details>
+<summary>Agent Island 会替代终端里的 Agent 吗？</summary>
 
-- **Codex 桌面端**：实时进程入口只针对独立 CLI，桌面端 app-server 会话不在接入范围内。本地桌面根会话仅可通过胶囊“查看会话”手动选择，所选内容明确标记为“本地记录／非实时状态”；实时桌面任务的状态与控制**尚未接入**，后续版本再做，期间不会用最近日志冒充当前任务。
-- **平台支持**：验收目标是 Windows；未实测的系统与架构（包括 macOS、Linux、ARM64）不列为已支持。
+不会。它负责观察状态、集中处理审批和会话入口；真正的 Agent CLI 仍在终端里运行，除非你使用岛内内置终端。
+</details>
 
-## 配置
+<details>
+<summary>为什么有时候看不到某个 Agent？</summary>
 
-- `~/.agent-island/agents.json`：Agent 适配器配置，新增 Agent 无需改代码；格式参考 [agent-adapters.example.json](agent-adapters.example.json)
-- `~/.agent-island/stats.json`：累计统计
-- `~/.agent-island/stats-daily.json`：每日统计
+默认只显示运行中、已固定或最近用过的 Agent。打开「+」检测列表可以查看 PATH / 常见安装目录里已安装的 Agent；未安装的不会假装可用。
+</details>
 
-Claude 事件（hooks）可在“设置 → Claude 事件”中检查或切换接入：会写入 `~/.claude/settings.json`，原文件自动备份为 `settings.json.agent-island.bak`。
+<details>
+<summary>为什么状态和日志里的文字不一致？</summary>
 
-## 隐私说明
+状态只信结构化事件和会话绑定，正文文本不会改变状态，最多作为诊断提示。历史日志不会被用来冒充当前任务。
+</details>
 
-- Agent 状态、日志、统计都保存在本机，不上传任何密钥
-- 团队任务的目标、计划与任务输出保存在 `~/.agent-island/team-runs.json`，只在本机；不会上传到任何服务
-- 诊断导出仅导出经脱敏的诊断元数据，例如应用/系统版本、适配器、会话哈希、事件类型、问题代码与计数、时间与过期状态、项目目录名和消息长度；不包含提示词、凭据或完整路径
+<details>
+<summary>团队任务为什么要求 git 仓库？</summary>
+
+每个任务需要在独立 worktree/分支里执行，主工作区不能被直接修改。非 git 工作区无法创建隔离分支，所以会直接拒绝。主工作区有未提交改动时会提示，合并前必须先提交或暂存。
+</details>
+
+<details>
+<summary>验收命令安全吗？</summary>
+
+验收命令来自你确认的计划，拥有当前用户权限，不是沙箱。删除、推送、下载后执行等高风险命令会在确认计划时再次确认；失败的任务不会允许合并。
+</details>
+
+<details>
+<summary>为什么手动安装时会提示先卸载旧版？</summary>
+
+这是 Tauri NSIS/MSI 安装器的“已安装”维护页：两种安装器身份不同，手动交叉覆盖时可能要求先卸载。应用内自动更新走更新模式，不会弹这个页面。
+</details>
+
+<details>
+<summary>为什么 Windows 提示“未知发布者”？</summary>
+
+安装包目前没有 Authenticode 代码签名。应用内更新使用单独的 Tauri/minisign 签名，两者不是一回事。
+</details>
+
+<details>
+<summary>数据存在哪里？</summary>
+
+- `~/.agent-island/agents.json`：Agent 适配器配置
+- `~/.agent-island/stats.json` / `stats-daily.json`：累计与每日统计
+- `~/.agent-island/team-runs.json`：团队任务记录
+- `~/.agent-island/team-runs/<run>/worktrees/`：团队任务 worktree
+
+Claude hooks 会写入 `~/.claude/settings.json`，原文件自动备份为 `settings.json.agent-island.bak`。
+</details>
+
+## 已知限制
+
+- **平台**：目前只验收 Windows 10/11 x64；macOS、Linux、ARM64 不列为已支持
+- **Codex 桌面端**：实时任务状态和控制尚未接入；只能手动查看本地记录
+- **团队任务**：只支持 Claude Code worker、单依赖线性链、手动合并；没有自动合并和通用 DAG
+- **安装包**：没有 Authenticode 签名；干净系统、普通用户、中文/空格路径、卸载残留、多显示器仍需继续验收
 
 ## 开发
 
-技术栈为 Tauri 2 / Rust + Svelte 5 / TypeScript + Vite。前端通过 `src/bridge` 与后端通信，状态协调、布局模型和主题令牌分别独立维护，方便局部替换。
-
-### 环境要求
-
-- Node.js 22.12+（22.x）
-- Rust MSVC 工具链与 Visual Studio C++ Build Tools
-- WebView2
-- 首次安装测试浏览器需要联网
-
-Windows 终端须先加载 Visual Studio 开发环境。
-
-### 开发与调试
+技术栈：Tauri 2 / Rust + Svelte 5 / TypeScript + Vite。前端通过 `src/bridge` 与后端通信，状态、布局和主题令牌独立维护。
 
 ```bash
 npm ci
@@ -183,7 +224,7 @@ npx playwright install chromium
 npm run tauri dev
 ```
 
-### 测试与构建
+回归与构建：
 
 ```bash
 npm run check
@@ -192,44 +233,24 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 npm run tauri build
 ```
 
-`npm test` 包含旧前端测试、单元测试、浏览器交互、视觉比对和 Rust 测试。打包可能需要联网下载 NSIS/WiX 工具；构建产物位于 `src-tauri/target/release/bundle`。
+- `npm test` 包含旧前端、单元、浏览器交互、视觉比对和 Rust 测试
+- 视觉基线覆盖主岛 16 个状态 + 团队页/团队条 5 个状态；只有人工确认后才执行 `npm run test:visual:update`
+- 发布：`npm run release:patch` 改版本号，提交后打 `vX.Y.Z` tag；GitHub Actions 会构建并发布 EXE/MSI、`.sig` 与 `latest.json`
+- 详细验证记录：[docs/verification/](docs/verification/)，索引在 [验证记录索引](docs/verification/README.md)
 
-### 视觉回归
+## 贡献
 
-视觉回归使用 Windows 与依赖锁定的 Playwright Chromium；运行 `npm run test:visual` 比对。当前覆盖主岛明暗 16 个状态，以及团队页/团队条 5 个状态（计划、验收通过/失败、风险二次确认、依赖合并、团队条待审批）。仅在人工检查确认界面变化后执行 `npm run test:visual:update` 更新基线。不同操作系统或字体环境的截图不能直接当作同一验收环境；Chromium 基线也不等于原生 WebView2/DPI 验收。
+欢迎提交 Issue 和 PR。涉及状态判定、窗口行为或团队调度的改动，请同时补测试和验证记录；不要提交密钥、凭据或本机路径。
 
-### 持续集成
+## Star History
 
-- `ci.yml`：push 到 `main`、Pull Request 与手动触发时执行类型检查与完整回归；视觉比对只报告不阻塞（runner 字体与开发机不一致），diff 作为附件上传。
-- `release.yml`：推送 `v*` 标签时先执行构建、类型检查与完整回归，再构建 EXE/MSI 并发布到 Release；本地验证不会自动发布。
+[![Star History Chart](https://api.star-history.com/svg?repos=Arcticus17/agent-island&type=Date)](https://star-history.com/#Arcticus17/agent-island&Date)
 
-### Playwright Chromium 镜像加速
+## License
 
-若 `npx playwright install chromium` 长时间无进展（官方地址会跳转到 Google 存储，实测只有几十到两百 KB/s），可用 npmmirror 镜像装同一版本：从 `npx playwright install --dry-run chromium` 读出版本号与目录名，下载 `https://cdn.npmmirror.com/binaries/chrome-for-testing/<version>/win64/chrome-win64.zip`，解压到 `%LOCALAPPDATA%\ms-playwright\chromium-<revision>\`，确认 `chrome-win64\chrome.exe` 存在，再在该目录下创建空的 `INSTALLATION_COMPLETE` 文件。实测镜像速度约为官方路径的 26 倍。
+本项目采用 [Apache License 2.0](LICENSE)。
 
-### 临时回退旧界面
-
-Svelte 界面现为默认实现，主灵动岛与会话总览共用同一个临时回退开关。若升级后需要排查兼容问题，可在开发者控制台执行：
-
-```js
-localStorage.setItem("agent-island-ui-legacy", "1");
-location.reload();
-```
-
-恢复默认 Svelte 界面：
-
-```js
-localStorage.removeItem("agent-island-ui-legacy");
-location.reload();
-```
-
-旧界面只作为迁移期应急回退路径保留。
-
-## 许可证
-
-本项目采用 [Apache License 2.0](LICENSE)，完整条文见仓库根目录的 `LICENSE`。
-
-```
+```text
 Copyright 2026 Arcticus17
 
 Licensed under the Apache License, Version 2.0 (the "License");
